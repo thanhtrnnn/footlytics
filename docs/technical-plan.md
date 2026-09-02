@@ -62,3 +62,12 @@ Disk 20 GB; Python 3.14; chưa có weights pitch keypoint (fallback: train Colab
 - **Kết quả clip 30 s:** 6 landmark, sai số trung vị 0.064 m; 100% hàng game state nằm trong sân; overlay đường kẻ sân khớp ở frame 0, 375, 749 (lệch vài px ở vòng cấm xa cuối clip). Radar 2D hợp lý. Chi phí thêm khoảng 20 s/phút trận (tổng 67 s/phút).
 - **Cách lấy landmark:** phát hiện đường kẻ trắng (mask cỏ, mask cầu thủ, HoughLinesP, gộp đường, giao điểm) rồi gán nhãn tay 4 điểm chắc chắn; tự kiểm chứng bằng giao điểm vòng tròn giữa sân với đường giữa sân (dự đoán trùng vạch trắng). Script trong lịch sử phiên, cần đóng gói thành `footlytics calib-assist`.
 - **Nợ kỹ thuật:** (1) tự động hoá calibration frame 0 (PnLCalib, hoặc ghép line-snap vào keypoint model), (2) chống trôi KLT trên clip dài: neo lại định kỳ bằng đường kẻ sân, (3) lọc người ngoài sân bằng tọa độ mét.
+
+## 10. Cập nhật Stage 2 (2026-09-03)
+
+- **Bóng:** thêm `detect.py` (BallDetector, weights football-ball-detection của Roboflow qua mirror HF) chạy pass riêng ở 1920 px; tuỳ chọn `--ball-model`. Detection COCO chỉ dùng trên frame model bóng bỏ lỡ. Nội suy khoảng trống tối đa 5 frame giữ nguyên.
+- **Lọc người ngoài sân:** `filter_off_pitch` bỏ track có vị trí trung vị ngoài sân + 2 m (bench, khán giả, nhân viên). Chỉ hoạt động khi có calibration.
+- **Camera có cắt cảnh:** feed tactical cam vẫn có đoạn zoom vào băng ghế. `AnchoredCamera` thay `CameraMotion`: KLT từng frame; phát hiện đổi cảnh bằng độ lệch ảnh; khi KLT hỏng hoặc đổi cảnh thì khớp toàn cục SIFT (nửa độ phân giải, 2000 feature) về frame neo; neo lại định kỳ mỗi 50 frame để triệt trôi; frame không khớp được bị đánh dấu không calibration và bị loại khỏi game state (không trộn đơn vị pixel với mét). Ngưỡng: 30 inlier và tỉ lệ 0.5 (đo thực tế: góc rộng 139-384 inlier, cận cảnh băng ghế 2-5).
+- **Neo ở frame bất kỳ:** JSON calibration có khoá `frame`; `compose_from_anchor` suy ra H cho mọi frame từ chuyển động tích luỹ. Clip 3 phút dùng lại landmark của clip 30 s (frame 752 trùng frame 0 của clip 30 s).
+- **Thử nghiệm không đạt:** BoT-SORT + ReID (3.7 so với 3.5 switch/cầu thủ/phút), imgsz 1920 cho người (bắt thêm khán giả, switch tăng), model player/gk/ref của Roboflow (ít cầu thủ hơn COCO trên góc rộng).
+- **Còn mở:** ID switch vẫn 3.5-4.4/cầu thủ/phút. Hướng: tracking trong toạ độ sân (Kalman trên mét, gating theo tốc độ tối đa), ReID theo màu áo + số áo, hoặc detector fine-tune trên góc rộng.

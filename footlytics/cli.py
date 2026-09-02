@@ -36,3 +36,24 @@ def run(
 
 if __name__ == "__main__":
     app()
+
+
+@app.command("calib-assist")
+def calib_assist(
+    clip: Path = typer.Argument(..., exists=True, help="input video"),
+    frame: int = typer.Option(0, help="frame index to annotate"),
+    out: Path = typer.Option(Path("data/out/calib_assist"), help="output prefix (.jpg and .json are written)"),
+    model: str = typer.Option("yolo11n.pt", help="detector used to mask people out of the line search"),
+) -> None:
+    """Detect pitch line intersections on one frame to help build a calibration JSON."""
+    from ultralytics import YOLO
+
+    from footlytics.calib_assist import write_assist
+    from footlytics.pipeline import _read_frame
+    from footlytics.track import default_device
+
+    img = _read_frame(clip, frame)
+    r = YOLO(model).predict(img, imgsz=1280, conf=0.2, classes=[0], device=default_device(), verbose=False)[0]
+    boxes = r.boxes.xyxy.cpu().numpy() if r.boxes is not None and len(r.boxes) else None
+    img_path, json_path = write_assist(img, out, person_boxes=boxes, frame_index=frame)
+    typer.echo(f"wrote {img_path} and {json_path}")
