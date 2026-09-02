@@ -12,6 +12,7 @@ import pandas as pd
 from footlytics.ball import interpolate_ball
 from footlytics.calibration import static_homography
 from footlytics.camera_motion import CameraMotion
+from footlytics.detect import BallDetector
 from footlytics.homography import image_to_pitch
 from footlytics.radar import write_radar_video
 from footlytics.gamestate import build_gamestate, filter_off_pitch, validate_gamestate
@@ -77,6 +78,18 @@ def track_camera(path: Path, tracks: pd.DataFrame, H0: np.ndarray, max_frames: i
     return hom, tracked
 
 
+def detect_ball_video(path: Path, weights: str | Path, max_frames: int | None, imgsz: int = 1920) -> pd.DataFrame:
+    """Dedicated ball detector pass -> rows frame, x1, y1, x2, y2, conf, cls='sports ball'."""
+    det = BallDetector(weights, imgsz=imgsz)
+    rows = []
+    for idx, frame in iter_frames(path, max_frames):
+        res = det.detect(frame)
+        if res is not None:
+            x, y, c = res
+            rows.append({"frame": idx, "track_id": -1, "x1": x, "y1": y, "x2": x, "y2": y, "conf": c, "cls": "sports ball"})
+    return pd.DataFrame(rows, columns=["frame", "track_id", "x1", "y1", "x2", "y2", "conf", "cls"])
+
+
 def ball_table(tracks: pd.DataFrame, n_frames: int, max_gap: int = 5, homographies: dict[int, np.ndarray] | None = None) -> pd.DataFrame:
     balls = tracks[tracks["cls"] == "sports ball"].copy()
     balls["ball_x_m"] = (balls["x1"] + balls["x2"]) / 2
@@ -94,7 +107,8 @@ def ball_table(tracks: pd.DataFrame, n_frames: int, max_gap: int = 5, homographi
 
 def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None = None,
                  model_name: str = "yolo11n.pt", device: str | None = None,
-                 tracker: str = DEFAULT_TRACKER, calib: str | Path | None = None) -> dict:
+                 tracker: str = DEFAULT_TRACKER, calib: str | Path | None = None,
+                 ball_weights: str | Path | None = None) -> dict:
     clip, out_dir = Path(clip), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     info = video_info(clip)
@@ -109,7 +123,13 @@ def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None =
     if calib is not None:
         H0, calib_err = static_homography(calib)
         homographies, tracked = track_camera(clip, tracks, H0, max_frames)
-    ball = ball_table(tracks, n_frames, homographies=homographies)
+    ball_source = tracks
+    if ball_weights is not None:
+        dedicated = detect_ball_video(clip, ball_weights, max_frames)
+        # dedicated detections replace COCO "sports ball" rows; COCO kept only on frames the model missed
+        coco_ball = tracks[(tracks["cls"] == "sports ball") & ~tracks["frame"].isin(dedicated["frame"])]
+        ball_source = pd.concat([dedicated, coco_ball], ignore_index=True)
+    ball = ball_table(ball_source, n_frames, homographies=homographies)
     gs = build_gamestate(persons, teams, ball, fps=fps, homographies=homographies)
     n_before = gs["player_id"].nunique()
     gs = filter_off_pitch(gs, margin_m=2.0)
@@ -124,6 +144,7 @@ def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None =
     quality["clip"] = str(clip)
     quality["model"] = model_name
     quality["tracker"] = tracker
+    quality["ball_model"] = str(ball_weights) if ball_weights is not None else "coco"
     if calib is not None:
         quality["calibration"] = str(calib)
         quality["calibration_err_m"] = float(calib_err)

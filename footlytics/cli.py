@@ -26,8 +26,10 @@ def run(
     device: str | None = typer.Option(None, help="mps | cuda | cpu (auto)"),
     tracker: str = typer.Option(DEFAULT_TRACKER, help="tracker yaml (ultralytics bytetrack.yaml, botsort.yaml, or custom path)"),
     calib: Path | None = typer.Option(None, help="landmark JSON for static calibration (see footlytics/calibration.py)"),
+    ball_model: Path | None = typer.Option(None, help="dedicated ball detector weights (run at 1920 px)"),
 ) -> None:
-    res = run_pipeline(clip, out, max_frames=max_frames, model_name=model, device=device, tracker=tracker, calib=calib)
+    res = run_pipeline(clip, out, max_frames=max_frames, model_name=model, device=device, tracker=tracker,
+                       calib=calib, ball_weights=ball_model)
     typer.echo(json.dumps(res["quality"], indent=2))
 
 
