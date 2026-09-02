@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from footlytics.pipeline import run_pipeline
+from footlytics.track import DEFAULT_TRACKER
 
 app = typer.Typer(help="FOOTLYTICS Game-State Engine prototype")
 
@@ -23,8 +24,9 @@ def run(
     max_frames: int | None = typer.Option(None, help="limit frames for quick runs"),
     model: str = typer.Option("yolo11n.pt", help="ultralytics model name or path"),
     device: str | None = typer.Option(None, help="mps | cuda | cpu (auto)"),
+    tracker: str = typer.Option(DEFAULT_TRACKER, help="tracker yaml (ultralytics bytetrack.yaml, botsort.yaml, or custom path)"),
 ) -> None:
-    res = run_pipeline(clip, out, max_frames=max_frames, model_name=model, device=device)
+    res = run_pipeline(clip, out, max_frames=max_frames, model_name=model, device=device, tracker=tracker)
     typer.echo(json.dumps(res["quality"], indent=2))
 
 

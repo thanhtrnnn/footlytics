@@ -55,7 +55,7 @@ def build_gamestate(
             "timestamp_s": t["frame"].astype(float) / fps,
             "frame": t["frame"].astype(int),
             "player_id": t["track_id"].astype(int),
-            "team": t["track_id"].map(lambda i: teams.get(int(i), "unknown")),
+            "team": t["track_id"].map(lambda i: str(teams.get(int(i), "unknown"))),
             "role": t["cls"].astype(str) if "cls" in t else "player",
             "x_m": xs,
             "y_m": ys,

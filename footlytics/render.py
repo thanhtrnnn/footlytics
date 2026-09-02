@@ -7,14 +7,14 @@ import cv2
 import numpy as np
 import pandas as pd
 
-TEAM_COLOURS = {0: (0, 0, 255), 1: (255, 128, 0), "unknown": (200, 200, 200)}
+TEAM_COLOURS = {"0": (0, 0, 255), "1": (255, 128, 0), "ref": (0, 255, 255), "unknown": (200, 200, 200)}
 BALL_COLOUR = (0, 255, 255)
 
 
 def draw_frame(frame: np.ndarray, rows: pd.DataFrame, ball_xy: tuple[float, float] | None) -> np.ndarray:
     out = frame.copy()
     for r in rows.itertuples(index=False):
-        colour = TEAM_COLOURS.get(r.team, TEAM_COLOURS["unknown"])
+        colour = TEAM_COLOURS.get(str(r.team), TEAM_COLOURS["unknown"])
         x1, y1, x2, y2 = int(r.x1), int(r.y1), int(r.x2), int(r.y2)
         cv2.rectangle(out, (x1, y1), (x2, y2), colour, 2)
         cv2.putText(out, str(int(r.track_id)), (x1, max(0, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1, cv2.LINE_AA)

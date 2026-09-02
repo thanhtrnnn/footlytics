@@ -1,0 +1,8 @@
+# ByteTrack tuned for wide tactical-cam football: small targets, long occlusion-free tracks.
+tracker_type: bytetrack
+track_high_thresh: 0.35   # first association threshold
+track_low_thresh: 0.05    # second association threshold
+new_track_thresh: 0.5     # min confidence to start a new track
+track_buffer: 75          # frames to keep lost tracks (3 s at 25 fps)
+match_thresh: 0.85        # IoU matching threshold
+fuse_score: true

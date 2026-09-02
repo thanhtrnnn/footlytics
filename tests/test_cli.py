@@ -17,7 +17,7 @@ def test_run_pipeline_writes_all_artifacts(tmp_path):
         assert (tmp_path / name).exists(), name
     gs = pd.read_parquet(tmp_path / "gamestate.parquet")
     assert gs["frame"].max() <= 14
-    assert set(gs["team"].unique()) <= {0, 1, "ball", "unknown"}
+    assert set(gs["team"].unique()) <= {"0", "1", "ref", "unknown"}
     q = json.loads((tmp_path / "quality.json").read_text())
     assert q["frames"] >= 10
     assert out["quality"]["frames"] == q["frames"]

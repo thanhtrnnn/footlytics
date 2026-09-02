@@ -11,6 +11,7 @@ from footlytics.ingest import iter_frames
 
 TRACK_COLUMNS = ["frame", "track_id", "x1", "y1", "x2", "y2", "conf", "cls"]
 COCO_PERSON, COCO_SPORTS_BALL = 0, 32
+DEFAULT_TRACKER = str(Path(__file__).parent / "trackers" / "bytetrack_football.yaml")
 
 
 def default_device() -> str:
@@ -28,7 +29,7 @@ def track_video(
     device: str | None = None,
     conf: float = 0.25,
     imgsz: int = 1280,
-    tracker: str = "bytetrack.yaml",
+    tracker: str = DEFAULT_TRACKER,
     classes: tuple[int, ...] = (COCO_PERSON, COCO_SPORTS_BALL),
 ) -> pd.DataFrame:
     """Run YOLO tracking frame by frame. Detections without a track id get track_id -1."""

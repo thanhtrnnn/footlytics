@@ -14,7 +14,7 @@ from footlytics.ingest import iter_frames, video_info
 from footlytics.quality import compute_quality, write_quality
 from footlytics.render import write_overlay_video
 from footlytics.team import TeamClassifier
-from footlytics.track import track_video
+from footlytics.track import DEFAULT_TRACKER, track_video
 
 CROPS_PER_TRACK = 6
 
@@ -64,13 +64,14 @@ def ball_table(tracks: pd.DataFrame, n_frames: int, max_gap: int = 5) -> pd.Data
 
 
 def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None = None,
-                 model_name: str = "yolo11n.pt", device: str | None = None) -> dict:
+                 model_name: str = "yolo11n.pt", device: str | None = None,
+                 tracker: str = DEFAULT_TRACKER) -> dict:
     clip, out_dir = Path(clip), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     info = video_info(clip)
     fps = info["fps"]
     t0 = time.perf_counter()
-    tracks = track_video(clip, max_frames=max_frames, model_name=model_name, device=device)
+    tracks = track_video(clip, max_frames=max_frames, model_name=model_name, device=device, tracker=tracker)
     persons = tracks[(tracks["cls"] == "person") & (tracks["track_id"] >= 0)].copy()
     n_frames = (max_frames if max_frames is not None else info["frames"])
     n_frames = int(min(n_frames, tracks["frame"].max() + 1)) if len(tracks) else 0
@@ -86,5 +87,6 @@ def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None =
     quality = compute_quality(gs, fps=fps, wall_seconds=wall)
     quality["clip"] = str(clip)
     quality["model"] = model_name
+    quality["tracker"] = tracker
     write_quality(quality, out_dir)
     return {"gamestate": gs, "quality": quality, "teams": teams}
