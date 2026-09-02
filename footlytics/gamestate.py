@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from footlytics.homography import image_to_pitch
+from footlytics.homography import PITCH_LENGTH_M, PITCH_WIDTH_M, image_to_pitch
 
 GAMESTATE_COLUMNS = [
     "timestamp_s",
@@ -84,3 +84,16 @@ def validate_gamestate(gs: pd.DataFrame) -> None:
         raise ValueError(f"NaN in required columns: {bad}")
     if not gs["timestamp_s"].is_monotonic_increasing:
         raise ValueError("timestamp_s not monotonic")
+
+
+def filter_off_pitch(gs: pd.DataFrame, margin_m: float = 2.0) -> pd.DataFrame:
+    """Drop tracks whose median calibrated position lies outside the pitch plus margin.
+
+    Rows without calibration are kept untouched (coordinates are pixels there).
+    """
+    if gs.empty or not gs["calib_ok"].any():
+        return gs
+    med = gs[gs["calib_ok"]].groupby("player_id")[["x_m", "y_m"]].median()
+    inside = med["x_m"].between(-margin_m, PITCH_LENGTH_M + margin_m) & med["y_m"].between(-margin_m, PITCH_WIDTH_M + margin_m)
+    keep = set(med.index[inside]) | set(gs.loc[~gs["calib_ok"], "player_id"])
+    return gs[gs["player_id"].isin(keep)].reset_index(drop=True)

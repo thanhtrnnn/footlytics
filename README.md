@@ -18,14 +18,18 @@ uv run pytest
 ```bash
 bash scripts/fetch_sample.sh                       # one short public clip into data/clips/
 uv run footlytics run data/clips/sample_30s.mp4 --out data/out/smoke
+uv run footlytics run data/clips/sample_30s.mp4 --out data/out/calib --calib data/calib/sample_calib_frame0.json
 ```
+
+`--calib` takes a landmark JSON for frame 0 (see `footlytics/calibration.py`); the camera motion tracker
+propagates it through the clip. Without it, coordinates stay in image pixels.
 
 Outputs: `gamestate.parquet`, `gamestate.csv`, `overlay.mp4`, `radar.mp4`, `quality.json`.
 
 ## Stages
 
-0. COCO YOLO11 + ByteTrack + HSV team clustering, image-space coordinates.
-1. Pitch keypoints + homography -> metre coordinates, 2D radar.
+0. COCO YOLO11 + ByteTrack + HSV team clustering, image-space coordinates. Done.
+1. Landmark calibration (frame 0) + camera-motion propagation -> metre coordinates, 2D radar. Done on the 30 s clip.
 2. Football-specific detector (player/goalkeeper/referee/ball), ball interpolation.
 3. Cloud comparison vs sn-gamestate and SoccerMaster.
 

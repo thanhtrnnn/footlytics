@@ -42,3 +42,23 @@ def test_validate_rejects_nan_required():
     gs.loc[0, "player_id"] = np.nan
     with pytest.raises(ValueError):
         validate_gamestate(gs)
+
+
+def test_filter_off_pitch_drops_tracks_whose_median_position_is_outside():
+    from footlytics.gamestate import filter_off_pitch
+
+    rows = []
+    for f in range(4):
+        rows.append({"frame": f, "player_id": 1, "x_m": 50.0, "y_m": 30.0, "team": "0", "calib_ok": True})
+        rows.append({"frame": f, "player_id": 2, "x_m": 52.0, "y_m": 75.0, "team": "0", "calib_ok": True})  # fan in the stand
+        rows.append({"frame": f, "player_id": 3, "x_m": 104.0 + f, "y_m": 30.0, "team": "1", "calib_ok": True})  # near the goal line, median 105.5 -> keep with margin 2
+    gs = pd.DataFrame(rows)
+    out = filter_off_pitch(gs, margin_m=2.0)
+    assert set(out["player_id"].unique()) == {1, 3}
+
+
+def test_filter_off_pitch_is_noop_without_calibration():
+    from footlytics.gamestate import filter_off_pitch
+
+    gs = pd.DataFrame({"frame": [0, 0], "player_id": [1, 2], "x_m": [600.0, 900.0], "y_m": [400.0, 900.0], "team": ["0", "1"], "calib_ok": [False, False]})
+    assert len(filter_off_pitch(gs, margin_m=2.0)) == 2

@@ -37,7 +37,7 @@ Cột: `timestamp_s, frame, player_id, team (0/1/gk/ref), role, x_m, y_m, ball_x
 | Stage | Nội dung | Kết quả |
 |---|---|---|
 | 0 | COCO YOLO11 + ByteTrack + HSV team, tọa độ ảnh | pipeline chạy end-to-end trên clip 30 s |
-| 1 | pitch keypoints + homography | tọa độ mét, radar 2D |
+| 1 | calibration: landmark JSON (frame 0) + camera motion KLT/RANSAC; pitch keypoint model chỉ là tuỳ chọn | tọa độ mét, radar 2D |
 | 2 | detector fine-tune (player/gk/ref/ball), nội suy bóng | ball coverage tăng, role đúng |
 | 3 | cloud: sn-gamestate, SoccerMaster trên cùng clip | quyết định base stack |
 
@@ -54,3 +54,11 @@ Test trước, code sau: `test_homography.py` (góc sân -> 0,0 và 105,68), `te
 ## 8. Rủi ro
 
 Disk 20 GB; Python 3.14; chưa có weights pitch keypoint (fallback: train Colab ~1 h); ultralytics AGPL phải license hoặc thay trước khi bán; góc camera clip công khai khác V.League nên kết luận B8 tạm thời.
+
+## 9. Cập nhật Stage 1 (2026-09-03)
+
+- **Model pitch keypoint của Roboflow (YOLOv8x-pose, 32 keypoints) thất bại trên tactical cam góc rộng:** 8-10 keypoint "tự tin" nhưng sai vị trí (vẽ vòng cấm vào giữa sân). Model huấn luyện trên broadcast, out-of-distribution với góc rộng 720p. Giữ `pitch.py` làm tuỳ chọn cho broadcast; sẽ kiểm chứng lại khi có clip broadcast.
+- **Giải pháp Stage 1 đã chạy:** `calibration.py` đọc JSON landmark (id vertex 1-32 hoặc tên) cho frame 0, khớp homography RANSAC; `camera_motion.py` theo dõi chuyển động camera (KLT trên nền tĩnh, mask cầu thủ, RANSAC homography từng frame) và lan truyền H_t = H_0 · inv(H_0→t). Camera tactical cam **không** tĩnh: lia và zoom rõ trong 30 s, median frame bị nhoè.
+- **Kết quả clip 30 s:** 6 landmark, sai số trung vị 0.064 m; 100% hàng game state nằm trong sân; overlay đường kẻ sân khớp ở frame 0, 375, 749 (lệch vài px ở vòng cấm xa cuối clip). Radar 2D hợp lý. Chi phí thêm khoảng 20 s/phút trận (tổng 67 s/phút).
+- **Cách lấy landmark:** phát hiện đường kẻ trắng (mask cỏ, mask cầu thủ, HoughLinesP, gộp đường, giao điểm) rồi gán nhãn tay 4 điểm chắc chắn; tự kiểm chứng bằng giao điểm vòng tròn giữa sân với đường giữa sân (dự đoán trùng vạch trắng). Script trong lịch sử phiên, cần đóng gói thành `footlytics calib-assist`.
+- **Nợ kỹ thuật:** (1) tự động hoá calibration frame 0 (PnLCalib, hoặc ghép line-snap vào keypoint model), (2) chống trôi KLT trên clip dài: neo lại định kỳ bằng đường kẻ sân, (3) lọc người ngoài sân bằng tọa độ mét.

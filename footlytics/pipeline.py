@@ -14,7 +14,7 @@ from footlytics.calibration import static_homography
 from footlytics.camera_motion import CameraMotion
 from footlytics.homography import image_to_pitch
 from footlytics.radar import write_radar_video
-from footlytics.gamestate import build_gamestate, validate_gamestate
+from footlytics.gamestate import build_gamestate, filter_off_pitch, validate_gamestate
 from footlytics.ingest import iter_frames, video_info
 from footlytics.quality import compute_quality, write_quality
 from footlytics.render import write_overlay_video
@@ -111,6 +111,9 @@ def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None =
         homographies, tracked = track_camera(clip, tracks, H0, max_frames)
     ball = ball_table(tracks, n_frames, homographies=homographies)
     gs = build_gamestate(persons, teams, ball, fps=fps, homographies=homographies)
+    n_before = gs["player_id"].nunique()
+    gs = filter_off_pitch(gs, margin_m=2.0)
+    persons = persons[persons["track_id"].isin(gs["player_id"].unique())]
     validate_gamestate(gs)
     wall = time.perf_counter() - t0
     gs.to_parquet(out_dir / "gamestate.parquet", index=False)
@@ -124,6 +127,7 @@ def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None =
     if calib is not None:
         quality["calibration"] = str(calib)
         quality["calibration_err_m"] = float(calib_err)
+        quality["tracks_dropped_off_pitch"] = int(n_before - gs["player_id"].nunique())
         quality["camera_motion_tracked_min"] = int(min(tracked)) if tracked else 0
         quality["camera_motion_tracked_mean"] = float(np.mean(tracked)) if tracked else 0.0
         write_radar_video(gs, out_dir / "radar.mp4", fps)

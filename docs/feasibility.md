@@ -36,6 +36,21 @@ Phiên bản 0.1, 2026-09-03. Trả lời blocker kỹ thuật B8-B12 bằng th�
 
 Ghi chú: "người" gồm cả trọng tài và người ngoài sân được YOLO phát hiện (chưa có calibration để lọc). Đội được gán bằng cụm màu áo (2 đội + trọng tài); kiểm tra bằng mắt trên overlay: đúng phần lớn, vài lỗi ở cầu thủ nhỏ hoặc bị che.
 
+### 3.2. Số đo Stage 1 (2026-09-03, clip 30 s, calibration tay 6 landmark + camera motion)
+
+| Chỉ số | Giá trị |
+|---|---|
+| Sai số trung vị landmark | 0.064 m |
+| Hàng game state trong sân | 100% |
+| Trôi calibration sau 30 s (mắt) | vài px ở vòng cấm xa, không đo được số |
+| Feature KLT theo dõi mỗi frame | trung bình 599 |
+| Chi phí | 67 s / phút trận (thêm ~20 s so với Stage 0) |
+| Model pitch keypoint Roboflow trên tactical cam | thất bại (keypoint sai vị trí), không dùng |
+
+Detector chuyên football (Roboflow, HF mirror martinjolif) lấy mẫu 30 frame clip 3 phút: model player/gk/ref phát hiện trung bình 13.7 player so với 19.9 person của COCO yolo11n (kém trên góc rộng); model bóng riêng ở imgsz 1920 thấy bóng 27/30 frame (1.23 box/frame, có dương tính giả), ở 1280 chỉ 13/30. Kết luận Stage 2: giữ COCO cho người, thêm model bóng riêng ở 1920 cho bóng.
+
+Cập nhật B9: sai số vị trí tại landmark 0.06 m; sai số thực tế cầu thủ phụ thuộc điểm chân bbox và trôi camera, chưa đo bằng ground truth.
+
 ## 4. Kế hoạch compute
 
 - Local Apple M2 (MPS, 24 GB RAM, ~20 GB disk trống): phát triển, test, clip 30 s đến 3 phút.
