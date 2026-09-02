@@ -11,6 +11,11 @@ from footlytics.pipeline import run_pipeline
 app = typer.Typer(help="FOOTLYTICS Game-State Engine prototype")
 
 
+@app.callback()
+def _root() -> None:
+    """FOOTLYTICS CLI."""
+
+
 @app.command()
 def run(
     clip: Path = typer.Argument(..., exists=True, help="input video"),
