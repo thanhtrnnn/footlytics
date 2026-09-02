@@ -57,10 +57,16 @@ class AnchoredCamera:
 
     def __init__(self, anchor_bgr: np.ndarray, mask: np.ndarray | None = None, reanchor_every: int = 50,
                  min_klt_inliers: int = 12, min_klt_ratio: float = 0.5, min_global_inliers: int = 30,
-                 min_global_ratio: float = 0.5, start_at_anchor: bool = True):
+                 min_global_ratio: float = 0.5, start_at_anchor: bool = True, retry_every: int = 10,
+                 sift_scale: float = 0.5):
         self._anchor_gray = cv2.cvtColor(anchor_bgr, cv2.COLOR_BGR2GRAY) if anchor_bgr.ndim == 3 else anchor_bgr
-        self._sift = cv2.SIFT_create(nfeatures=3000)
-        self._kp_a, self._des_a = self._sift.detectAndCompute(self._anchor_gray, mask)
+        self._scale = sift_scale
+        self._S = np.diag([sift_scale, sift_scale, 1.0])  # full-res px -> matching-res px
+        self._Sinv = np.linalg.inv(self._S)
+        self._sift = cv2.SIFT_create(nfeatures=2000)
+        self._kp_a, self._des_a = self._sift.detectAndCompute(self._small(self._anchor_gray), self._small(mask))
+        self._retry_every = retry_every
+        self._scene_change_thresh = 20.0  # mean abs gray difference between consecutive (half-res) frames
         self._matcher = cv2.BFMatcher()
         self._reanchor_every = reanchor_every
         self._min_klt, self._min_klt_ratio = min_klt_inliers, min_klt_ratio
@@ -71,6 +77,11 @@ class AnchoredCamera:
         self._count = 0
         self.n_reanchors = 0
         self.n_tracked = 0
+
+    def _small(self, img: np.ndarray | None) -> np.ndarray | None:
+        if img is None or self._scale == 1.0:
+            return img
+        return cv2.resize(img, None, fx=self._scale, fy=self._scale, interpolation=cv2.INTER_AREA)
 
     def _klt_step(self, gray: np.ndarray, mask: np.ndarray | None) -> np.ndarray | None:
         p0 = cv2.goodFeaturesToTrack(self._prev_gray, mask=mask, **_FEATURE_PARAMS)
@@ -89,7 +100,7 @@ class AnchoredCamera:
         return step
 
     def _global(self, gray: np.ndarray, mask: np.ndarray | None) -> np.ndarray | None:
-        kp, des = self._sift.detectAndCompute(gray, mask)
+        kp, des = self._sift.detectAndCompute(self._small(gray), self._small(mask))
         if des is None or self._des_a is None or len(kp) < 8:
             return None
         matches = self._matcher.knnMatch(self._des_a, des, k=2)
@@ -98,21 +109,28 @@ class AnchoredCamera:
             return None
         src = np.float32([self._kp_a[g.queryIdx].pt for g in good])
         dst = np.float32([kp[g.trainIdx].pt for g in good])
-        H, inl = cv2.findHomography(src, dst, cv2.RANSAC, 3.0)
+        H, inl = cv2.findHomography(src, dst, cv2.RANSAC, 3.0 * self._scale)
         n = int(inl.sum()) if inl is not None else 0
         if H is None or n < self._min_glob or n / len(good) < self._min_glob_ratio:
             return None
-        return H
+        return self._Sinv @ H @ self._S  # back to full-resolution pixels
 
     def update(self, frame: np.ndarray, mask: np.ndarray | None = None) -> np.ndarray | None:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
         self._count += 1
-        step = self._klt_step(gray, mask) if (self.valid and self._prev_gray is not None) else None
+        self._prev_valid = self.valid
+        scene_change = False
+        if self._prev_gray is not None:
+            a, b = self._small(self._prev_gray), self._small(gray)
+            scene_change = float(np.mean(cv2.absdiff(a, b))) > self._scene_change_thresh
+        step = None if scene_change else (self._klt_step(gray, mask) if (self.valid and self._prev_gray is not None) else None)
         if step is not None:
             self.H_anchor_to_t = step @ self.H_anchor_to_t
         else:
             self.valid = False
-        if not self.valid or self._count % self._reanchor_every == 0:
+        need_global = (not self.valid and self._count % self._retry_every == 0) or (
+            self.valid and self._count % self._reanchor_every == 0) or (not self.valid and step is None and self._count <= 1)
+        if need_global or scene_change or (not self.valid and self._prev_valid):
             Hg = self._global(gray, mask)
             if Hg is not None:
                 self.H_anchor_to_t = Hg
