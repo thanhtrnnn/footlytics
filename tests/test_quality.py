@@ -28,3 +28,9 @@ def test_quality_metrics():
     assert q["ball_coverage"] == 2 / 3
     assert q["calib_success_rate"] == 2 / 3
     assert q["seconds_per_match_minute"] == 6.0 / (3 / 25 / 60)
+
+
+def test_id_switch_rate_per_player_per_minute():
+    q = compute_quality(_gs(), fps=25.0, wall_seconds=6.0, expected_players=22)
+    minutes = 3 / 25 / 60
+    assert q["id_switch_rate_per_player_per_minute"] == 3 / 22 / minutes

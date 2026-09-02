@@ -23,6 +23,7 @@ def compute_quality(gs: pd.DataFrame, fps: float, wall_seconds: float, expected_
         "pct_frames_ge_18_players": float((per_frame >= 18).mean()),
         "unique_track_ids": int(gs["player_id"].nunique()),
         "track_births_after_first_frame": int((births > first_frame).sum()),
+        "id_switch_rate_per_player_per_minute": float((births > first_frame).sum() / expected_players / match_minutes) if match_minutes > 0 else float("nan"),
         "ball_coverage": float(ball_frames.mean()),
         "calib_success_rate": float(calib_frames.mean()),
         "wall_seconds": float(wall_seconds),
