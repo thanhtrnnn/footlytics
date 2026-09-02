@@ -25,7 +25,7 @@ Phiên bản 0.1, 2026-09-03. Trả lời blocker kỹ thuật B8-B12 bằng th�
 | B9 | Sai số nào làm analyst mất tin? | So vị trí với điểm mốc sân đã biết; đếm ID switch | sai số vị trí (m); ID switch / cầu thủ / phút | <= 2 m; <= 1 switch/cầu thủ/phút | Sai số vị trí: chưa đo (cần Stage 1). ID switch proxy: 30 s = 3.5, 3 phút = 4.3 switch/cầu thủ/phút (ByteTrack tuỳ chỉnh; mặc định ultralytics cho 9.1) | Chưa đạt. Cần ReID hoặc appearance tracker (BoT-SORT + ReID) ở Stage 2 |
 | B10 | Use case nào bắt buộc cần ball tracking? | Đo ball coverage %; liệt kê metric tính được không cần bóng | ball coverage % | shape/line height/compactness không cần bóng; pressing/transition cần bóng >= 60% coverage | Ball coverage COCO yolo11n: 30 s = 0.1%, 3 phút = 30.5% (kèm nội suy <= 5 frame) | Chưa đạt cho pressing/transition. Cần detector bóng riêng (Stage 2) |
 | B11 | MVP cần danh tính cầu thủ hay chỉ team + id tạm? | Tính toàn bộ metric L2 chỉ với team + track id | số metric tính được / tổng | 100% metric L2 không cần tên | Pipeline Stage 0 gán team 0/1/ref chỉ bằng màu áo; không cần tên | Giữ giả thuyết: đủ cho L2, jersey OCR hoãn |
-| B12 | Độ trễ chấp nhận: 1h / 3h / overnight? | Đo giây xử lý / phút trận trên M2 và trên T4/A10 | s per match-minute; ngoại suy 90 phút | overnight chắc chắn đạt; mục tiêu <= 3h/trận trên 1 GPU | M2 (MPS, yolo11n, imgsz 1280): 45-48 s / phút trận, tức khoảng 72 phút cho 90 phút. yolo11s: 92 s/phút | Đạt overnight và mục tiêu 3h ngay trên laptop; GPU cloud sẽ nhanh hơn nhiều |
+| B12 | Độ trễ chấp nhận: 1h / 3h / overnight? | Đo giây xử lý / phút trận trên M2 và trên T4/A10 | s per match-minute; ngoại suy 90 phút | overnight chắc chắn đạt; mục tiêu <= 3h/trận trên 1 GPU | Stage 0 (chỉ người, 1280): 45-48 s/phút trận → 72 phút cho 90 phút. Pipeline đầy đủ (người + bóng 1920 + camera neo): 203 s/phút trận → khoảng 5 giờ cho 90 phút trên M2 | Overnight đạt. Mục tiêu 3h cần GPU hoặc bỏ bớt pass (bóng chỉ chạy khi cần) |
 
 ### 3.1. Số đo Stage 0 (2026-09-03, clip Brazil vs France tactical cam, 720p, 25 fps, yolo11n COCO, ByteTrack tuỳ chỉnh)
 
@@ -50,6 +50,18 @@ Ghi chú: "người" gồm cả trọng tài và người ngoài sân được Y
 Detector chuyên football (Roboflow, HF mirror martinjolif) lấy mẫu 30 frame clip 3 phút: model player/gk/ref phát hiện trung bình 13.7 player so với 19.9 person của COCO yolo11n (kém trên góc rộng); model bóng riêng ở imgsz 1920 thấy bóng 27/30 frame (1.23 box/frame, có dương tính giả), ở 1280 chỉ 13/30. Kết luận Stage 2: giữ COCO cho người, thêm model bóng riêng ở 1920 cho bóng.
 
 Cập nhật B9: sai số vị trí tại landmark 0.06 m; sai số thực tế cầu thủ phụ thuộc điểm chân bbox và trôi camera, chưa đo bằng ground truth.
+
+### 3.3. Số đo Stage 2 (2026-09-03, clip 3 phút, calibration neo frame 752 + AnchoredCamera + model bóng riêng)
+
+| Chỉ số | Giá trị |
+|---|---|
+| Cắt cảnh phát hiện | frame 3657-4501 (34 s zoom băng ghế) bị loại, 81.2% frame có calibration |
+| Neo lại SIFT | 139 lần (định kỳ 50 frame + sau đổi cảnh) |
+| Khớp đường kẻ sân (mắt) | tốt ở frame 0 (lan truyền ngược 30 s từ neo), 1500, 3000, 3600 |
+| Ball coverage (model riêng 1920 px) | 94.9% frame (so với 30.5% bằng COCO) |
+| Người trên sân / frame sau lọc ngoài sân | 15.5 (60% frame có từ 18 người); 8 track ngoài sân bị bỏ |
+| ID switch / cầu thủ / phút | 2.67 (giảm từ 4.35 ở Stage 0, nhờ loại frame cắt cảnh và lọc ngoài sân) |
+| Chi phí | 203 s / phút trận trên M2 (người 1280 + bóng 1920 + camera neo) → khoảng 5 giờ cho 90 phút, vượt mục tiêu 3h; cần GPU |
 
 ## 4. Kế hoạch compute
 
