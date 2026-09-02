@@ -1,0 +1,27 @@
+"""Command line interface: `footlytics run clip.mp4 --out data/out/run1`."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import typer
+
+from footlytics.pipeline import run_pipeline
+
+app = typer.Typer(help="FOOTLYTICS Game-State Engine prototype")
+
+
+@app.command()
+def run(
+    clip: Path = typer.Argument(..., exists=True, help="input video"),
+    out: Path = typer.Option(Path("data/out/run"), help="output directory"),
+    max_frames: int | None = typer.Option(None, help="limit frames for quick runs"),
+    model: str = typer.Option("yolo11n.pt", help="ultralytics model name or path"),
+    device: str | None = typer.Option(None, help="mps | cuda | cpu (auto)"),
+) -> None:
+    res = run_pipeline(clip, out, max_frames=max_frames, model_name=model, device=device)
+    typer.echo(json.dumps(res["quality"], indent=2))
+
+
+if __name__ == "__main__":
+    app()
