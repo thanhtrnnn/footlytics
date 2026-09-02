@@ -19,4 +19,4 @@ def test_calibrated_run_gives_metre_coordinates_and_radar(tmp_path):
     assert inside.mean() >= 0.9  # people on the pitch land on the pitch
     assert (tmp_path / "radar.mp4").exists()
     assert out["quality"]["calib_success_rate"] == 1.0
-    assert "camera_motion_tracked_min" in out["quality"]
+    assert out["quality"]["frames_calibrated"] == 20

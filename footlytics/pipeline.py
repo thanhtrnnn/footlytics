@@ -11,7 +11,7 @@ import pandas as pd
 
 from footlytics.ball import interpolate_ball
 from footlytics.calibration import anchor_frame_of, compose_from_anchor, static_homography
-from footlytics.camera_motion import CameraMotion
+from footlytics.camera_motion import AnchoredCamera
 from footlytics.detect import BallDetector
 from footlytics.homography import image_to_pitch
 from footlytics.radar import write_radar_video
@@ -60,24 +60,46 @@ def assign_teams(path: Path, persons: pd.DataFrame, max_frames: int | None) -> d
     return teams
 
 
+def _read_frame(path: Path, index: int) -> np.ndarray:
+    cap = cv2.VideoCapture(str(path))
+    cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+    ok, frame = cap.read()
+    cap.release()
+    if not ok:
+        raise ValueError(f"cannot read frame {index} of {path}")
+    return frame
+
+
+def _player_mask(shape: tuple[int, int], g: pd.DataFrame | None) -> np.ndarray:
+    mask = np.full(shape, 255, np.uint8)
+    if g is not None:
+        for r in g.itertuples(index=False):
+            cv2.rectangle(mask, (int(r.x1) - 6, int(r.y1) - 6), (int(r.x2) + 6, int(r.y2) + 6), 0, -1)
+    return mask
+
+
 def track_camera(path: Path, tracks: pd.DataFrame, H_anchor: np.ndarray, max_frames: int | None,
-                 anchor_frame: int = 0) -> tuple[dict[int, np.ndarray], list[int]]:
-    """Propagate the anchor-frame homography with KLT camera motion; players are masked out."""
+                 anchor_frame: int = 0) -> tuple[dict[int, np.ndarray], dict]:
+    """Per-frame image->pitch homographies via anchored camera motion (KLT + periodic SIFT re-anchor).
+
+    Frames where the camera cannot be related to the anchor (shot cuts) are absent from the result.
+    """
     by_frame = {f: g for f, g in tracks.groupby("frame")}
-    cm = CameraMotion()
-    motions: dict[int, np.ndarray] = {}
+    anchor_bgr = _read_frame(path, anchor_frame)
+    cam = AnchoredCamera(anchor_bgr, mask=_player_mask(anchor_bgr.shape[:2], by_frame.get(anchor_frame)),
+                         start_at_anchor=(anchor_frame == 0))
+    hom: dict[int, np.ndarray] = {}
     tracked: list[int] = []
+    n = 0
     for idx, frame in iter_frames(path, max_frames):
-        mask = np.full(frame.shape[:2], 255, np.uint8)
-        g = by_frame.get(idx)
-        if g is not None:
-            for r in g.itertuples(index=False):
-                cv2.rectangle(mask, (int(r.x1) - 6, int(r.y1) - 6), (int(r.x2) + 6, int(r.y2) + 6), 0, -1)
-        motions[idx] = cm.update(frame, mask=mask).copy()
-        tracked.append(cm.n_tracked)
-    if anchor_frame not in motions:
-        raise ValueError(f"calibration anchor frame {anchor_frame} beyond processed frames ({len(motions)})")
-    return compose_from_anchor(H_anchor, motions, anchor_frame), tracked
+        n += 1
+        H_a_t = cam.update(frame, mask=_player_mask(frame.shape[:2], by_frame.get(idx)))
+        if H_a_t is not None:
+            hom[idx] = H_anchor @ np.linalg.inv(H_a_t)
+        tracked.append(cam.n_tracked)
+    stats = {"frames_total": n, "frames_calibrated": len(hom), "reanchors": cam.n_reanchors,
+             "camera_motion_tracked_mean": float(np.mean(tracked)) if tracked else 0.0}
+    return hom, stats
 
 
 def detect_ball_video(path: Path, weights: str | Path, max_frames: int | None, imgsz: int = 1920) -> pd.DataFrame:
@@ -103,6 +125,8 @@ def ball_table(tracks: pd.DataFrame, n_frames: int, max_gap: int = 5, homographi
             if H is not None:
                 m = image_to_pitch(H, np.array([[r["ball_x_m"], r["ball_y_m"]]]))[0]
                 best.loc[i, ["ball_x_m", "ball_y_m"]] = m
+            else:
+                best.loc[i, ["ball_x_m", "ball_y_m"]] = np.nan
     full = pd.DataFrame({"frame": np.arange(n_frames)}).merge(best, on="frame", how="left")
     return interpolate_ball(full, max_gap=max_gap)
 
@@ -121,10 +145,11 @@ def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None =
     n_frames = (max_frames if max_frames is not None else info["frames"])
     n_frames = int(min(n_frames, tracks["frame"].max() + 1)) if len(tracks) else 0
     teams = assign_teams(clip, persons, max_frames)
-    homographies, tracked = None, []
+    homographies, cam_stats = None, {}
     if calib is not None:
         H0, calib_err = static_homography(calib)
-        homographies, tracked = track_camera(clip, tracks, H0, max_frames, anchor_frame=anchor_frame_of(calib))
+        homographies, cam_stats = track_camera(clip, tracks, H0, max_frames, anchor_frame=anchor_frame_of(calib))
+        persons = persons[persons["frame"].isin(homographies.keys())]  # drop frames without a valid camera
     ball_source = tracks
     if ball_weights is not None:
         dedicated = detect_ball_video(clip, ball_weights, max_frames)
@@ -152,8 +177,8 @@ def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None =
         quality["calibration"] = str(calib)
         quality["calibration_err_m"] = float(calib_err)
         quality["tracks_dropped_off_pitch"] = int(n_before - gs["player_id"].nunique())
-        quality["camera_motion_tracked_min"] = int(min(tracked)) if tracked else 0
-        quality["camera_motion_tracked_mean"] = float(np.mean(tracked)) if tracked else 0.0
+        quality.update(cam_stats)
+        quality["calib_success_rate"] = cam_stats["frames_calibrated"] / max(cam_stats["frames_total"], 1)
         write_radar_video(gs, out_dir / "radar.mp4", fps)
     write_quality(quality, out_dir)
     return {"gamestate": gs, "quality": quality, "teams": teams}
