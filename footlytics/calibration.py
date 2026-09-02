@@ -73,3 +73,23 @@ def static_homography(path: str | Path, ransac_thresh_m: float = 1.5) -> tuple[n
     if H is None:
         raise ValueError("calibration needs at least 4 non-degenerate points")
     return H, err
+
+
+def anchor_frame_of(path: str | Path) -> int:
+    """Frame index the landmarks were annotated on (JSON key "frame", default 0)."""
+    return int(json.loads(Path(path).read_text()).get("frame", 0))
+
+
+def compose_from_anchor(H_anchor: np.ndarray, motions: dict[int, np.ndarray], anchor_frame: int) -> dict[int, np.ndarray]:
+    """Given per-frame accumulated camera motion H_0_to_t, return image_t -> pitch homographies.
+
+    H_t = H_anchor @ inv(H_anchor_to_t),  H_anchor_to_t = H_0_to_t @ inv(H_0_to_anchor).
+    """
+    if anchor_frame not in motions:
+        raise KeyError(f"anchor frame {anchor_frame} not in motions")
+    inv_anchor = np.linalg.inv(motions[anchor_frame])
+    out: dict[int, np.ndarray] = {}
+    for t, H_0_to_t in motions.items():
+        H_anchor_to_t = H_0_to_t @ inv_anchor
+        out[t] = H_anchor @ np.linalg.inv(H_anchor_to_t)
+    return out

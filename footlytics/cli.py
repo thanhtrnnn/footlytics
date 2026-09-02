@@ -27,9 +27,10 @@ def run(
     tracker: str = typer.Option(DEFAULT_TRACKER, help="tracker yaml (ultralytics bytetrack.yaml, botsort.yaml, or custom path)"),
     calib: Path | None = typer.Option(None, help="landmark JSON for static calibration (see footlytics/calibration.py)"),
     ball_model: Path | None = typer.Option(None, help="dedicated ball detector weights (run at 1920 px)"),
+    imgsz: int = typer.Option(1280, help="detector input size for people tracking"),
 ) -> None:
     res = run_pipeline(clip, out, max_frames=max_frames, model_name=model, device=device, tracker=tracker,
-                       calib=calib, ball_weights=ball_model)
+                       calib=calib, ball_weights=ball_model, imgsz=imgsz)
     typer.echo(json.dumps(res["quality"], indent=2))
 
 

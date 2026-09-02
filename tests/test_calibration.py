@@ -39,3 +39,29 @@ def test_calibration_accepts_named_landmarks(tmp_path):
     img_pts, pitch_pts = load_calibration(f)
     assert np.allclose(pitch_pts[0], [52.5, 0]) or np.allclose(pitch_pts[0], [52.5, 68])
     assert pitch_pts[:, 0].max() == 105.0
+
+
+def test_anchor_frame_composition():
+    """H_t = H_anchor @ inv(H_anchor_to_t) with H_anchor_to_t = H_0_to_t @ inv(H_0_to_anchor)."""
+    from footlytics.calibration import compose_from_anchor
+
+    H_anchor = np.array([[2.0, 0.1, 5.0], [0.0, 1.5, -3.0], [0.0, 0.001, 1.0]])
+    motions = {0: np.eye(3)}
+    step = np.array([[1.0, 0.0, 2.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]])
+    for t in range(1, 5):
+        motions[t] = step @ motions[t - 1]
+    homs = compose_from_anchor(H_anchor, motions, anchor_frame=2)
+    assert np.allclose(homs[2], H_anchor)
+    # frame 3 is one step after the anchor: image_3 = step(image_2), so H_3 = H_anchor @ inv(step)
+    assert np.allclose(homs[3], H_anchor @ np.linalg.inv(step))
+    assert np.allclose(homs[0], H_anchor @ step @ step)
+
+
+def test_calibration_json_anchor_frame_defaults_to_zero(tmp_path):
+    from footlytics.calibration import anchor_frame_of
+
+    f = tmp_path / "c.json"
+    f.write_text(json.dumps({"points": []}))
+    assert anchor_frame_of(f) == 0
+    f.write_text(json.dumps({"points": [], "frame": 750}))
+    assert anchor_frame_of(f) == 750

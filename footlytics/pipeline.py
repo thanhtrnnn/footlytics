@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from footlytics.ball import interpolate_ball
-from footlytics.calibration import static_homography
+from footlytics.calibration import anchor_frame_of, compose_from_anchor, static_homography
 from footlytics.camera_motion import CameraMotion
 from footlytics.detect import BallDetector
 from footlytics.homography import image_to_pitch
@@ -60,11 +60,12 @@ def assign_teams(path: Path, persons: pd.DataFrame, max_frames: int | None) -> d
     return teams
 
 
-def track_camera(path: Path, tracks: pd.DataFrame, H0: np.ndarray, max_frames: int | None) -> tuple[dict[int, np.ndarray], list[int]]:
-    """Propagate the frame-0 homography with KLT camera motion; players are masked out."""
+def track_camera(path: Path, tracks: pd.DataFrame, H_anchor: np.ndarray, max_frames: int | None,
+                 anchor_frame: int = 0) -> tuple[dict[int, np.ndarray], list[int]]:
+    """Propagate the anchor-frame homography with KLT camera motion; players are masked out."""
     by_frame = {f: g for f, g in tracks.groupby("frame")}
     cm = CameraMotion()
-    hom: dict[int, np.ndarray] = {}
+    motions: dict[int, np.ndarray] = {}
     tracked: list[int] = []
     for idx, frame in iter_frames(path, max_frames):
         mask = np.full(frame.shape[:2], 255, np.uint8)
@@ -72,10 +73,11 @@ def track_camera(path: Path, tracks: pd.DataFrame, H0: np.ndarray, max_frames: i
         if g is not None:
             for r in g.itertuples(index=False):
                 cv2.rectangle(mask, (int(r.x1) - 6, int(r.y1) - 6), (int(r.x2) + 6, int(r.y2) + 6), 0, -1)
-        H_0_to_t = cm.update(frame, mask=mask)
-        hom[idx] = H0 @ np.linalg.inv(H_0_to_t)
+        motions[idx] = cm.update(frame, mask=mask).copy()
         tracked.append(cm.n_tracked)
-    return hom, tracked
+    if anchor_frame not in motions:
+        raise ValueError(f"calibration anchor frame {anchor_frame} beyond processed frames ({len(motions)})")
+    return compose_from_anchor(H_anchor, motions, anchor_frame), tracked
 
 
 def detect_ball_video(path: Path, weights: str | Path, max_frames: int | None, imgsz: int = 1920) -> pd.DataFrame:
@@ -108,13 +110,13 @@ def ball_table(tracks: pd.DataFrame, n_frames: int, max_gap: int = 5, homographi
 def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None = None,
                  model_name: str = "yolo11n.pt", device: str | None = None,
                  tracker: str = DEFAULT_TRACKER, calib: str | Path | None = None,
-                 ball_weights: str | Path | None = None) -> dict:
+                 ball_weights: str | Path | None = None, imgsz: int = 1280) -> dict:
     clip, out_dir = Path(clip), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     info = video_info(clip)
     fps = info["fps"]
     t0 = time.perf_counter()
-    tracks = track_video(clip, max_frames=max_frames, model_name=model_name, device=device, tracker=tracker)
+    tracks = track_video(clip, max_frames=max_frames, model_name=model_name, device=device, tracker=tracker, imgsz=imgsz)
     persons = tracks[(tracks["cls"] == "person") & (tracks["track_id"] >= 0)].copy()
     n_frames = (max_frames if max_frames is not None else info["frames"])
     n_frames = int(min(n_frames, tracks["frame"].max() + 1)) if len(tracks) else 0
@@ -122,7 +124,7 @@ def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None =
     homographies, tracked = None, []
     if calib is not None:
         H0, calib_err = static_homography(calib)
-        homographies, tracked = track_camera(clip, tracks, H0, max_frames)
+        homographies, tracked = track_camera(clip, tracks, H0, max_frames, anchor_frame=anchor_frame_of(calib))
     ball_source = tracks
     if ball_weights is not None:
         dedicated = detect_ball_video(clip, ball_weights, max_frames)
@@ -145,6 +147,7 @@ def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None =
     quality["model"] = model_name
     quality["tracker"] = tracker
     quality["ball_model"] = str(ball_weights) if ball_weights is not None else "coco"
+    quality["imgsz"] = imgsz
     if calib is not None:
         quality["calibration"] = str(calib)
         quality["calibration_err_m"] = float(calib_err)

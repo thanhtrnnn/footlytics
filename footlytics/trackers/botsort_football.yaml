@@ -1,0 +1,13 @@
+# BoT-SORT with appearance ReID (features from the detector backbone) for wide tactical-cam football.
+tracker_type: botsort
+track_high_thresh: 0.35
+track_low_thresh: 0.05
+new_track_thresh: 0.5
+track_buffer: 75
+match_thresh: 0.85
+fuse_score: true
+gmc_method: sparseOptFlow   # camera motion compensation
+proximity_thresh: 0.5
+appearance_thresh: 0.25
+with_reid: true
+model: auto
