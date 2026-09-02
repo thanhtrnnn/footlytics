@@ -5,10 +5,15 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import cv2
 import numpy as np
 import pandas as pd
 
 from footlytics.ball import interpolate_ball
+from footlytics.calibration import static_homography
+from footlytics.camera_motion import CameraMotion
+from footlytics.homography import image_to_pitch
+from footlytics.radar import write_radar_video
 from footlytics.gamestate import build_gamestate, validate_gamestate
 from footlytics.ingest import iter_frames, video_info
 from footlytics.quality import compute_quality, write_quality
@@ -54,18 +59,42 @@ def assign_teams(path: Path, persons: pd.DataFrame, max_frames: int | None) -> d
     return teams
 
 
-def ball_table(tracks: pd.DataFrame, n_frames: int, max_gap: int = 5) -> pd.DataFrame:
+def track_camera(path: Path, tracks: pd.DataFrame, H0: np.ndarray, max_frames: int | None) -> tuple[dict[int, np.ndarray], list[int]]:
+    """Propagate the frame-0 homography with KLT camera motion; players are masked out."""
+    by_frame = {f: g for f, g in tracks.groupby("frame")}
+    cm = CameraMotion()
+    hom: dict[int, np.ndarray] = {}
+    tracked: list[int] = []
+    for idx, frame in iter_frames(path, max_frames):
+        mask = np.full(frame.shape[:2], 255, np.uint8)
+        g = by_frame.get(idx)
+        if g is not None:
+            for r in g.itertuples(index=False):
+                cv2.rectangle(mask, (int(r.x1) - 6, int(r.y1) - 6), (int(r.x2) + 6, int(r.y2) + 6), 0, -1)
+        H_0_to_t = cm.update(frame, mask=mask)
+        hom[idx] = H0 @ np.linalg.inv(H_0_to_t)
+        tracked.append(cm.n_tracked)
+    return hom, tracked
+
+
+def ball_table(tracks: pd.DataFrame, n_frames: int, max_gap: int = 5, homographies: dict[int, np.ndarray] | None = None) -> pd.DataFrame:
     balls = tracks[tracks["cls"] == "sports ball"].copy()
     balls["ball_x_m"] = (balls["x1"] + balls["x2"]) / 2
     balls["ball_y_m"] = (balls["y1"] + balls["y2"]) / 2
-    best = balls.sort_values("conf", ascending=False).drop_duplicates("frame")[["frame", "ball_x_m", "ball_y_m"]]
+    best = balls.sort_values("conf", ascending=False).drop_duplicates("frame")[["frame", "ball_x_m", "ball_y_m"]].copy()
+    if homographies:
+        for i, r in best.iterrows():
+            H = homographies.get(int(r["frame"]))
+            if H is not None:
+                m = image_to_pitch(H, np.array([[r["ball_x_m"], r["ball_y_m"]]]))[0]
+                best.loc[i, ["ball_x_m", "ball_y_m"]] = m
     full = pd.DataFrame({"frame": np.arange(n_frames)}).merge(best, on="frame", how="left")
     return interpolate_ball(full, max_gap=max_gap)
 
 
 def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None = None,
                  model_name: str = "yolo11n.pt", device: str | None = None,
-                 tracker: str = DEFAULT_TRACKER) -> dict:
+                 tracker: str = DEFAULT_TRACKER, calib: str | Path | None = None) -> dict:
     clip, out_dir = Path(clip), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     info = video_info(clip)
@@ -76,8 +105,12 @@ def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None =
     n_frames = (max_frames if max_frames is not None else info["frames"])
     n_frames = int(min(n_frames, tracks["frame"].max() + 1)) if len(tracks) else 0
     teams = assign_teams(clip, persons, max_frames)
-    ball = ball_table(tracks, n_frames)
-    gs = build_gamestate(persons, teams, ball, fps=fps, homographies=None)
+    homographies, tracked = None, []
+    if calib is not None:
+        H0, calib_err = static_homography(calib)
+        homographies, tracked = track_camera(clip, tracks, H0, max_frames)
+    ball = ball_table(tracks, n_frames, homographies=homographies)
+    gs = build_gamestate(persons, teams, ball, fps=fps, homographies=homographies)
     validate_gamestate(gs)
     wall = time.perf_counter() - t0
     gs.to_parquet(out_dir / "gamestate.parquet", index=False)
@@ -88,5 +121,11 @@ def run_pipeline(clip: str | Path, out_dir: str | Path, max_frames: int | None =
     quality["clip"] = str(clip)
     quality["model"] = model_name
     quality["tracker"] = tracker
+    if calib is not None:
+        quality["calibration"] = str(calib)
+        quality["calibration_err_m"] = float(calib_err)
+        quality["camera_motion_tracked_min"] = int(min(tracked)) if tracked else 0
+        quality["camera_motion_tracked_mean"] = float(np.mean(tracked)) if tracked else 0.0
+        write_radar_video(gs, out_dir / "radar.mp4", fps)
     write_quality(quality, out_dir)
     return {"gamestate": gs, "quality": quality, "teams": teams}
