@@ -1,56 +1,36 @@
-# FOOTLYTICS — Tầm nhìn Tactical Query MVP
+# FOOTLYTICS — Tầm nhìn Tactical Query MVP (trên Match State)
 
-Phiên bản 0.1, 2026-09-03. Tài liệu tầm nhìn, chưa phải spec triển khai. Mục tiêu: từ game state (Game-State Engine) đến truy vấn tình huống bằng ngôn ngữ chiến thuật.
+Phiên bản 1.0, 2026-09-10. Quy ước toạ độ theo Match State upstream: mét, gốc tâm sân, **x dọc sân** (âm về khung thành nhà, dương về khung thành khách), **y ngang sân** (âm về touchline T, dương về touchline B). `analytics/tactics.normalise_direction` lật cả hiệp để đội nhà luôn tấn công +x.
 
-## 1. Mô hình dữ liệu phân lớp
+## 1. Lớp dữ liệu
 
-| Lớp | Nội dung | Nguồn |
+| Lớp | Nội dung | Đã có trong upstream |
 |---|---|---|
-| L0 | Video gốc (broadcast hoặc tactical cam) | CLB |
-| L1 | Bảng game state: `timestamp_s, frame, player_id, team, role, x_m, y_m, ball_x_m, ball_y_m, det_conf, calib_ok, interpolated` | Game-State Engine |
-| L2 | Đặc trưng đội theo frame: centroid, width, depth, line height, compactness (convex hull), khoảng cách giữa các tuyến, chiều cao khối phòng ngự, đội kiểm soát bóng, vùng bóng (thirds x channels) | tính từ L1 |
-| L3 | Phân đoạn pha (phase): in possession, out of possession, transition +, transition -, set piece, dead ball | quy tắc trên L1+L2 |
-| L4 | Chuỗi chiến thuật (tactical sequence): `(start_s, end_s, team, label, score, evidence_metrics)` | detector trên L2+L3 |
-| L5 | Chỉ mục và truy vấn: DuckDB trên parquet, ranking, export | sản phẩm |
+| L0 | Video (broadcast, tactical cam, panorama cố định) | `MatchMeta.source_type` |
+| L1 | Match State: `TRACK_SCHEMA` 17 cột, `validate()` | `state/schema.py` |
+| L2 | Đặc trưng đội theo frame | `tactics.team_block`: `def_line_x` (trung bình 4 outfield sâu nhất), `fwd_line_x`, `depth_m`, `width_m`, `centroid`, `compactness_m` (khoảng cách trung bình tới centroid), lấy mẫu mỗi 25 frame |
+| L2 | Kinematics | `kinematics.add_kinematics` (Hampel + làm mượt 0.8 s, kẹp 12 m/s), `distance_summary` (HSR > 5.5, sprint > 7.0) |
+| L3 | Pha bóng | `possession` hiện đọc từ `ballStatus` của SoccerTrack XML; **chưa có** suy ra từ tracking |
+| L4 | Chuỗi chiến thuật | `tactics.formation_over_time` (cửa sổ 300 s, 8 mẫu), `ppda` (tham số `press_zone` chưa áp dụng), `press_distance`, `transitions` (giữ >= 1.5 s, cửa sổ 5 s) |
+| L5 | Chỉ mục và truy vấn | **chưa có** |
 
-## 2. Định nghĩa metric L2 (bản đầu)
+## 2. Còn thiếu so với tầm nhìn V0
+- Possession suy ra từ Match State (cầu thủ gần bóng nhất trong bán kính, giữ >= N frame) để `press_distance`, `transitions`, `ppda` chạy không cần event feed.
+- Compactness theo convex hull và khoảng cách giữa các tuyến (upstream dùng trung bình tới centroid; giữ cả hai, đo tương quan trên GT).
+- Sequence detector rule-based trả `(start_s, end_s, team, label, score, evidence_metrics)`:
 
-- **Formation:** gom cụm outfield theo tọa độ dọc sân (y) thành 3-4 tuyến bằng KMeans/agglomerative với ràng buộc thứ tự; đếm cầu thủ mỗi tuyến, ví dụ 4-3-3.
-- **Line height:** trung bình y của 4 cầu thủ outfield sâu nhất, đo từ khung thành nhà (m).
-- **Width:** max(x) - min(x) của outfield (m). **Depth:** max(y) - min(y) (m).
-- **Compactness:** diện tích convex hull của 10 outfield (m2), càng nhỏ càng compact.
-- **Distance between lines:** khoảng cách trung bình y giữa các tuyến liền kề.
-- **Defensive block height:** vị trí trung bình khối khi out of possession, phân loại high/mid/low theo ngưỡng thirds.
-- **PPDA proxy:** đường chuyền đối thủ cho phép trên mỗi hành động phòng ngự trong 60% sân đối phương. Cần event data hoặc suy luận từ ball tracking; bản đầu dùng số giây đối thủ giữ bóng trên phần sân họ / số lần áp sát.
-- **Press intensity:** số cầu thủ phòng ngự trong bán kính R = 5 m quanh người cầm bóng trong T = 3 s sau turnover.
+| Label | Điều kiện đầu | Dựa trên |
+|---|---|---|
+| High press | out of possession, `def_line_x` của đội phòng ngự (trong khung tấn công của họ) >= +7.5 m, >= 3 cầu thủ trong 10 m quanh bóng khi bóng ở third phòng ngự đối thủ, >= 3 s | `team_block`, `press_distance` |
+| Low block | out of possession, `def_line_x` <= -22.5 m, `compactness_m` dưới ngưỡng, >= 8 s | `team_block` |
+| Build-up vs N-man press | in possession ở third nhà, N cầu thủ đối phương trong third đó, >= 4 s | `team_block` + possession |
+| Transition after midfield loss | đổi possession ở third giữa, xét 6 s: tốc độ lùi khối và khoảng cách tới bóng | `transitions` |
+| Overload flank | >= 4 tấn công trong một kênh biên vs <= 3 phòng ngự | vị trí L1 |
 
-## 3. Sequence detector L4 (rule-based trước, học máy sau)
+- L5: parquet L1 + parquet L4 mỗi trận, DuckDB index nhiều trận (opposition 3-5 trận); truy vấn theo ngôn ngữ chiến thuật, trả chuỗi có clip video đồng bộ + radar + bảng metric, xuất clip/báo cáo. Ví dụ: `High press — 18 chuỗi`, `Low block — 22 chuỗi`.
 
-| Label | Điều kiện kích hoạt (bản đầu) |
-|---|---|
-| High press | Out of possession, defensive block high (line height >= 60 m), >= 3 cầu thủ trong 10 m quanh bóng khi bóng ở third phòng ngự đối thủ, kéo dài >= 3 s |
-| Low block | Out of possession, line height <= 30 m, compactness <= ngưỡng, kéo dài >= 8 s |
-| Build-up vs N-man press | In possession trong third nhà, đối thủ có N cầu thủ trong third đó, chuỗi >= 4 s |
-| Transition after midfield loss | Chuyển possession xảy ra ở third giữa, xét 6 s tiếp theo, đo tốc độ lùi của khối và khoảng cách đến bóng |
-| Overload flank | >= 4 cầu thủ tấn công trong một channel biên (x ngoài 1/4 sân) vs <= 3 phòng ngự |
+## 3. Vòng lặp xác thực với analyst
+Chạy detector trên trận thật, analyst chấm đúng/sai từng chuỗi, chỉnh ngưỡng theo game model từng CLB, đủ nhãn thì thay quy tắc bằng classifier. Số chỉ đưa HLV sau khi `validate()` sạch và montage đội đã xem bằng mắt (quy tắc upstream).
 
-Mỗi detector trả `score` (0-1) dựa trên độ vượt ngưỡng, kèm `evidence_metrics` để analyst kiểm tra.
-
-## 4. Bề mặt truy vấn
-
-Luồng: câu truy vấn chiến thuật -> lọc L4 (label, đội, trận, thời gian, ngưỡng) -> xếp hạng theo score -> trả chuỗi tình huống -> hiển thị video clip đồng bộ + sân 2D + bảng metric -> xuất clip/báo cáo.
-
-Ví dụ (từ Notion mục 7): `High Press — 18 chuỗi`, `Triển khai bóng trước đối thủ pressing 4 người — 11 chuỗi`, `Low block — 22 chuỗi`, `Chuyển trạng thái sau khi mất bóng ở giữa sân — 9 chuỗi`.
-
-Lưu trữ: một parquet L1 và một parquet L4 mỗi trận; DuckDB làm index và truy vấn nhiều trận (opposition analysis 3-5 trận).
-
-## 5. Vòng lặp xác thực với analyst
-
-1. Chạy detector trên trận thật, đưa danh sách chuỗi cho analyst.
-2. Analyst đánh giá đúng/sai từng chuỗi, ghi lý do.
-3. Điều chỉnh ngưỡng theo game model của từng CLB (Notion 5.4: tactical KPIs cấu hình theo CLB).
-4. Khi có đủ nhãn, huấn luyện classifier thay quy tắc.
-
-## 6. Ngoài phạm vi V1
-
-Phân tích live/halftime, nhận diện tên cầu thủ (jersey OCR), multi-camera fusion, event data đầy đủ (chuyền, sút).
+## 4. Ngoài phạm vi V1
+Live/halftime, số áo (Phase 1 upstream), multi-camera fusion, event data đầy đủ.

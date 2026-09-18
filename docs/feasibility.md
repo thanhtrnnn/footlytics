@@ -1,84 +1,61 @@
-# FOOTLYTICS — Đánh giá khả thi kỹ thuật (Technical Feasibility)
+# FOOTLYTICS — Đánh giá khả thi kỹ thuật (hợp nhất)
 
-Phiên bản 0.1, 2026-09-03. Trả lời blocker kỹ thuật B8-B12 bằng thí nghiệm đo được. Cột "Kết quả" cập nhật sau mỗi milestone.
+Phiên bản 1.0, 2026-09-10. Gộp số đo của hai repo. Hai bối cảnh đo **không so sánh trực tiếp được**: upstream đo camera panorama cố định 3840x1504 (SoccerTrack v2) trên ground truth từng frame; V0 đo tactical cam 720p lia/zoom, không có ground truth.
 
-## 1. Các stack ứng viên
+## 1. Stack đã chọn
 
-| Stack | Bao phủ | License | Phần cứng | Độ chín | Phù hợp broadcast VN | Chi phí tích hợp |
-|---|---|---|---|---|---|---|
-| **SoccerMaster** (CVPR 2026 Oral) | detection, tracking, calibration, jersey OCR, role, team, game state reconstruction (GSR) | chưa rõ, kiểm tra repo | CUDA 12.1, SigLIP2-large, dataset Soccer Factory ~130 GB | mới, nghiên cứu | chưa kiểm chứng | cao (cloud GPU, pipeline nặng) |
-| **sn-gamestate / TrackLab** (SoccerNet GSR baseline) | YOLO11 + StrongSORT + PRTReid + TVCalib/PnLCalib + MMOCR | GPL-3.0 | GPU, Python 3.9 | ổn định, có metric GS-HOTA | broadcast single-cam, đúng bài toán | trung bình, khó thương mại hóa vì GPL |
-| **roboflow/sports + ultralytics** | player/ball/pitch-keypoint datasets, radar 2D, team clustering | MIT (sports), AGPL-3.0 (ultralytics) | chạy được MPS trên M2 | cộng đồng lớn | tốt cho prototype | thấp |
-| **PnLCalib / TVCalib** (calibration riêng) | camera calibration từ đường kẻ sân | xem repo | GPU khuyến nghị | nghiên cứu | broadcast | trung bình |
+| Thành phần | Chọn | License | Ghi chú |
+|---|---|---|---|
+| Detector | SoccerMaster `yolo_v8x6_finetuned.pt` (HF `xleprime/SoccerMaster`, 195 MB, không gated), chạy tile 1280 / overlap 0.25 trên panorama, `tile=0` trên 720p | ultralytics AGPL-3.0 | phải mua Enterprise License hoặc đổi detector Apache-2.0 trước khi bán |
+| Bóng | + model bóng riêng Roboflow ở 1920 px (mirror HF martinjolif) | MIT dataset, weights roboflow | coverage 30.5% lên 94.9% trên tactical cam |
+| Tracking | `PitchTracker` upstream: Kalman `[x,y,vx,vy]` mét, gate 12 m/s, appearance veto 0.5 | mã riêng | không dùng ByteTrack |
+| Identity | `identity.py` upstream: nối tracklet, phủ quyết số áo trước khi nối, quota 11 người theo thời gian | mã riêng | OCR số áo chưa có model |
+| Calibration | DLT + TPS + `verdict()` upstream; camera chuyển động bằng `AnchoredCamera` V0 | mã riêng | model keypoint/line học máy thất bại trên cả hai loại footage ngoài broadcast |
+| Dữ liệu | SoccerTrack v2 (gated, CC-BY), Alfheim ZXY (mở), Soccer Factory (fine-tune) | | V0 chỉ có một clip công khai |
+| So sánh sau | sn-gamestate (GPL-3.0, chỉ benchmark), SoccerMaster full pipeline (cloud) | | Stage 3 cũ |
 
-## 2. Rủi ro license
+## 2. Bảng blocker B8-B12
 
-- `ultralytics` AGPL-3.0: dùng cho nghiên cứu được; sản phẩm SaaS thương mại cần Ultralytics Enterprise License hoặc thay bằng detector Apache-2.0 (RT-DETR qua HF transformers, YOLOX, RF-DETR) trước khi bán.
-- `sn-gamestate` GPL-3.0: chỉ dùng làm benchmark/so sánh, không nhúng vào sản phẩm.
-- Dữ liệu SoccerNet cần NDA; Soccer Factory chỉ dùng trên cloud.
+| Mã | Câu hỏi | Ngưỡng | Số đo upstream (panorama cố định, GT) | Số đo V0 (tactical cam 720p, không GT) | Kết luận |
+|---|---|---|---|---|---|
+| B8 | Một camera đủ tái dựng game state liên tục? | >= 70% frame có >= 18/22 | recall 74% ở conf 0.10 (21 người/frame), 60% ở 0.25 (14/frame), precision 77% / 94% | 3 phút: 60% frame >= 18 sau lọc ngoài sân, trung bình 15.5; 30 s: 100% >= 18 | Đạt sát ngưỡng ở cả hai; detector là nút thắt, không phải tracker |
+| B9 | Sai số nào làm analyst mất tin? | <= 2 m; <= 1 switch/cầu thủ/phút | vị trí trung vị 0.18-0.21 m so GT; ID switch 347/250 frame ở conf 0.10, 179 ở 0.25; nối tracklet: 129 mảnh về 22 người, 0 hàn nhầm | landmark 0.064 m (mục tiêu méo, xem 3.2); switch proxy 2.67/cầu thủ/phút | Vị trí đạt; switch chưa đạt nếu không có identity layer |
+| B10 | Use case nào cần ball tracking? | pressing/transition cần coverage >= 60% | ball gate 0.10 + prior một bóng, chưa báo coverage | 94.9% với model riêng 1920 px | Đạt |
+| B11 | Cần danh tính hay chỉ team + id tạm? | 100% metric L2 không cần tên | tactics.py chạy trên track_id + team; số áo chỉ để nối mảnh | team 0/1/ref chỉ bằng màu áo | Giữ giả thuyết; số áo là Phase 1 |
+| B12 | Độ trễ 1h / 3h / overnight? | <= 3h/trận trên 1 GPU | ~37 giờ/hiệp cho pass perception trên M2 Pro (panorama 4K, tile x6); A100 chưa đo đủ trận | 203 s/phút trận (người 1280 + bóng 1920 + camera) trên M2, ~5 giờ/90 phút | Overnight đạt; 3h cần GPU và đo lại trên A100 |
 
-## 3. Bảng blocker kỹ thuật B8-B12
+### 2.1. Bài học chung của cả hai repo
+- Model pitch geometry học máy huấn luyện trên broadcast (SoccerMaster LinesDetection, Roboflow YOLOv8x-pose 32 keypoint) **thất bại tự tin** trên footage ngoài phân phối (panorama fisheye ban đêm, tactical cam góc rộng 720p). Cả hai quay về click landmark tay; upstream chấm điểm bằng `verdict()`, V0 kiểm bằng giao điểm vòng tròn giữa sân.
+- Điểm chân bbox, không phải tâm bbox: sai 6.7 m nếu dùng tâm (upstream, camera tổng hợp).
+- Kích thước sân là số đo, không phải mặc định: SoccerTrack v2 rộng ~76 m, không phải 68 m; 2.14% vị trí ngoài biên cho đến khi sửa (upstream).
+- Quãng đường phải tích phân từ vị trí đã làm mượt: cộng dịch chuyển thô phóng đại 1.9x (upstream, GT thật).
 
-| Mã | Câu hỏi | Thí nghiệm | Chỉ số | Ngưỡng đạt | Kết quả | Kết luận |
-|---|---|---|---|---|---|---|
-| B8 | Một camera broadcast có đủ tái dựng game state liên tục? | Chạy Stage 0-2 trên clip broadcast 3 phút | % frame open-play có >= 18/22 cầu thủ được track; out-of-frame % | >= 70% frame; out-of-frame <= 25% | Stage 0, tactical cam 3 phút: 66.7% frame >= 18 người (gồm trọng tài), trung bình 16.6/frame; clip 30 s: 100% frame >= 18, trung bình 20.7 | Sát ngưỡng. Tactical cam đủ; broadcast chưa đo. Cần lọc người ngoài sân (Stage 1) và detector chuyên football (Stage 2) |
-| B9 | Sai số nào làm analyst mất tin? | So vị trí với điểm mốc sân đã biết; đếm ID switch | sai số vị trí (m); ID switch / cầu thủ / phút | <= 2 m; <= 1 switch/cầu thủ/phút | Sai số vị trí: chưa đo (cần Stage 1). ID switch proxy: 30 s = 3.5, 3 phút = 4.3 switch/cầu thủ/phút (ByteTrack tuỳ chỉnh; mặc định ultralytics cho 9.1) | Chưa đạt. Cần ReID hoặc appearance tracker (BoT-SORT + ReID) ở Stage 2 |
-| B10 | Use case nào bắt buộc cần ball tracking? | Đo ball coverage %; liệt kê metric tính được không cần bóng | ball coverage % | shape/line height/compactness không cần bóng; pressing/transition cần bóng >= 60% coverage | Ball coverage COCO yolo11n: 30 s = 0.1%, 3 phút = 30.5% (kèm nội suy <= 5 frame) | Chưa đạt cho pressing/transition. Cần detector bóng riêng (Stage 2) |
-| B11 | MVP cần danh tính cầu thủ hay chỉ team + id tạm? | Tính toàn bộ metric L2 chỉ với team + track id | số metric tính được / tổng | 100% metric L2 không cần tên | Pipeline Stage 0 gán team 0/1/ref chỉ bằng màu áo; không cần tên | Giữ giả thuyết: đủ cho L2, jersey OCR hoãn |
-| B12 | Độ trễ chấp nhận: 1h / 3h / overnight? | Đo giây xử lý / phút trận trên M2 và trên T4/A10 | s per match-minute; ngoại suy 90 phút | overnight chắc chắn đạt; mục tiêu <= 3h/trận trên 1 GPU | Stage 0 (chỉ người, 1280): 45-48 s/phút trận → 72 phút cho 90 phút. Pipeline đầy đủ (người + bóng 1920 + camera neo): 203 s/phút trận → khoảng 5 giờ cho 90 phút trên M2 | Overnight đạt. Mục tiêu 3h cần GPU hoặc bỏ bớt pass (bóng chỉ chạy khi cần) |
+## 3. Số đo chi tiết
 
-### 3.1. Số đo Stage 0 (2026-09-03, clip Brazil vs France tactical cam, 720p, 25 fps, yolo11n COCO, ByteTrack tuỳ chỉnh)
+### 3.1. Upstream (README của scalliontor/Footlytics)
+- Calibration tổng hợp: pinhole chính xác 1e-13 m; 3 px nhiễu click với 8 landmark 0.09 m; 4 landmark chụm 1.04 m so với 35 landmark trải 0.06 m; panorama ghép 1.25 m về 0.22 m với TPS.
+- Tracker tổng hợp 22 cầu thủ 1 phút: gần hoàn hảo 103 switch chỉ chuyển động, 10 với appearance; 0.35 m nhiễu + 5% mất 243 về 77; 0.6 m + 25% mất 3561 về 3095 (detector là ràng buộc).
+- Identity trên GT thật cắt vụn: 5 cắt/người 129 mảnh về 22 tracklet, 0 hàn nhầm, 22/22; 20 cắt + 5% số áo đọc được: 29 tracklet 2 hàn nhầm 13/22 về 23 tracklet 0 hàn nhầm 21/22. Phủ quyết số áo trước khi nối: hàn nhầm 19 về 1.
+- Đội: đỏ-xanh 100%, đỏ-đỏ 68%, trắng-trắng 64% mỗi track; quota theo thời gian giữ 11v11 ở 100% frame so 0% khi chia toàn cục.
+- Thật (SoccerTrack v2 117092, 6000 frame GT): tốc độ tối đa trung vị 7.13 m/s, chiếm dụng theo phần ba sân 27/41/33%.
 
-| Clip | frames | người/frame | % frame >= 18 | % frame >= 20 | track ids | births | switch/cầu thủ/phút | ball coverage | s / phút trận |
-|---|---|---|---|---|---|---|---|---|---|
-| 30 s | 750 | 20.7 | 100% | 93% | 47 | 39 | 3.5 | 0.1% | 45 |
-| 3 phút | 4466 | 16.6 | 67% | 52% | 297 | 285 | 4.3 | 30.5% | 48 |
+### 3.2. V0 (tactical cam Brazil vs France, 720p 25 fps)
+- Stage 0 (yolo11n COCO 1280 + ByteTrack tuỳ chỉnh): 30 s 20.7 người/frame, 100% frame >= 18; 3 phút 16.6, 67%; switch proxy 3.5-4.3/cầu thủ/phút (mặc định ultralytics 9.1; BoT-SORT + ReID 3.7, không cải thiện; imgsz 1920 bắt thêm khán giả).
+- Stage 1 (landmark frame 0 + camera motion): 6 landmark, sai số trung vị 0.064 m **nhưng mục tiêu bị méo** vì rescale 120x70 về 105x68 (chấm phạt đền lệch 1.38 m, vòng cấm 1.13 m); phải đo lại bằng mô hình sân upstream. 100% hàng trong sân, overlay khớp đến frame cuối 30 s.
+- Stage 2 (AnchoredCamera + bóng riêng + lọc ngoài sân, 3 phút): cắt cảnh frame 3657-4501 (34 s) bị loại đúng, 81.2% frame có calibration, 139 lần neo lại, ball coverage 94.9%, 15.5 người/frame, switch 2.67/cầu thủ/phút, 203 s/phút trận trên M2.
+- Model player/gk/ref Roboflow: 13.7 player/frame so 19.9 person COCO trên góc rộng, không dùng. Model pitch keypoint Roboflow: sai vị trí, không dùng.
 
-Ghi chú: "người" gồm cả trọng tài và người ngoài sân được YOLO phát hiện (chưa có calibration để lọc). Đội được gán bằng cụm màu áo (2 đội + trọng tài); kiểm tra bằng mắt trên overlay: đúng phần lớn, vài lỗi ở cầu thủ nhỏ hoặc bị che.
-
-### 3.2. Số đo Stage 1 (2026-09-03, clip 30 s, calibration tay 6 landmark + camera motion)
-
+### 3.3. F1 (sau hợp nhất, 2026-09-10, pipeline upstream + cầu nối camera, YOLOv8x6 `tile=0` 1280 px trên M2)
 | Chỉ số | Giá trị |
 |---|---|
-| Sai số trung vị landmark | 0.064 m |
-| Hàng game state trong sân | 100% |
-| Trôi calibration sau 30 s (mắt) | vài px ở vòng cấm xa, không đo được số |
-| Feature KLT theo dõi mỗi frame | trung bình 599 |
-| Chi phí | 67 s / phút trận (thêm ~20 s so với Stage 0) |
-| Model pitch keypoint Roboflow trên tactical cam | thất bại (keypoint sai vị trí), không dùng |
+| `verdict()` landmark clip mẫu theo mô hình sân upstream | **good**: 6 landmark, trung vị 0.24 m, trung bình 0.27 m, max 0.48 m tại `corner_RT` (so 0.064 m của V0 trên mục tiêu méo) |
+| Người/frame với YOLOv8x6 `tile=0` trên 720p (so 20.7 yolo11n) | trung vị **21.0** trên clip 30 s (750 frame), 541 box ngoài sân bị bỏ, `validate()` sạch, team split "sound" (consistency 0.97, balance 0.93) |
+| `tracklets_after_stitch` | clip 30 s: 71 track thô về **55** tracklet cho ~25 người (ByteTrack tuỳ chỉnh V0: 47 track thô). Tracker mét + appearance HSV chưa thắng ByteTrack trên 720p; crop áo quá nhỏ để appearance có tác dụng. Clip 3 phút (stride 2, 2251 frame): 182 track thô về **154** tracklet (V0 ByteTrack cùng clip: 297 track thô, 155 sau lọc); switch proxy ~2.4/cầu thủ/phút, ngang V0 2.67. Nối tracklet mới giảm 15%, còn xa 22 người: identity là việc của Phase 1 |
+| Alfheim 2 phút, camera cố định (panorama 4450x2000, 300 frame, không mask cầu thủ) | 0 frame mất. Chuỗi (t-1)->t trôi 7-25 px giữa các lần neo (trung vị 8.4 px ở góc khung); sau khi theo dõi từ keyframe: trung vị 0.75 px, p95 2.1 px ở góc, tối đa 1.35 px ở giữa khung. Cầu nối suy biến đúng về camera cố định |
+| Giây/frame YOLOv8x6 trên M2 | 0.34 s/frame (3.0 fps) ở 1280 px: **506 s/phút trận** ở stride 1, 262 s ở stride 2; gấp 2.5 lần V0 (yolo11n + bóng 1920 + camera: 203 s). Clip 3 phút: 81.25% frame có calibration (cắt cảnh 34 s bị loại đúng như V0), 135 lần neo lại, trung vị 20 người/frame, `validate()` sạch, 100% vị trí trong sân |
 
-Detector chuyên football (Roboflow, HF mirror martinjolif) lấy mẫu 30 frame clip 3 phút: model player/gk/ref phát hiện trung bình 13.7 player so với 19.9 person của COCO yolo11n (kém trên góc rộng); model bóng riêng ở imgsz 1920 thấy bóng 27/30 frame (1.23 box/frame, có dương tính giả), ở 1280 chỉ 13/30. Kết luận Stage 2: giữ COCO cho người, thêm model bóng riêng ở 1920 cho bóng.
+## 4. Compute và chi phí
+M2 cho test và clip ngắn; Colab A100 cho panorama và chấm điểm. Cost per processed match = (giây/phút trận trên A100) x giá GPU/giờ; điền sau F1.
 
-Cập nhật B9: sai số vị trí tại landmark 0.06 m; sai số thực tế cầu thủ phụ thuộc điểm chân bbox và trôi camera, chưa đo bằng ground truth.
-
-### 3.3. Số đo Stage 2 (2026-09-03, clip 3 phút, calibration neo frame 752 + AnchoredCamera + model bóng riêng)
-
-| Chỉ số | Giá trị |
-|---|---|
-| Cắt cảnh phát hiện | frame 3657-4501 (34 s zoom băng ghế) bị loại, 81.2% frame có calibration |
-| Neo lại SIFT | 139 lần (định kỳ 50 frame + sau đổi cảnh) |
-| Khớp đường kẻ sân (mắt) | tốt ở frame 0 (lan truyền ngược 30 s từ neo), 1500, 3000, 3600 |
-| Ball coverage (model riêng 1920 px) | 94.9% frame (so với 30.5% bằng COCO) |
-| Người trên sân / frame sau lọc ngoài sân | 15.5 (60% frame có từ 18 người); 8 track ngoài sân bị bỏ |
-| ID switch / cầu thủ / phút | 2.67 (giảm từ 4.35 ở Stage 0, nhờ loại frame cắt cảnh và lọc ngoài sân) |
-| Chi phí | 203 s / phút trận trên M2 (người 1280 + bóng 1920 + camera neo) → khoảng 5 giờ cho 90 phút, vượt mục tiêu 3h; cần GPU |
-
-## 4. Kế hoạch compute
-
-- Local Apple M2 (MPS, 24 GB RAM, ~20 GB disk trống): phát triển, test, clip 30 s đến 3 phút.
-- Colab / RunPod T4 hoặc A10: fine-tune detector, train pitch-keypoint model, chạy full match, chạy sn-gamestate và SoccerMaster để so sánh.
-- Ước tính cost per processed match: đo B12 rồi nhân giá GPU/giờ (T4 ~0.2-0.5 USD/h, A10 ~0.7-1 USD/h). Điền sau M3.
-
-## 5. Dữ liệu
-
-- Roboflow Universe: football-players-detection, football-ball-detection, football-field-detection (keypoints). Dùng để fine-tune.
-- SoccerNet GSR: 200 clip, cần đăng ký NDA. Dùng làm benchmark GS-HOTA.
-- Soccer Factory (SoccerMaster): 7000 video, 130 GB, cloud only.
-- Footage VN: phụ thuộc B5-B7 (quyền upload/lưu/xử lý, quyền dùng làm training data, nguồn broadcast hay tactical cam). Câu hỏi cho phỏng vấn Hà Nội FC, nằm ngoài phạm vi kỹ thuật.
-
-## 6. Khuyến nghị
-
-1. Stage 0-2 chạy local ngay (ultralytics + roboflow sports) để có pipeline end-to-end và số đo B8-B12.
-2. Stage 3 trên cloud: so sánh cùng clip với sn-gamestate và SoccerMaster bằng GS-HOTA-like metric.
-3. Cổng quyết định (decision gate) sau Stage 3: chọn base stack theo độ chính xác, chi phí/trận, license.
-4. Sau M1: nếu trung bình < 15/22 cầu thủ được track trên clip broadcast, ưu tiên fine-tune detector (Stage 2) trước calibration (Stage 1).
+## 5. Dữ liệu và quyền
+SoccerTrack v2 cần xin quyền (gated). Alfheim mở, tải bằng `scripts/fetch_alfheim.py`. Footage VN: B5-B7 (quyền upload/lưu/xử lý, quyền dùng training, broadcast hay tactical cam) vẫn là câu hỏi cho phỏng vấn CLB.

@@ -10,7 +10,7 @@ FRAME = Path("data/out/frame0.png")
 
 @pytest.mark.skipif(not FRAME.exists(), reason="frame0.png missing")
 def test_intersections_include_known_landmarks():
-    from footlytics.calib_assist import detect_pitch_intersections
+    from footlytics.geometry.calib_assist import detect_pitch_intersections
 
     frame = cv2.imread(str(FRAME))
     res = detect_pitch_intersections(frame, person_boxes=None)
@@ -24,7 +24,7 @@ def test_intersections_include_known_landmarks():
 
 @pytest.mark.skipif(not FRAME.exists(), reason="frame0.png missing")
 def test_annotated_image_and_candidates_written(tmp_path):
-    from footlytics.calib_assist import write_assist
+    from footlytics.geometry.calib_assist import write_assist
 
     frame = cv2.imread(str(FRAME))
     out_img, out_json = write_assist(frame, tmp_path / "assist")
@@ -33,4 +33,5 @@ def test_annotated_image_and_candidates_written(tmp_path):
 
     data = json.loads(out_json.read_text())
     assert "candidates" in data and all({"id", "x", "y"} <= set(c) for c in data["candidates"])
-    assert data["template"]["points"] == [] and data["template"]["frame"] == 0
+    assert data["template"]["image_points"] == {} and data["template"]["anchor_frame"] == 0
+    assert "halfway_T" in data["landmark_names"]
