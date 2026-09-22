@@ -375,14 +375,22 @@ def assign_teams_with_roster(
 
 
 def apply_to_state(state: MatchState, tracklets: list[Tracklet]) -> MatchState:
-    """Rewrite track_id and team in a MatchState from resolved tracklets."""
+    """Rewrite track_id, team and role in a MatchState from resolved tracklets.
+
+    Role has to travel too: identity is where officials are decided (no referee class
+    in the detector), and a tracklet marked `Role.REFEREE` whose rows still say
+    "player" is counted in `MatchState.players` and every per-player statistic.
+    Rows outside every tracklet -- the ball -- keep what they had.
+    """
     remap: dict[int, int] = {}
     teams: dict[int, str] = {}
+    roles: dict[int, str] = {}
     jerseys: dict[int, Optional[int]] = {}
     for t in tracklets:
         for old in t.track_ids:
             remap[old] = t.id
             teams[old] = t.team
+            roles[old] = t.role
             jerseys[old] = t.jersey
 
     df = state.tracks.copy()
@@ -395,6 +403,7 @@ def apply_to_state(state: MatchState, tracklets: list[Tracklet]) -> MatchState:
             df[col] = df[col].astype(object)
 
     df["team"] = [teams.get(t, cur) for t, cur in zip(df["track_id"], df["team"])]
+    df["role"] = [roles.get(t, cur) for t, cur in zip(df["track_id"], df["role"])]
     if any(j is not None for j in jerseys.values()):
         df["jersey"] = [
             jerseys.get(t) if jerseys.get(t) is not None else cur

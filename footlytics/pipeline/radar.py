@@ -43,6 +43,13 @@ class PipelineConfig:
     #: the spurious boxes on a sampled frame sat at y = 40 m on a 38 m half-width,
     #: i.e. just off the touchline, and sailed through.
     pitch_margin_m: float = 2.0
+    #: The same test for the ball, with room to be out of play. The player margin
+    #: above deleted the ball from 11 of 12 sampled frames of the 3-minute clip: a
+    #: throw-in, a corner or a goal kick puts it a few metres outside the lines,
+    #: and the homography projects any ball in the air further out still. The V0
+    #: pipeline applied no on-pitch test to the ball at all. 10 m keeps all of
+    #: that and still rejects a detection in the stands.
+    ball_margin_m: float = 10.0
     use_appearance: bool = True
     team_fit_sample: int = 4000     # descriptors sampled to fit the kit clusters
     #: Join track fragments into whole-player tracklets before deciding identity.
@@ -56,6 +63,17 @@ class PipelineConfig:
     #: for a few frames, so this only reaches the gaps where the track died.
     ball_max_gap: int = 5
     verbose: bool = True
+
+
+def on_pitch(xy: np.ndarray, roles: list[str], pitch: Pitch,
+             margin_m: float, ball_margin_m: float) -> np.ndarray:
+    """Which pitch positions to keep: players within `margin_m` of the lines, the ball
+    within `ball_margin_m`. Non-finite positions are never kept."""
+    return np.array([
+        bool(np.isfinite(p).all()) and pitch.contains(
+            p[0], p[1], ball_margin_m if r == Role.BALL.value else margin_m)
+        for p, r in zip(xy, roles)
+    ], dtype=bool)
 
 
 def _log(on: bool, *a):
@@ -119,6 +137,7 @@ def run(
     src_idx = out_idx = 0
     n_det_total = 0
     n_off_pitch = 0
+    n_ball_off_pitch = 0
     t0 = time.time()
 
     while True:
@@ -151,11 +170,9 @@ def run(
             xy = (moving.feet_to_pitch(dets[:, :4], H_a_t) if moving is not None
                   else calibration.feet_to_pitch(dets[:, :4]))
 
-            keep = np.array([
-                np.isfinite(p).all() and pitch.contains(p[0], p[1], cfg.pitch_margin_m)
-                for p in xy
-            ])
+            keep = on_pitch(xy, roles, pitch, cfg.pitch_margin_m, cfg.ball_margin_m)
             n_off_pitch += int((~keep).sum())
+            n_ball_off_pitch += sum(1 for r, k in zip(roles, keep) if r == Role.BALL.value and not k)
             dets, xy = dets[keep], xy[keep]
             roles = [r for r, k in zip(roles, keep) if k]
 
@@ -212,6 +229,7 @@ def run(
         "fps_processed": out_idx / max(elapsed, 1e-6),
         "detections": n_det_total,
         "dropped_off_pitch": n_off_pitch,
+        "ball_dropped_off_pitch": n_ball_off_pitch,
         "tracks_created": tracker._next_id - 1,
     }
     if camera is not None:
@@ -258,7 +276,10 @@ def run(
     # kit off first; with two kits the helper returns nothing and the 2-means path is untouched.
     officials: set[int] = set()
     if desc_rows and Role.REFEREE.value not in set(detector.roles.values()):
-        officials = split_officials(np.array(desc_track), np.stack(desc_rows))
+        info: dict = {}
+        officials = split_officials(np.array(desc_track), np.stack(desc_rows), info=info)
+        report["officials_check"] = info
+        _log(cfg.verbose, f"[pipeline] officials: {info.get('reason')} {info}")
         if officials:
             _log(cfg.verbose, f"[pipeline] officials split off (third kit): {sorted(officials)}")
     report["officials_split"] = len(officials)

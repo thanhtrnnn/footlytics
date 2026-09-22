@@ -379,31 +379,65 @@ class TeamClassifier:
 # ------------------------------------------------------------- officials split
 
 def split_officials(track_ids: np.ndarray, descriptors: np.ndarray, max_share: float = 0.25,
-                    min_separation: float = 0.6, seed: int = 0) -> set[int]:
+                    min_separation: float = 0.6, seed: int = 0,
+                    max_obs_share: float = 0.2, info: Optional[dict] = None) -> set[int]:
     """Track ids that wear a third kit (referees), for detectors without a referee class.
 
     Fits three clusters on per-track mean descriptors. The smallest cluster is "officials"
-    only if it is small (<= `max_share` of tracks) and genuinely separate: its centroid must
-    sit at least `min_separation` times the two-team distance away from the nearest team
-    centroid. Splitting one team's shirts into two sub-clusters fails that test, so with two
-    kits the result is empty and the ordinary 2-means fit is untouched.
+    only if it is small and genuinely separate: its centroid must sit at least
+    `min_separation` times the two-team distance away from the nearest team centroid.
+    Splitting one team's shirts into two sub-clusters fails that test, so with two kits the
+    result is empty and the ordinary 2-means fit is untouched.
+
+    "Small" is measured in time on screen, not in track ids. `track_ids` has one entry per
+    observation, so each track is weighted by how often it was seen, both in the fit and in
+    the guard: at most `max_obs_share` of all observations may be officials (3-4 people out
+    of ~25 is 12-16%). Counting ids alone was fooled by fragmentation: on a 3-minute clip
+    with 258 raw tracks for ~25 people, a cluster of 50 fragments (19% of ids, under the
+    25% guard) took most of one team -- 7.0 "officials" per calibrated frame against 2.7
+    home players, and `validate()` reported 3 v 7. `max_share` on ids is kept as a second
+    guard, and it earns its place: on the same clip the weighted fit's third cluster is 94
+    fragments at 16.7% of observations, and letting it through gave 3.3 "officials" per frame
+    and a median of 17 players. It declines instead, and the officials stay in the teams.
+
+    `info`, if given, is filled with the cluster sizes and the reason for the decision.
     """
     from sklearn.cluster import KMeans
 
     T = np.asarray(track_ids)
-    uniq = np.unique(T)
+    uniq, counts = np.unique(T, return_counts=True)
+    if info is not None:
+        info.clear()
     if len(uniq) < 6:
+        if info is not None:
+            info["reason"] = "fewer than 6 tracks"
         return set()
     means = np.stack([descriptors[T == t].mean(axis=0) for t in uniq])
-    km = KMeans(n_clusters=3, n_init=10, random_state=seed).fit(means)
+    w = counts.astype(float)
+    km = KMeans(n_clusters=3, n_init=10, random_state=seed).fit(means, sample_weight=w)
     sizes = np.bincount(km.labels_, minlength=3)
-    order = np.argsort(sizes)
+    obs = np.bincount(km.labels_, weights=w, minlength=3)
+    order = np.argsort(obs)
     small, big1, big2 = order[0], order[1], order[2]
-    if sizes[small] > max_share * len(uniq):
-        return set()
     c = km.cluster_centers_
-    team_gap = np.linalg.norm(c[big1] - c[big2])
-    sep = min(np.linalg.norm(c[small] - c[big1]), np.linalg.norm(c[small] - c[big2]))
-    if team_gap <= 0 or sep < min_separation * team_gap:
+    team_gap = float(np.linalg.norm(c[big1] - c[big2]))
+    sep = float(min(np.linalg.norm(c[small] - c[big1]), np.linalg.norm(c[small] - c[big2])))
+    id_share = float(sizes[small] / len(uniq))
+    obs_share = float(obs[small] / w.sum())
+    if info is not None:
+        info.update(tracks=int(sizes[small]), id_share=round(id_share, 3),
+                    obs_share=round(obs_share, 3),
+                    separation=round(sep / team_gap, 3) if team_gap > 0 else None)
+
+    reason = None
+    if id_share > max_share:
+        reason = f"third cluster is {id_share:.0%} of tracks (> {max_share:.0%})"
+    elif obs_share > max_obs_share:
+        reason = f"third cluster is {obs_share:.0%} of observations (> {max_obs_share:.0%})"
+    elif team_gap <= 0 or sep < min_separation * team_gap:
+        reason = "third cluster is not separate from the two teams"
+    if info is not None:
+        info["reason"] = reason or "split"
+    if reason:
         return set()
     return {int(t) for t in uniq[km.labels_ == small]}

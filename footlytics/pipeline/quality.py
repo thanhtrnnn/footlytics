@@ -51,7 +51,8 @@ def compute_quality(state: MatchState, report: dict, stride: int = 1, expected_p
     for k in ("frames_calibrated", "frames_uncalibrated", "calib_success_rate", "reanchors",
               "tracklets_before_stitch", "tracklets_after_stitch", "median_players_per_frame",
               "dropped_off_pitch", "detections", "team_diagnosis",
-              "ball_frames_detected", "ball_frames_interpolated"):
+              "ball_frames_detected", "ball_frames_interpolated", "ball_dropped_off_pitch",
+              "officials_split"):
         if k in report:
             v = report[k]
             q[k] = v["summary"] if isinstance(v, dict) and "summary" in v else v
