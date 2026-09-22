@@ -1,6 +1,8 @@
 # FOOTLYTICS — Kế hoạch kỹ thuật V1 (hợp nhất hai repo)
 
-Phiên bản 1.0, 2026-09-10. Thay thế bản V0 (repo `thanhtrnnn/footlytics`, nay là archive).
+Phiên bản 1.1, 2026-09-23. Thay thế bản V0.
+
+Cập nhật 2026-09-23: mã của fork đã được gộp vào `thanhtrnnn/footlytics` (commit `9ee6107`), repo này là repo chính; không mở PR lên `scalliontor/Footlytics`. `docs/prs/` giữ lại làm hồ sơ những gì đã chuyển từ V0.
 
 ## 1. Bối cảnh
 
@@ -51,7 +53,7 @@ Bố cục sau hợp nhất:
 | F0 | fork, pyproject/uv, pytest bọc harness upstream, weights SoccerMaster | `pytest` xanh |
 | F1 | cầu nối camera chuyển động, chạy clip 3 phút qua tracker mét + identity của upstream; hồi quy Alfheim 2 phút có/không camera | `calib_success_rate` ~0.81 trên clip cắt cảnh; Alfheim không đổi |
 | F2 | pass bóng riêng, `quality.py`, CLI, calib-assist gắn vào `annotate.py` | `footlytics run` ra `tracks.parquet`, `quality.json`, radar, overlay |
-| F3 | docs, Notion, PR sửa lỗi nhỏ upstream | 4 PR mở |
+| F3 | docs, Notion, sửa lỗi nhỏ | 4 thay đổi gộp vào `thanhtrnnn/footlytics` (không mở PR upstream, quyết định 2026-09-23) |
 | F4 | theo roadmap upstream: Phase 1 identity (OCR số áo), Phase 2 analytics (sequence detector L4 trên `tactics.py`), Phase 3 90 phút trên GPU thuê | ngoài phạm vi kế hoạch này |
 
 ## 5. Compute
