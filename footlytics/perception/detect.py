@@ -129,9 +129,23 @@ class DetectorConfig:
     #: Optional single-class ball model run on the full frame at a higher resolution. On a
     #: 720p tactical cam the finetuned people detector sees the ball in ~30% of frames; a
     #: dedicated model at 1920 px saw it in 95% (measured on a public 3-minute clip). When it
-    #: fires, its box replaces the ball row; the single-ball prior still holds.
+    #: fires, its boxes replace the ball rows.
     ball_weights: Optional[str] = None
     ball_imgsz: int = 1920
+    #: Ball candidates kept per frame, most confident first. Not 1: the ball model also
+    #: finds the spare balls beside the pitch, and a still, unoccluded spare ball usually
+    #: out-scores the match ball -- keeping only the best box put the "ball" beyond the far
+    #: touchline in 87% of frames of the 30 s clip. The pipeline picks one per frame after
+    #: it knows where each candidate is on the pitch (`pipeline.radar.choose_ball`).
+    max_balls: int = 5
+
+
+def _bgr(rgb: np.ndarray) -> np.ndarray:
+    """RGB -> BGR for Ultralytics, which treats a numpy image as BGR (as cv2 reads it)
+    and flips it to RGB itself. The package passes RGB everywhere -- kit descriptors
+    need it -- and handing that straight to the model swapped red and blue: on the
+    30 s tactical-cam clip the people model found 2-4 fewer players per frame."""
+    return np.ascontiguousarray(rgb[..., ::-1])
 
 
 class Detector:
@@ -161,7 +175,7 @@ class Detector:
 
     def _raw(self, images: list[np.ndarray]) -> list[np.ndarray]:
         res = self.model.predict(
-            images, imgsz=self.cfg.imgsz, conf=min(self.cfg.conf, self.cfg.ball_conf),
+            [_bgr(im) for im in images], imgsz=self.cfg.imgsz, conf=min(self.cfg.conf, self.cfg.ball_conf),
             iou=0.7, max_det=self.cfg.max_det, device=self.cfg.device,
             half=self.cfg.half, verbose=False,
         )
@@ -179,7 +193,7 @@ class Detector:
         return out
 
     def detect(self, frame: np.ndarray, batch_tiles: int = 8) -> np.ndarray:
-        """Detect on one frame. Returns (N, 6) of x, y, w, h, conf, cls."""
+        """Detect on one RGB frame. Returns (N, 6) of x, y, w, h, conf, cls."""
         h, w = frame.shape[:2]
         tiles = ([(0, 0, w, h)] if self.cfg.tile <= 0
                  else tile_grid(w, h, self.cfg.tile, self.cfg.overlap))
@@ -211,28 +225,32 @@ class Detector:
             keep.extend(idx[nms(d[idx, :4], d[idx, 4], self.cfg.iou_merge)])
         d = d[np.array(sorted(keep), dtype=int)]
 
-        # A panorama sees one ball. Keep only the most confident candidate.
+        # Keep the `max_balls` most confident ball candidates; the pipeline picks one.
         ball_rows = np.array([self.roles.get(int(c)) == Role.BALL.value for c in d[:, 5]])
-        if ball_rows.sum() > 1:
+        if ball_rows.sum() > self.cfg.max_balls:
             bi = np.flatnonzero(ball_rows)
-            drop = set(bi.tolist()) - {int(bi[d[bi, 4].argmax()])}
+            drop = set(bi[np.argsort(-d[bi, 4])[self.cfg.max_balls:]].tolist())
             d = d[[i for i in range(len(d)) if i not in drop]]
         return self._with_dedicated_ball(frame, d)
 
     def _with_dedicated_ball(self, frame: np.ndarray, d: np.ndarray) -> np.ndarray:
-        """Replace the ball row with the dedicated model's best box when it fires."""
+        """Replace the ball rows with the dedicated model's best boxes when it fires."""
         if self.ball_model is None:
             return d
         res = self.ball_model.predict(
-            frame, imgsz=self.cfg.ball_imgsz, conf=self.cfg.ball_conf, device=self.cfg.device,
+            _bgr(frame), imgsz=self.cfg.ball_imgsz, conf=self.cfg.ball_conf, device=self.cfg.device,
             half=self.cfg.half, verbose=False,
         )[0]
         b = res.boxes
         if b is None or len(b) == 0:
             return d
-        i = int(b.conf.argmax())
-        x1, y1, x2, y2 = b.xyxy[i].cpu().numpy()
-        row = np.array([[x1, y1, x2 - x1, y2 - y1, float(b.conf[i]), float(self._ball_cls)]], np.float32)
+        conf = b.conf.cpu().numpy()
+        top = np.argsort(-conf)[:self.cfg.max_balls]
+        xyxy = b.xyxy.cpu().numpy()[top]
+        row = np.column_stack([
+            xyxy[:, 0], xyxy[:, 1], xyxy[:, 2] - xyxy[:, 0], xyxy[:, 3] - xyxy[:, 1],
+            conf[top], np.full(len(top), float(self._ball_cls)),
+        ]).astype(np.float32)
         not_ball = np.array([self.roles.get(int(c)) != Role.BALL.value for c in d[:, 5]], bool) if len(d) else np.zeros(0, bool)
         return np.vstack([d[not_ball], row]) if len(d) else row
 

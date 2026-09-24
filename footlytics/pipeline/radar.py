@@ -43,13 +43,17 @@ class PipelineConfig:
     #: the spurious boxes on a sampled frame sat at y = 40 m on a 38 m half-width,
     #: i.e. just off the touchline, and sailed through.
     pitch_margin_m: float = 2.0
-    #: The same test for the ball, with room to be out of play. The player margin
-    #: above deleted the ball from 11 of 12 sampled frames of the 3-minute clip: a
-    #: throw-in, a corner or a goal kick puts it a few metres outside the lines,
-    #: and the homography projects any ball in the air further out still. The V0
-    #: pipeline applied no on-pitch test to the ball at all. 10 m keeps all of
-    #: that and still rejects a detection in the stands.
-    ball_margin_m: float = 10.0
+    #: The same test for ball candidates. The spare balls lying beyond the touchline
+    #: (ball-boy stations) are real balls to the detector and sit 3.5-4 m out on the
+    #: sample clips; this margin is what removes them. A wider margin let them through
+    #: and they became "the ball" in most frames.
+    ball_margin_m: float = 2.0
+    #: Ball continuity: of several ball candidates, keep the one the ball could have
+    #: reached from where it was last seen, at up to this speed (+ `ball_slack_m`).
+    #: After `ball_reacquire_s` without a sighting, take the most confident again.
+    ball_max_speed: float = 35.0
+    ball_slack_m: float = 3.0
+    ball_reacquire_s: float = 1.0
     use_appearance: bool = True
     team_fit_sample: int = 4000     # descriptors sampled to fit the kit clusters
     #: Join track fragments into whole-player tracklets before deciding identity.
@@ -74,6 +78,26 @@ def on_pitch(xy: np.ndarray, roles: list[str], pitch: Pitch,
             p[0], p[1], ball_margin_m if r == Role.BALL.value else margin_m)
         for p, r in zip(xy, roles)
     ], dtype=bool)
+
+
+def choose_ball(xy: np.ndarray, conf: np.ndarray, last_xy: Optional[np.ndarray],
+                frames_since: int, fps: float, max_speed: float = 35.0,
+                slack_m: float = 3.0, reacquire_s: float = 1.0) -> Optional[int]:
+    """Index of the ball candidate to keep this frame, or None.
+
+    With a recent sighting, only candidates the ball could have reached are
+    eligible and the nearest wins; if none is reachable the frame gets no ball
+    rather than a teleport. Without one (start, or `reacquire_s` since the last
+    sighting) the most confident candidate is taken.
+    """
+    if not len(xy):
+        return None
+    if last_xy is None or frames_since > reacquire_s * fps:
+        return int(np.argmax(conf))
+    reach = max_speed * frames_since / fps + slack_m
+    d = np.linalg.norm(xy - last_xy, axis=1)
+    ok = np.flatnonzero(d <= reach)
+    return int(ok[np.argmin(d[ok])]) if len(ok) else None
 
 
 def _log(on: bool, *a):
@@ -138,6 +162,8 @@ def run(
     n_det_total = 0
     n_off_pitch = 0
     n_ball_off_pitch = 0
+    n_ball_unreachable = 0
+    last_ball_xy, last_ball_frame = None, -10**9
     t0 = time.time()
 
     while True:
@@ -175,6 +201,22 @@ def run(
             n_ball_off_pitch += sum(1 for r, k in zip(roles, keep) if r == Role.BALL.value and not k)
             dets, xy = dets[keep], xy[keep]
             roles = [r for r, k in zip(roles, keep) if k]
+
+            # One ball per frame, chosen for continuity with the last one kept.
+            bi = np.flatnonzero([r == Role.BALL.value for r in roles])
+            if len(bi):
+                pick = choose_ball(xy[bi], dets[bi, 4], last_ball_xy, out_idx - last_ball_frame,
+                                   eff_fps, cfg.ball_max_speed, cfg.ball_slack_m,
+                                   cfg.ball_reacquire_s)
+                if pick is None:
+                    n_ball_unreachable += 1
+                else:
+                    last_ball_xy, last_ball_frame = xy[bi[pick]].copy(), out_idx
+                drop = set(bi.tolist()) - ({int(bi[pick])} if pick is not None else set())
+                if drop:
+                    sel = np.array([i not in drop for i in range(len(dets))], bool)
+                    dets, xy = dets[sel], xy[sel]
+                    roles = [r for r, k in zip(roles, sel) if k]
 
             embeddings = None
             if len(dets):
@@ -230,6 +272,7 @@ def run(
         "detections": n_det_total,
         "dropped_off_pitch": n_off_pitch,
         "ball_dropped_off_pitch": n_ball_off_pitch,
+        "ball_frames_unreachable": n_ball_unreachable,
         "tracks_created": tracker._next_id - 1,
     }
     if camera is not None:

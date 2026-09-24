@@ -48,3 +48,24 @@ def test_apply_to_state_carries_role():
     roles = out.tracks.groupby("track_id", observed=True)["role"].first().astype(str).to_dict()
     assert roles == {1: PLAYER, 2: Role.REFEREE.value, 9: BALL}      # ball untouched
     assert set(out.players["track_id"]) == {1}
+
+
+def test_spare_ball_beyond_the_touchline_is_not_a_candidate():
+    """Measured: spare balls by the far touchline project to y = -37.5 and -38.0."""
+    xy = np.array([[35.8, -37.5], [1.8, -38.0], [10.0, 5.0]])
+    keep = on_pitch(xy, [BALL, BALL, BALL], DEFAULT_PITCH, margin_m=2.0, ball_margin_m=2.0)
+    assert keep.tolist() == [False, False, True]
+
+
+def test_choose_ball_prefers_the_reachable_candidate_over_the_confident_one():
+    from footlytics.pipeline.radar import choose_ball
+
+    xy = np.array([[40.0, 10.0], [0.5, 0.0]])        # a far, confident one; a near one
+    conf = np.array([0.9, 0.4])
+    last = np.array([0.0, 0.0])
+    assert choose_ball(xy, conf, last, frames_since=1, fps=25.0) == 1
+    # nothing reachable: no ball this frame rather than a 40 m teleport
+    assert choose_ball(xy[:1], conf[:1], last, frames_since=1, fps=25.0) is None
+    # no recent sighting: most confident
+    assert choose_ball(xy, conf, None, frames_since=0, fps=25.0) == 0
+    assert choose_ball(xy, conf, last, frames_since=100, fps=25.0) == 0
