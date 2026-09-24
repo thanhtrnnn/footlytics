@@ -27,6 +27,43 @@ TEAM_COLORS = {
 }
 
 
+def hold_gaps(tracks, max_gap: int = 12):
+    """Bridge short gaps in each person's track, for display only.
+
+    The tracker writes a row only when a detection is matched, so a track missing
+    one or two frames -- 9% of in-span frames on the 30 s clip, median gap 2 --
+    makes its dot blink off and on. Gaps of at most `max_gap` frames are filled by
+    linear interpolation of position and box; longer gaps stay empty, so a player
+    who really left the view still disappears. The ball is left as it is.
+    """
+    import pandas as pd
+
+    if max_gap <= 0 or tracks.empty:
+        return tracks
+    is_person = tracks["role"].astype(str) != Role.BALL.value
+    num = ["timestamp", "x", "y", "bbox_x", "bbox_y", "bbox_w", "bbox_h"]
+    held = []
+    for tid, g in tracks[is_person].groupby("track_id", observed=True):
+        g = g.drop_duplicates("frame_idx").set_index("frame_idx").sort_index()
+        full = pd.RangeIndex(int(g.index[0]), int(g.index[-1]) + 1)
+        if len(full) == len(g):
+            continue
+        missing = pd.Series(~full.isin(g.index), index=full)
+        run = (missing != missing.shift()).cumsum()
+        short = missing & (missing.groupby(run).transform("sum") <= max_gap)
+        if not short.any():
+            continue
+        w = g.reindex(full)
+        w[num] = w[num].astype(float).interpolate(limit_area="inside")
+        w = w.ffill()
+        add = w[short.to_numpy()].reset_index(names="frame_idx")
+        add["track_id"] = tid
+        held.append(add)
+    if not held:
+        return tracks
+    return pd.concat([tracks, *held], ignore_index=True)
+
+
 def draw_pitch(ax, pitch: Pitch = DEFAULT_PITCH, facecolor: str = PITCH_GREEN,
                line: str = LINE_WHITE, lw: float = 1.4, pad: float = 3.0):
     """Draw pitch markings to scale from the pitch model itself."""
@@ -65,7 +102,10 @@ def draw_pitch(ax, pitch: Pitch = DEFAULT_PITCH, facecolor: str = PITCH_GREEN,
                                2.0, GOAL_WIDTH, fill=False, ec=line, lw=lw * 1.4, zorder=2))
 
     ax.set_xlim(-L - pad, L + pad)
-    ax.set_ylim(-W - pad, W + pad)
+    # Negative y at the top: the landmark names put touchline "T" at negative y,
+    # and T is the far touchline as the camera sees it. With matplotlib's default
+    # upward y the radar came out mirrored top-to-bottom against the video.
+    ax.set_ylim(W + pad, -W - pad)
     ax.set_aspect("equal")
     ax.axis("off")
     return ax
@@ -146,7 +186,7 @@ def plot_frame(state: MatchState, frame_idx: int, ax=None,
 def render_video(state: MatchState, out_path: str, start: int = 0, end: Optional[int] = None,
                  step: int = 1, fps: Optional[float] = None, dpi: int = 100,
                  trail_frames: int = 12, progress: bool = True,
-                 color_by: str = "team", figsize=(12, 8)) -> str:
+                 color_by: str = "team", figsize=(12, 8), hold_frames: int = 12) -> str:
     """Render a range of frames to an mp4 radar clip.
 
     The pitch and every marker are created once and then *updated* per frame.
@@ -172,7 +212,8 @@ def render_video(state: MatchState, out_path: str, start: int = 0, end: Optional
 
     # Pre-index by frame once: repeated boolean masks over a 1.5M-row frame are
     # the other half of the cost.
-    people = state.tracks[state.tracks["role"].isin(
+    tracks = hold_gaps(state.tracks, hold_frames)
+    people = tracks[tracks["role"].isin(
         [Role.PLAYER.value, Role.GOALKEEPER.value, Role.REFEREE.value])]
     by_frame = {f: g for f, g in people.groupby("frame_idx")}
     ball_by_frame = {f: g for f, g in state.ball.groupby("frame_idx")}
