@@ -17,7 +17,7 @@ from typing import Optional
 import numpy as np
 
 from ..state.schema import MatchState, Role, Team
-from .radar import TEAM_COLORS, draw_pitch
+from .radar import TEAM_COLORS, draw_pitch, hold_gaps
 from ..geometry.pitch import Pitch
 
 
@@ -39,9 +39,10 @@ def render_side_by_side(
     smooth_display: bool = True,
     fps: Optional[float] = None,
     trail_frames: int = 20,
-    color_by: str = "track",
+    color_by: str = "team",
     draw_boxes: bool = True,
     progress: bool = True,
+    hold_frames: int = 12,
 ) -> str:
     """Stack the source video (with boxes) above the 2D radar.
 
@@ -53,6 +54,10 @@ def render_side_by_side(
     frame annotation spikes are rejected and the path lightly smoothed. The
     stored MatchState keeps raw coordinates, because once you smooth in place
     you can no longer tell a tracking fault from a real movement.
+
+    `hold_frames` bridges a track's gaps up to that many frames (see
+    `radar.hold_gaps`), so dots and boxes do not blink when the tracker misses a
+    frame or two. 0 shows the raw rows.
     """
     import cv2
     import matplotlib
@@ -87,7 +92,8 @@ def render_side_by_side(
     fig.patch.set_facecolor("#0d1117")
     draw_pitch(ax, pitch)
 
-    people = state.tracks[state.tracks["role"].isin(
+    tracks = hold_gaps(state.tracks, hold_frames)
+    people = tracks[tracks["role"].isin(
         [Role.PLAYER.value, Role.GOALKEEPER.value, Role.REFEREE.value])]
     by_frame = {f: g for f, g in people.groupby("frame_idx")}
     ball_by_frame = {f: g for f, g in state.ball.groupby("frame_idx")}
