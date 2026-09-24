@@ -1,13 +1,13 @@
 # FOOTLYTICS — Đánh giá khả thi kỹ thuật (hợp nhất)
 
-Phiên bản 1.1, 2026-09-23 (1.0: 2026-09-10). 1.1 thêm mục 3.4: ba lỗi pipeline sau hợp nhất và số đo sau khi sửa. Gộp số đo của hai repo. Hai bối cảnh đo **không so sánh trực tiếp được**: upstream đo camera panorama cố định 3840x1504 (SoccerTrack v2) trên ground truth từng frame; V0 đo tactical cam 720p lia/zoom, không có ground truth.
+Phiên bản 1.2, 2026-09-25 (1.1: 2026-09-23, 1.0: 2026-09-10). 1.1 thêm mục 3.4; 1.2 sửa lại số bóng của 1.1 (sai: phần lớn là bóng dự phòng ngoài sân) và thêm lỗi thứ tự kênh màu. Gộp số đo của hai repo. Hai bối cảnh đo **không so sánh trực tiếp được**: upstream đo camera panorama cố định 3840x1504 (SoccerTrack v2) trên ground truth từng frame; V0 đo tactical cam 720p lia/zoom, không có ground truth.
 
 ## 1. Stack đã chọn
 
 | Thành phần | Chọn | License | Ghi chú |
 |---|---|---|---|
 | Detector | SoccerMaster `yolo_v8x6_finetuned.pt` (HF `xleprime/SoccerMaster`, 195 MB, không gated), chạy tile 1280 / overlap 0.25 trên panorama, `tile=0` trên 720p | ultralytics AGPL-3.0 | phải mua Enterprise License hoặc đổi detector Apache-2.0 trước khi bán |
-| Bóng | + model bóng riêng Roboflow ở 1920 px (mirror HF martinjolif) | MIT dataset, weights roboflow | coverage 30.5% lên 94.9% trên tactical cam (pipeline V0); pipeline Match State: 98.6% frame có calibration sau khi sửa lề ngoài sân (3.4) |
+| Bóng | + model bóng riêng Roboflow ở 1920 px (mirror HF martinjolif) | MIT dataset, weights roboflow | coverage 30.5% lên 94.9% trên tactical cam (pipeline V0, không lọc bóng ngoài sân nên có thể lẫn bóng dự phòng); pipeline Match State: 84.9% frame có calibration, 0 bước nhảy > 5 m (3.4) |
 | Tracking | `PitchTracker` upstream: Kalman `[x,y,vx,vy]` mét, gate 12 m/s, appearance veto 0.5 | mã riêng | không dùng ByteTrack |
 | Identity | `identity.py` upstream: nối tracklet, phủ quyết số áo trước khi nối, quota 11 người theo thời gian | mã riêng | OCR số áo chưa có model |
 | Calibration | DLT + TPS + `verdict()` upstream; camera chuyển động bằng `AnchoredCamera` V0 | mã riêng | model keypoint/line học máy thất bại trên cả hai loại footage ngoài broadcast |
@@ -20,7 +20,7 @@ Phiên bản 1.1, 2026-09-23 (1.0: 2026-09-10). 1.1 thêm mục 3.4: ba lỗi pi
 |---|---|---|---|---|---|
 | B8 | Một camera đủ tái dựng game state liên tục? | >= 70% frame có >= 18/22 | recall 74% ở conf 0.10 (21 người/frame), 60% ở 0.25 (14/frame), precision 77% / 94% | 3 phút: 60% frame >= 18 sau lọc ngoài sân, trung bình 15.5; 30 s: 100% >= 18 | Đạt sát ngưỡng ở cả hai; detector là nút thắt, không phải tracker |
 | B9 | Sai số nào làm analyst mất tin? | <= 2 m; <= 1 switch/cầu thủ/phút | vị trí trung vị 0.18-0.21 m so GT; ID switch 347/250 frame ở conf 0.10, 179 ở 0.25; nối tracklet: 129 mảnh về 22 người, 0 hàn nhầm | landmark 0.064 m (mục tiêu méo, xem 3.2); switch proxy 2.67/cầu thủ/phút | Vị trí đạt; switch chưa đạt nếu không có identity layer |
-| B10 | Use case nào cần ball tracking? | pressing/transition cần coverage >= 60% | ball gate 0.10 + prior một bóng, chưa báo coverage | 94.9% với model riêng 1920 px (V0). Sau hợp nhất: 11.7% vì lọc ngoài sân 2 m xoá bóng; sửa bằng lề riêng 10 m: 99.3% (30 s), 98.6% frame có calibration (3 phút), xem 3.4 | Đạt (sau khi sửa) |
+| B10 | Use case nào cần ball tracking? | pressing/transition cần coverage >= 60% | ball gate 0.10 + prior một bóng, chưa báo coverage | 94.9% với model riêng 1920 px (V0, chưa loại bóng dự phòng). Pipeline Match State sau khi sửa: bóng thật 77.1% frame (30 s), 84.9% frame có calibration (3 phút), 82.7% / 88.8% sau khi nội suy khoảng hở, xem 3.4 | Đạt |
 | B11 | Cần danh tính hay chỉ team + id tạm? | 100% metric L2 không cần tên | tactics.py chạy trên track_id + team; số áo chỉ để nối mảnh | team 0/1/ref chỉ bằng màu áo | Giữ giả thuyết; số áo là Phase 1 |
 | B12 | Độ trễ 1h / 3h / overnight? | <= 3h/trận trên 1 GPU | ~37 giờ/hiệp cho pass perception trên M2 Pro (panorama 4K, tile x6); A100 chưa đo đủ trận | 203 s/phút trận (người 1280 + bóng 1920 + camera) trên M2, ~5 giờ/90 phút | Overnight đạt; 3h cần GPU và đo lại trên A100 |
 
@@ -55,15 +55,16 @@ Phiên bản 1.1, 2026-09-23 (1.0: 2026-09-10). 1.1 thêm mục 3.4: ba lỗi pi
 | Giây/frame YOLOv8x6 trên M2 | 0.34 s/frame (3.0 fps) ở 1280 px: **506 s/phút trận** ở stride 1, 262 s ở stride 2; gấp 2.5 lần V0 (yolo11n + bóng 1920 + camera: 203 s). Clip 3 phút: 81.25% frame có calibration (cắt cảnh 34 s bị loại đúng như V0), 135 lần neo lại, trung vị 20 người/frame, `validate()` sạch, 100% vị trí trong sân |
 
 ### 3.4. F2 (2026-09-23, sửa ba lỗi pipeline sau hợp nhất; YOLOv8x6 `tile=0` 1280 px + bóng riêng 1920 px, stride 1, M2)
-Cả ba lỗi có sẵn trong fork, không do việc hợp nhất gây ra; commit `27d938d`.
+Các lỗi có sẵn trong fork, không do việc hợp nhất gây ra; commit `27d938d` và `77c24bf`. Dòng bóng dưới đây là bản đã sửa lại: số 99.3% / 98.6% của bản 1.1 phần lớn là bóng dự phòng.
 
 | Lỗi | Trước khi sửa | Sau khi sửa |
 |---|---|---|
-| Lọc ngoài sân dùng lề 2 m của cầu thủ cho cả bóng. Bóng cạnh biên dọc xa chiếu ra y = -37.5 trên nửa rộng 34 m (cầu thủ đứng đó cũng chiếu ra cùng y). V0 không lọc bóng | 30 s: bóng 11.7% frame. 12 frame mẫu quanh frame neo: model bóng thấy 12/12, 11 bị xoá | `ball_margin_m` = 10 m cho `Role.BALL`: 30 s **99.3%** frame (745/750); 3 phút **3605/3657 frame có calibration (98.6%)**, 80.1% tổng frame vì cắt cảnh 34 s bị loại; 0 bóng bị xoá. Dùng tâm box thay đáy box cho bóng: đã đo và bỏ, đẩy bóng ra xa hơn (y = -38.4) |
+| Detector chỉ giữ box bóng tin cậy nhất mỗi frame. Model bóng cũng thấy **bóng dự phòng nằm ngoài biên dọc xa** (chỗ nhặt bóng, y = -37.5 và -38.0): đứng yên, không bị che nên thường thắng bóng thật | Lề 2 m xoá bóng dự phòng, nên bóng chỉ còn 11.7% frame (30 s). Bản 1.1 nới lề lên 10 m: "99.3%" nhưng 87% vị trí nằm ngoài vạch, bóng nhảy > 15 m trong 170/750 frame (bóng nhấp nháy trên radar) | Giữ tối đa 5 ứng viên (`max_balls`), lề bóng về 2 m, chọn ứng viên bóng có thể tới được từ lần thấy trước ở 35 m/s (`choose_ball`), không có thì bỏ trống thay vì nhảy. 30 s: **77.1%** frame (82.7% sau nội suy), 0% ngoài vạch, 0 bước nhảy > 5 m. 3 phút: **84.9% frame có calibration** (88.8%), 1.7% ngoài vạch (trong lề), 0 bước nhảy |
+| Thứ tự kênh màu: pipeline, CLI và script đưa ảnh RGB vào Ultralytics, vốn coi mảng numpy là BGR, nên cả hai model thấy đỏ và xanh bị tráo | 30 s trung bình 18.8 cầu thủ/frame (trung vị 19); 3 phút 16.5 (trung vị 20) | Detector đổi sang BGR khi gọi model: 30 s **20.5** (trung vị 21), switch proxy 3.09 về 2.09, 55 về 46 tracklet; 3 phút **17.9** (trung vị 21), 2.36 switch |
 | `split_officials` tính ngưỡng theo số id track. 3 phút có 258 track thô cho ~25 người | 50 mảnh (19% id, dưới ngưỡng 25%) thành "trọng tài": 7.0 trọng tài/frame so 2.7 cầu thủ đội nhà, `validate()`: 3 v 7 | KMeans có trọng số theo số lần xuất hiện, thêm ngưỡng `max_obs_share` 0.2: 3 phút **8.2 v 8.2 cầu thủ/frame, `validate()` sạch**, không tách trọng tài (cụm thứ ba 94 mảnh = 36% id). 30 s: tách 15 mảnh = 9.9% số lần xuất hiện, 2.1 trọng tài/frame |
 | `apply_to_state` chỉ ghi `team`, không ghi `role` | trọng tài vẫn là `player`, bị tính vào `MatchState.players` | `role` = `referee` trong parquet; 30 s trung vị 19 cầu thủ + 2 trọng tài/frame (trước: 21 gồm cả trọng tài) |
 
-Các số khác của clip 3 phút giữ nguyên so với trước khi sửa: 81.23% frame có calibration, 139 lần neo lại, trung vị 20 người/frame, 7345 box ngoài sân bị bỏ; switch proxy 2.42/cầu thủ/phút; 261 track thô về 179 tracklet; ~595 s/phút trận có model bóng.
+Clip 3 phút sau cả hai commit: 81.23% frame có calibration (không đổi), 139 lần neo lại, 178 tracklet, ~554 s/phút trận có model bóng, 9.0 v 8.7 cầu thủ/frame. `validate()` giờ báo cầu thủ trải 103% bề rộng 68 m: tìm thêm được người dọc biên, và trợ lý trọng tài vẫn bị tính là cầu thủ vì clip này chưa tách được trọng tài. Không phải lỗi calibration (verdict vẫn good).
 
 Còn mở: trên clip 3 phút trọng tài chưa được tách, nằm lẫn trong hai đội. Tắt ngưỡng id để thử: cụm 94 mảnh (16.7% số lần xuất hiện) cho 3.3 "trọng tài"/frame, trung vị cầu thủ tụt còn 17 và `validate()` báo thiếu người, tức là lại tách quá tay. Cần tách theo tracklet sau khi nối, hoặc thêm vị trí (trợ lý trọng tài đi dọc biên), thay vì chỉ màu áo.
 
