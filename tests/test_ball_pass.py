@@ -31,7 +31,7 @@ def test_ball_weights_raise_ball_hit_rate_on_sampled_frames():
         for det, tally in ((base, "b"), (ded, "d")):
             out = det.detect(frame)
             balls = [r for r in out if det.role_of(r[5]) == Role.BALL.value]
-            assert len(balls) <= 1                      # single-ball prior kept
+            assert len(balls) <= det.cfg.max_balls      # candidates; the pipeline picks one
             if balls:
                 if tally == "b":
                     hits_base += 1

@@ -52,6 +52,7 @@ def compute_quality(state: MatchState, report: dict, stride: int = 1, expected_p
               "tracklets_before_stitch", "tracklets_after_stitch", "median_players_per_frame",
               "dropped_off_pitch", "detections", "team_diagnosis",
               "ball_frames_detected", "ball_frames_interpolated", "ball_dropped_off_pitch",
+              "ball_frames_unreachable",
               "officials_split"):
         if k in report:
             v = report[k]
