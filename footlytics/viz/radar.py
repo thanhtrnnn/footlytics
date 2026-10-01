@@ -40,7 +40,8 @@ def hold_gaps(tracks, max_gap: int = 12):
 
     if max_gap <= 0 or tracks.empty:
         return tracks
-    is_person = tracks["role"].astype(str) != Role.BALL.value
+    # -1 is "untracked detection": not one person, never bridge between them.
+    is_person = (tracks["role"].astype(str) != Role.BALL.value) & (tracks["track_id"] >= 0)
     num = ["timestamp", "x", "y", "bbox_x", "bbox_y", "bbox_w", "bbox_h"]
     held = []
     for tid, g in tracks[is_person].groupby("track_id", observed=True):
@@ -58,6 +59,8 @@ def hold_gaps(tracks, max_gap: int = 12):
         w = w.ffill()
         add = w[short.to_numpy()].reset_index(names="frame_idx")
         add["track_id"] = tid
+        if "interpolated" in add.columns:
+            add["interpolated"] = True     # filled in, not observed
         held.append(add)
     if not held:
         return tracks

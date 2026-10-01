@@ -29,6 +29,28 @@ def test_ball_and_zero_are_left_alone():
     assert sorted(out.loc[out.track_id == 9, "frame_idx"]) == [0, 3]
 
 
+def test_on_real_matchstate_columns():
+    """Categorical role/team, int32 ids, bool interpolated -- as the pipeline writes them.
+    Filled rows are flagged; untracked detections (-1) are never bridged."""
+    from footlytics.state.schema import MatchMeta, MatchState, TeamInfo
+
+    rows = pd.concat([_rows(1, [0, 1, 4]), _rows(-1, [0, 3])], ignore_index=True)
+    st = MatchState(MatchMeta(match_id="t", fps=25.0, home=TeamInfo("H"), away=TeamInfo("A")),
+                    rows.assign(period=1, interpolated=False))
+    out = hold_gaps(st.tracks, max_gap=12)
+    p1 = out[out.track_id == 1].sort_values("frame_idx")
+    assert p1.frame_idx.tolist() == [0, 1, 2, 3, 4]
+    assert p1.interpolated.astype(bool).tolist() == [False, False, True, True, False]
+    assert sorted(out.loc[out.track_id == -1, "frame_idx"]) == [0, 3]
+    assert set(p1.team.astype(str)) == {Team.HOME.value}
+
+
+def test_ball_and_zero_leave_the_ball_alone_but_fill_the_player():
+    t = pd.concat([_rows(1, [0, 3]), _rows(9, [0, 3], role=Role.BALL.value)])
+    out = hold_gaps(t, max_gap=12)
+    assert sorted(out.loc[out.track_id == 1, "frame_idx"]) == [0, 1, 2, 3]
+
+
 def test_touchline_T_is_drawn_at_the_top():
     import matplotlib
     matplotlib.use("Agg")
