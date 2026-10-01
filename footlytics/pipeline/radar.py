@@ -13,6 +13,7 @@ once rather than 1,500 times.
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -52,8 +53,11 @@ class PipelineConfig:
     #: reached from where it was last seen, at up to this speed (+ `ball_slack_m`).
     #: After `ball_reacquire_s` without a sighting, take the most confident again.
     ball_max_speed: float = 35.0
-    ball_slack_m: float = 3.0
+    ball_slack_m: float = 1.0
     ball_reacquire_s: float = 1.0
+    #: A ball candidate that sat within 0.5 m of one spot for 80% of this long is a
+    #: still decoy unless nothing else moves (`BallSelector`).
+    ball_still_s: float = 2.0
     use_appearance: bool = True
     team_fit_sample: int = 4000     # descriptors sampled to fit the kit clusters
     #: Join track fragments into whole-player tracklets before deciding identity.
@@ -82,22 +86,96 @@ def on_pitch(xy: np.ndarray, roles: list[str], pitch: Pitch,
 
 def choose_ball(xy: np.ndarray, conf: np.ndarray, last_xy: Optional[np.ndarray],
                 frames_since: int, fps: float, max_speed: float = 35.0,
-                slack_m: float = 3.0, reacquire_s: float = 1.0) -> Optional[int]:
+                slack_m: float = 1.0, reacquire_s: float = 1.0) -> Optional[int]:
     """Index of the ball candidate to keep this frame, or None.
 
     With a recent sighting, only candidates the ball could have reached are
     eligible and the nearest wins; if none is reachable the frame gets no ball
     rather than a teleport. Without one (start, or `reacquire_s` since the last
-    sighting) the most confident candidate is taken.
+    sighting) the most confident candidate is taken. The reach is the tracker's
+    own ball gate (`max_speed * (frames_since + 1) / fps + slack_m`), so a kept
+    candidate is never one the tracker would then refuse and re-id.
     """
     if not len(xy):
         return None
     if last_xy is None or frames_since > reacquire_s * fps:
         return int(np.argmax(conf))
-    reach = max_speed * frames_since / fps + slack_m
+    reach = max_speed * (frames_since + 1) / fps + slack_m
     d = np.linalg.norm(xy - last_xy, axis=1)
     ok = np.flatnonzero(d <= reach)
     return int(ok[np.argmin(d[ok])]) if len(ok) else None
+
+
+class BallSelector:
+    """One ball per frame from several candidates: continuity, and no still decoys.
+
+    Continuity alone (`choose_ball`) locks onto a ball that lies still: it is
+    always at distance 0 from itself. On the 3-minute clip a second ball lay in
+    the box for 57 s and was "the ball" in 45% of sightings. A candidate that has
+    sat within `still_m` of one spot for `still_share` of the last `still_s`
+    seconds is *still*; a still one with nobody within `alone_m` is a *decoy*.
+    A decoy is never taken, and a held still ball is let go as soon as some other
+    candidate is not still. A match ball waiting for a restart has the taker
+    beside it, so it is not a decoy and stays held while nothing else moves.
+    `people_xy` (this frame's people, pitch metres) enables the decoy test;
+    without it every still ball is treated as a decoy.
+    """
+
+    def __init__(self, fps: float, max_speed: float = 35.0, slack_m: float = 1.0,
+                 reacquire_s: float = 1.0, still_m: float = 0.5, still_s: float = 2.0,
+                 still_share: float = 0.8, alone_m: float = 3.0):
+        self.fps, self.max_speed, self.slack_m = fps, max_speed, slack_m
+        self.reacquire_s, self.still_m, self.still_share = reacquire_s, still_m, still_share
+        self.alone_m = alone_m
+        self.window = max(int(round(still_s * fps)), 1)
+        self._hist: deque = deque()
+        self.last_xy: Optional[np.ndarray] = None
+        self.last_frame = -10**9
+        self.n_unreachable = 0
+        self.n_released = 0
+
+    def _still(self, frame: int, xy: np.ndarray) -> np.ndarray:
+        while self._hist and self._hist[0][0] < frame - self.window:
+            self._hist.popleft()
+        if not len(xy) or len(self._hist) < self.still_share * self.window:
+            return np.zeros(len(xy), bool)
+        hits = np.zeros(len(xy))
+        for _, h in self._hist:
+            if len(h):
+                hits += np.linalg.norm(xy[:, None] - h[None], axis=-1).min(axis=1) <= self.still_m
+        return hits >= self.still_share * self.window
+
+    def pick(self, frame: int, xy: np.ndarray, conf: np.ndarray,
+             people_xy: Optional[np.ndarray] = None) -> Optional[int]:
+        """Call on every calibrated frame, with that frame's ball candidates (maybe none)."""
+        xy = np.asarray(xy, float).reshape(-1, 2)
+        conf = np.asarray(conf, float).ravel()
+        still = self._still(frame, xy)
+        self._hist.append((frame, xy.copy()))
+        if not len(xy):
+            return None
+        decoy = still.copy()
+        if people_xy is not None and len(people_xy) and still.any():
+            near = np.linalg.norm(xy[:, None] - np.asarray(people_xy, float)[None], axis=-1).min(axis=1)
+            decoy &= near > self.alone_m
+        moving = np.flatnonzero(~still)
+        if self.last_xy is None or frame - self.last_frame > self.reacquire_s * self.fps:
+            ok = np.flatnonzero(~decoy)
+            p = int(ok[np.argmax(conf[ok])]) if len(ok) else None
+        else:
+            p = choose_ball(xy, conf, self.last_xy, frame - self.last_frame, self.fps,
+                            self.max_speed, self.slack_m, self.reacquire_s)
+            if p is None:
+                self.n_unreachable += 1
+            elif still[p] and len(moving):
+                p = int(moving[np.argmax(conf[moving])])
+                self.n_released += 1
+            elif decoy[p]:
+                p = None
+                self.n_released += 1
+        if p is not None:
+            self.last_xy, self.last_frame = xy[p].copy(), frame
+        return p
 
 
 def _log(on: bool, *a):
@@ -162,8 +240,8 @@ def run(
     n_det_total = 0
     n_off_pitch = 0
     n_ball_off_pitch = 0
-    n_ball_unreachable = 0
-    last_ball_xy, last_ball_frame = None, -10**9
+    ball_sel = BallSelector(eff_fps, cfg.ball_max_speed, cfg.ball_slack_m,
+                            cfg.ball_reacquire_s, still_s=cfg.ball_still_s)
     t0 = time.time()
 
     while True:
@@ -202,16 +280,11 @@ def run(
             dets, xy = dets[keep], xy[keep]
             roles = [r for r, k in zip(roles, keep) if k]
 
-            # One ball per frame, chosen for continuity with the last one kept.
+            # One ball per frame, chosen for continuity and against still decoys.
             bi = np.flatnonzero([r == Role.BALL.value for r in roles])
+            people = [i for i, r in enumerate(roles) if r != Role.BALL.value]
+            pick = ball_sel.pick(out_idx, xy[bi], dets[bi, 4], people_xy=xy[people])
             if len(bi):
-                pick = choose_ball(xy[bi], dets[bi, 4], last_ball_xy, out_idx - last_ball_frame,
-                                   eff_fps, cfg.ball_max_speed, cfg.ball_slack_m,
-                                   cfg.ball_reacquire_s)
-                if pick is None:
-                    n_ball_unreachable += 1
-                else:
-                    last_ball_xy, last_ball_frame = xy[bi[pick]].copy(), out_idx
                 drop = set(bi.tolist()) - ({int(bi[pick])} if pick is not None else set())
                 if drop:
                     sel = np.array([i not in drop for i in range(len(dets))], bool)
@@ -272,7 +345,8 @@ def run(
         "detections": n_det_total,
         "dropped_off_pitch": n_off_pitch,
         "ball_dropped_off_pitch": n_ball_off_pitch,
-        "ball_frames_unreachable": n_ball_unreachable,
+        "ball_frames_unreachable": ball_sel.n_unreachable,
+        "ball_still_released": ball_sel.n_released,
         "tracks_created": tracker._next_id - 1,
     }
     if camera is not None:

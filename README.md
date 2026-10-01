@@ -291,13 +291,14 @@ broadcast feed that pans, zooms and cuts to the bench, so there is a bridge for 
 Measured on a public 720p tactical-cam clip (Brazil vs France): a 34 s bench cut rejected,
 81% of frames calibrated over 3 minutes; 30 s through this pipeline: 750/750 frames
 calibrated, median 21 players plus 2 officials per frame with the x6 weights, clean
-`validate()`, the match ball in 77% of frames with the dedicated model (85% of the calibrated
-frames over 3 minutes) and never more than 5 m from where it was a frame earlier, 506 s of
-compute per match minute on an M2 without the ball model, ~550 s with it (x6 on MPS is the
-cost; yolo11n was 2.5x faster at the same players-per-frame). The ball model also finds the
-spare balls lying beyond the touchline, and a still spare ball usually out-scores the match
-ball; the detector therefore keeps several candidates and the pipeline keeps the one the ball
-could have reached from its last sighting. Details and the blocker table in
+`validate()`, the match ball in 77% of frames with the dedicated model but only 47% of the
+calibrated frames over 3 minutes, 506 s of compute per match minute on an M2 without the ball
+model, ~530-550 s with it (x6 on MPS is the cost; yolo11n was 2.5x faster at the same
+players-per-frame). The ball model also finds spare balls beyond the touchline and, on the
+3-minute clip, a ball lying in the box for a minute while play goes on elsewhere; still,
+unoccluded, they out-score the match ball. The detector keeps several candidates and the
+pipeline keeps the one the ball could have reached, never a still ball with nobody near it.
+47% is below the 60% that pressing and transition analysis need. Details and the blocker table in
 `docs/feasibility.md` (Vietnamese).
 
 ## Roadmap

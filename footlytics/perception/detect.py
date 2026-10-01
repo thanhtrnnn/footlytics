@@ -136,8 +136,10 @@ class DetectorConfig:
     #: finds the spare balls beside the pitch, and a still, unoccluded spare ball usually
     #: out-scores the match ball -- keeping only the best box put the "ball" beyond the far
     #: touchline in 87% of frames of the 30 s clip. The pipeline picks one per frame after
-    #: it knows where each candidate is on the pitch (`pipeline.radar.choose_ball`).
-    max_balls: int = 5
+    #: it knows where each candidate is on the pitch (`pipeline.radar.BallSelector`). Generous,
+    #: because the cap applies before the on-pitch filter: spare balls, a still ball and
+    #: false positives on heads and boots must not crowd the match ball out.
+    max_balls: int = 15
 
 
 def _bgr(rgb: np.ndarray) -> np.ndarray:
