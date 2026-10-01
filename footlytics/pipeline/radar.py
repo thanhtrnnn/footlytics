@@ -28,7 +28,7 @@ from ..geometry.pitch import Pitch
 from ..perception.detect import Detector, DetectorConfig
 from ..perception.teams import split_officials, TeamClassifier, kit_descriptor
 from ..perception.identity import (apply_to_state, assign_teams_with_roster,
-                                   build_tracklets, stitch_tracklets)
+                                   build_tracklets, stitch_tracklets, touchline_people)
 from ..perception.track import PitchTracker, TrackerConfig
 from ..geometry.camera_motion import AnchoredCamera, MovingCalibration
 from ..state.schema import MatchMeta, MatchState, Role, Team, TeamInfo
@@ -66,6 +66,10 @@ class PipelineConfig:
     stitch: bool = True
     #: Players a side. Drives the team quota; set lower after a red card.
     roster_size: int = 11
+    #: Take people who live on the boundary lines out of the teams before the quota:
+    #: moving ones become assistant referees, still ones `Role.OTHER` (ball boys,
+    #: staff). See `identity.touchline_people`.
+    touchline_people: bool = True
     #: Fill ball gaps of at most this many frames by interpolating between the
     #: two sightings either side. 0 disables. The tracker already coasts the ball
     #: for a few frames, so this only reaches the gaps where the track died.
@@ -409,14 +413,29 @@ def run(
         if scores:
             w = [(scores.get(x, 0.0), 1.0) for x in t.track_ids]
             t.team_score = float(np.mean([v for v, _ in w])) if w else 0.0
-    official_tracklets = [t for t in tracklets if set(t.track_ids) & officials]
-    player_tracklets = [t for t in tracklets if not (set(t.track_ids) & officials)]
+    # People who live on the boundary lines -- assistant referees, ball boys, staff --
+    # are not players, whatever kit cluster they fall into. Decide before the quota.
+    on_line = (touchline_people(state.tracks, tracklets, pitch.half_l, pitch.half_w)
+               if cfg.touchline_people else {})
+    report["touchline_people"] = {
+        "assistant_referees": sum(r == Role.REFEREE.value for r in on_line.values()),
+        "other": sum(r == Role.OTHER.value for r in on_line.values()),
+    }
+    official_tracklets = [t for t in tracklets
+                          if set(t.track_ids) & officials or on_line.get(t.id) == Role.REFEREE.value]
+    other_tracklets = [t for t in tracklets
+                       if on_line.get(t.id) == Role.OTHER.value and not set(t.track_ids) & officials]
+    side = {id(t) for t in official_tracklets} | {id(t) for t in other_tracklets}
+    player_tracklets = [t for t in tracklets if id(t) not in side]
     if scores:
         player_tracklets = assign_teams_with_roster(player_tracklets, team_size=cfg.roster_size)
     for t in official_tracklets:
         t.team = Team.OFFICIAL.value
         t.role = Role.REFEREE.value
-    tracklets = player_tracklets + official_tracklets
+    for t in other_tracklets:
+        t.team = Team.UNKNOWN.value
+        t.role = Role.OTHER.value
+    tracklets = player_tracklets + official_tracklets + other_tracklets
     state = apply_to_state(state, tracklets)
     report["tracklets_before_stitch"] = n_before
     report["tracklets_after_stitch"] = len(tracklets)
