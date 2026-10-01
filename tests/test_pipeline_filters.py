@@ -112,3 +112,26 @@ def test_a_still_ball_with_the_taker_beside_it_is_kept():
     sel2 = BallSelector(fps=25.0)
     picks_alone = [sel2.pick(f, ball, np.array([0.9]), people_xy=far) for f in range(100)]
     assert picks_alone[0] == 0 and picks_alone[-1] is None
+
+
+def test_touchline_people_are_taken_out_of_the_teams():
+    """Measured on the 3-minute clip: a dozen tracklets sat on the touchlines, all
+    labelled 'away' players -- an assistant referee running the line, ball boys and
+    staff standing beside it."""
+    from footlytics.perception.identity import touchline_people
+
+    rows = []
+    for f in range(50):
+        rows += [
+            dict(frame_idx=f, track_id=1, x=-10.0 + 0.4 * f, y=34.3),   # runs the touchline
+            dict(frame_idx=f, track_id=2, x=10.0, y=-35.0),             # stands beside it
+            dict(frame_idx=f, track_id=3, x=0.2 * f, y=33.8 if f < 5 else 20.0),  # throw-in, back
+            dict(frame_idx=f, track_id=4, x=53.0, y=0.0),               # behind the goal line
+        ]
+    rows += [dict(frame_idx=f, track_id=5, x=0.0, y=-34.5) for f in range(10)]  # too short
+    tracks = pd.DataFrame(rows)
+    st = MatchState(MatchMeta(match_id="t", fps=25.0, home=TeamInfo("H"), away=TeamInfo("A")),
+                    tracks.assign(period=1, timestamp=tracks.frame_idx / 25.0, role=PLAYER,
+                                  team=Team.UNKNOWN.value))
+    got = touchline_people(st.tracks, build_tracklets(st), 52.5, 34.0)
+    assert got == {1: Role.REFEREE.value, 2: Role.OTHER.value, 4: Role.OTHER.value}
