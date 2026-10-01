@@ -10,7 +10,9 @@ Coordinate convention
 Pitch coordinates are metres with the origin at the centre spot:
 
         x in [-L/2, +L/2]   along the length, positive towards the away goal
-        y in [-W/2, +W/2]   along the width,  positive towards the far touchline
+        y in [-W/2, +W/2]   along the width,  negative towards the far touchline
+                            (landmarks "T", top of the camera image), positive
+                            towards the near one ("B")
         z in [0, inf)       height, only ever populated for the ball
 
 This matches kloppy's metric pitch convention, so `to_kloppy()` is a relabel

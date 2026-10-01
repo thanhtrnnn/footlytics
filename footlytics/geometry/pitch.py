@@ -38,7 +38,8 @@ class Pitch:
         """Named points a human can unambiguously click on in a video frame.
 
         Naming: side is L (negative x, home goal) or R (positive x); T is the
-        touchline at negative y, B at positive y. Keep these names stable --
+        touchline at negative y -- the far one, at the top of the camera image --
+        B the near one at positive y. Keep these names stable --
         calibration files on disk refer to them.
         """
         L, W = self.half_l, self.half_w
