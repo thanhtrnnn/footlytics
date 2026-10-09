@@ -32,7 +32,7 @@ SUGGESTED = [
 ]
 
 HELP = {
-    "corner_LT": "top-left corner flag (left goal, near touchline)",
+    "corner_LT": "top-left corner flag (left goal, far touchline)",
     "corner_RT": "top-right corner flag",
     "corner_RB": "bottom-right corner flag",
     "corner_LB": "bottom-left corner flag",
