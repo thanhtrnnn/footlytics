@@ -1,0 +1,438 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-08T18:42:45.688172+00:00",
+  "title": "Design System: footlytics web",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Cream paper",
+        "tonalRamp": [
+          "oklch(15% 0.0107 100.82)",
+          "oklch(27% 0.0107 100.82)",
+          "oklch(38% 0.0107 100.82)",
+          "oklch(49% 0.0107 100.82)",
+          "oklch(61% 0.0107 100.82)",
+          "oklch(72% 0.0107 100.82)",
+          "oklch(84% 0.0107 100.82)",
+          "oklch(95% 0.0107 100.82)"
+        ]
+      },
+      "white": {
+        "role": "neutral",
+        "displayName": "White",
+        "tonalRamp": [
+          "oklch(15% 0.0000 89.88)",
+          "oklch(27% 0.0000 89.88)",
+          "oklch(38% 0.0000 89.88)",
+          "oklch(49% 0.0000 89.88)",
+          "oklch(61% 0.0000 89.88)",
+          "oklch(72% 0.0000 89.88)",
+          "oklch(84% 0.0000 89.88)",
+          "oklch(95% 0.0000 89.88)"
+        ]
+      },
+      "ink": {
+        "role": "primary",
+        "displayName": "Forest ink",
+        "tonalRamp": [
+          "oklch(15% 0.0260 155.66)",
+          "oklch(27% 0.0260 155.66)",
+          "oklch(38% 0.0260 155.66)",
+          "oklch(49% 0.0260 155.66)",
+          "oklch(61% 0.0260 155.66)",
+          "oklch(72% 0.0260 155.66)",
+          "oklch(84% 0.0260 155.66)",
+          "oklch(95% 0.0260 155.66)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Green slate",
+        "tonalRamp": [
+          "oklch(15% 0.0237 154.30)",
+          "oklch(27% 0.0237 154.30)",
+          "oklch(38% 0.0237 154.30)",
+          "oklch(49% 0.0237 154.30)",
+          "oklch(61% 0.0237 154.30)",
+          "oklch(72% 0.0237 154.30)",
+          "oklch(84% 0.0237 154.30)",
+          "oklch(95% 0.0237 154.30)"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Sage rule",
+        "tonalRamp": [
+          "oklch(15% 0.0176 137.04)",
+          "oklch(27% 0.0176 137.04)",
+          "oklch(38% 0.0176 137.04)",
+          "oklch(49% 0.0176 137.04)",
+          "oklch(61% 0.0176 137.04)",
+          "oklch(72% 0.0176 137.04)",
+          "oklch(84% 0.0176 137.04)",
+          "oklch(95% 0.0176 137.04)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Moss accent",
+        "tonalRamp": [
+          "oklch(15% 0.0973 135.54)",
+          "oklch(27% 0.0973 135.54)",
+          "oklch(38% 0.0973 135.54)",
+          "oklch(49% 0.0973 135.54)",
+          "oklch(61% 0.0973 135.54)",
+          "oklch(72% 0.0973 135.54)",
+          "oklch(84% 0.0973 135.54)",
+          "oklch(95% 0.0973 135.54)"
+        ]
+      },
+      "field": {
+        "role": "primary",
+        "displayName": "Field green",
+        "tonalRamp": [
+          "oklch(15% 0.0439 171.53)",
+          "oklch(27% 0.0439 171.53)",
+          "oklch(38% 0.0439 171.53)",
+          "oklch(49% 0.0439 171.53)",
+          "oklch(61% 0.0439 171.53)",
+          "oklch(72% 0.0439 171.53)",
+          "oklch(84% 0.0439 171.53)",
+          "oklch(95% 0.0439 171.53)"
+        ]
+      },
+      "pitch-line": {
+        "role": "neutral",
+        "displayName": "Pitch line",
+        "tonalRamp": [
+          "oklch(15% 0.0315 149.77)",
+          "oklch(27% 0.0315 149.77)",
+          "oklch(38% 0.0315 149.77)",
+          "oklch(49% 0.0315 149.77)",
+          "oklch(61% 0.0315 149.77)",
+          "oklch(72% 0.0315 149.77)",
+          "oklch(84% 0.0315 149.77)",
+          "oklch(95% 0.0315 149.77)"
+        ]
+      },
+      "team-home": {
+        "role": "secondary",
+        "displayName": "Chartreuse",
+        "tonalRamp": [
+          "oklch(15% 0.1556 113.41)",
+          "oklch(27% 0.1556 113.41)",
+          "oklch(38% 0.1556 113.41)",
+          "oklch(49% 0.1556 113.41)",
+          "oklch(61% 0.1556 113.41)",
+          "oklch(72% 0.1556 113.41)",
+          "oklch(84% 0.1556 113.41)",
+          "oklch(95% 0.1556 113.41)"
+        ]
+      },
+      "team-away": {
+        "role": "secondary",
+        "displayName": "Away cyan",
+        "tonalRamp": [
+          "oklch(15% 0.0730 199.11)",
+          "oklch(27% 0.0730 199.11)",
+          "oklch(38% 0.0730 199.11)",
+          "oklch(49% 0.0730 199.11)",
+          "oklch(61% 0.0730 199.11)",
+          "oklch(72% 0.0730 199.11)",
+          "oklch(84% 0.0730 199.11)",
+          "oklch(95% 0.0730 199.11)"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel sage",
+        "tonalRamp": [
+          "oklch(15% 0.0163 118.14)",
+          "oklch(27% 0.0163 118.14)",
+          "oklch(38% 0.0163 118.14)",
+          "oklch(49% 0.0163 118.14)",
+          "oklch(61% 0.0163 118.14)",
+          "oklch(72% 0.0163 118.14)",
+          "oklch(84% 0.0163 118.14)",
+          "oklch(95% 0.0163 118.14)"
+        ]
+      },
+      "chapter": {
+        "role": "neutral",
+        "displayName": "Chapter sage",
+        "tonalRamp": [
+          "oklch(15% 0.0163 118.13)",
+          "oklch(27% 0.0163 118.13)",
+          "oklch(38% 0.0163 118.13)",
+          "oklch(49% 0.0163 118.13)",
+          "oklch(61% 0.0163 118.13)",
+          "oklch(72% 0.0163 118.13)",
+          "oklch(84% 0.0163 118.13)",
+          "oklch(95% 0.0163 118.13)"
+        ]
+      },
+      "on-dark-muted": {
+        "role": "neutral",
+        "displayName": "On-dark muted",
+        "tonalRamp": [
+          "oklch(15% 0.0266 150.71)",
+          "oklch(27% 0.0266 150.71)",
+          "oklch(38% 0.0266 150.71)",
+          "oklch(49% 0.0266 150.71)",
+          "oklch(61% 0.0266 150.71)",
+          "oklch(72% 0.0266 150.71)",
+          "oklch(84% 0.0266 150.71)",
+          "oklch(95% 0.0266 150.71)"
+        ]
+      },
+      "on-dark-copy": {
+        "role": "neutral",
+        "displayName": "On-dark copy",
+        "tonalRamp": [
+          "oklch(15% 0.0206 145.40)",
+          "oklch(27% 0.0206 145.40)",
+          "oklch(38% 0.0206 145.40)",
+          "oklch(49% 0.0206 145.40)",
+          "oklch(61% 0.0206 145.40)",
+          "oklch(72% 0.0206 145.40)",
+          "oklch(84% 0.0206 145.40)",
+          "oklch(95% 0.0206 145.40)"
+        ]
+      },
+      "dark-rule": {
+        "role": "neutral",
+        "displayName": "Dark rule",
+        "tonalRamp": [
+          "oklch(15% 0.0467 157.45)",
+          "oklch(27% 0.0467 157.45)",
+          "oklch(38% 0.0467 157.45)",
+          "oklch(49% 0.0467 157.45)",
+          "oklch(61% 0.0467 157.45)",
+          "oklch(72% 0.0467 157.45)",
+          "oklch(84% 0.0467 157.45)",
+          "oklch(95% 0.0467 157.45)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Primary Latin display",
+        "purpose": "User-pinned unchanged Dx Figgle OTF, regular400, for brand and compatible Latin technical display; font synthesis disabled."
+      },
+      "headline": {
+        "displayName": "Chapter headline",
+        "purpose": "Fluid condensed section hierarchy."
+      },
+      "title": {
+        "displayName": "Technical title",
+        "purpose": "Explanatory headings with local programme/process variations."
+      },
+      "body": {
+        "displayName": "Reading body",
+        "purpose": "Manrope explanation and provenance."
+      },
+      "control": {
+        "displayName": "Control label",
+        "purpose": "Native controls and navigation."
+      },
+      "compact-caption": {
+        "displayName": "Compact caption",
+        "purpose": "Readable film, programme, stage and instrument context, including mobile."
+      },
+      "vietnamese-display": {
+        "displayName": "Complete Vietnamese display",
+        "purpose": "Whole unsupported Vietnamese headings use Replay Display at700 through --vi-display; no mixed fallback glyphs."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "ease",
+        "value": "cubic-bezier(.16,1,.3,1)",
+        "purpose": "Action and layer-control color transitions."
+      },
+      {
+        "name": "control-duration",
+        "value": "160ms",
+        "purpose": "Short state transitions; removed under reduced motion."
+      },
+      {
+        "name": "film",
+        "value": "visitor-controlled native playback",
+        "purpose": "No autoplay; hero pauses outside view or in a hidden document."
+      },
+      {
+        "name": "layer-change",
+        "value": "immediate",
+        "purpose": "Geometry, metadata and selection update together."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "tablet",
+        "value": "1000px"
+      },
+      {
+        "name": "mobile",
+        "value": "640px"
+      },
+      {
+        "name": "wide",
+        "value": "1700px"
+      },
+      {
+        "name": "narrow-navigation",
+        "value": "359px"
+      }
+    ],
+    "fontSelection": {
+      "family": "Bricolage Grotesque",
+      "weight": 550,
+      "technologyLabelWeight": 500,
+      "selectedAt": "2026-10-09",
+      "vietnamese": "single display family; no split fallback role"
+    }
+  },
+  "components": [
+    {
+      "name": "Primary action",
+      "kind": "button",
+      "description": "Filled forest-ink pill with inline arrow and visible focus.",
+      "html": "<a class=\"ds-button\" href=\"#project\">Xem dự án <svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12h14m-6-6 6 6-6 6\"/></svg></a>",
+      "css": ".ds-button{display:inline-flex;align-items:center;justify-content:center;gap:24px;padding:14px 24px;min-height:48px;border-radius:40px;background:var(--ink,#142219);color:var(--white,#fff);font-size:14px;font-weight:600;text-decoration:none;font-family:var(--body,\"Replay Body\",sans-serif);transition:background 160ms cubic-bezier(.16,1,.3,1)}.ds-button:hover{background:var(--accent,#365b20);color:var(--white,#fff)}.ds-button svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8}.ds-button:focus-visible{outline:3px solid var(--accent,#365b20);outline-offset:5px}@media(prefers-reduced-motion:reduce){.ds-button{transition:none}}",
+      "refersTo": "button-primary"
+    },
+    {
+      "name": "Light action",
+      "kind": "button",
+      "description": "Chartreuse pill for an action on dark green.",
+      "html": "<a class=\"ds-button ds-light\" href=\"#project\">Xem dự án trên GitHub <svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12h14m-6-6 6 6-6 6\"/></svg></a>",
+      "css": ".ds-button{display:inline-flex;align-items:center;justify-content:center;gap:24px;padding:14px 24px;min-height:48px;border-radius:40px;background:var(--ink,#142219);color:var(--white,#fff);font-size:14px;font-weight:600;text-decoration:none;font-family:var(--body,\"Replay Body\",sans-serif);transition:background 160ms cubic-bezier(.16,1,.3,1)}.ds-button:hover{background:var(--accent,#365b20);color:var(--white,#fff)}.ds-button svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8}.ds-button:focus-visible{outline:3px solid var(--accent,#365b20);outline-offset:5px}@media(prefers-reduced-motion:reduce){.ds-button{transition:none}}.ds-light{background:var(--team-home,#e5f06c);color:var(--ink,#142219)}",
+      "refersTo": "button-light"
+    },
+    {
+      "name": "Text action",
+      "kind": "button",
+      "description": "Underlined text action with a directional SVG.",
+      "html": "<a class=\"ds-text-action\" href=\"#demo\">Xem demo thật <svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12h14m-6-6 6 6-6 6\"/></svg></a>",
+      "css": ".ds-text-action{display:inline-flex;min-height:44px;align-items:center;gap:24px;margin-top:22px;font-size:14px;font-weight:700;text-decoration:none;border-bottom:1px solid;padding-bottom:5px;color:var(--ink,#142219);font-family:var(--body,\"Replay Body\",sans-serif);}.ds-text-action svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.7}.ds-text-action:hover{color:var(--accent,#365b20)}.ds-text-action:focus-visible{outline:3px solid var(--accent,#365b20);outline-offset:5px}"
+    },
+    {
+      "name": "Film play control",
+      "kind": "button",
+      "description": "Visitor-controlled film trigger; the application synchronizes icon, text and pressed state.",
+      "html": "<button class=\"ds-reel\" type=\"button\" aria-pressed=\"false\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"m9 5 10 7-10 7z\"/></svg><span>Phát trích đoạn · 10s</span></button>",
+      "css": ".ds-reel{display:inline-flex;align-items:center;gap:12px;border:1px solid #a7bea7;border-radius:40px;background:var(--team-home,#e5f06c);color:var(--ink,#142219);font-size:13px;font-weight:700;padding:11px 20px;cursor:pointer;min-height:46px;font-family:var(--body,\"Replay Body\",sans-serif);}.ds-reel svg{width:16px;height:16px;fill:currentColor;stroke:currentColor}.ds-reel:hover{background:#f4f7c7}.ds-reel:focus-visible{outline:3px solid var(--accent,#365b20);outline-offset:5px}@media(max-width:640px){.ds-reel{min-height:48px}}",
+      "refersTo": "reel-control"
+    },
+    {
+      "name": "Selected projection layer",
+      "kind": "button",
+      "description": "Selected native layer button; the application sets aria-pressed and updates geometry.",
+      "html": "<button class=\"ds-layer\" type=\"button\" aria-pressed=\"true\">Chiếu xuống sân</button>",
+      "css": ".ds-layer{min-height:48px;border:0;border-bottom:2px solid var(--team-home,#e5f06c);background:#29533e;color:var(--white,#fff);padding:12px 8px;font-size:12px;cursor:pointer;font-family:var(--body,\"Replay Body\",sans-serif);transition:background 160ms cubic-bezier(.16,1,.3,1),color 160ms cubic-bezier(.16,1,.3,1)}.ds-layer:hover{background:#29533e;color:#fff}.ds-layer:focus-visible{outline:3px solid var(--team-home,#e5f06c);outline-offset:-4px}@media(prefers-reduced-motion:reduce){.ds-layer{transition:none}}",
+      "refersTo": "layer-control-selected"
+    },
+    {
+      "name": "Programme choice text",
+      "kind": "button",
+      "description": "Selected programme-row text treatment; the full site also outlines its real poster thumbnail.",
+      "html": "<div class=\"ds-programme\"><button class=\"ds-choice\" type=\"button\" aria-pressed=\"true\"><span><strong>Video &amp; radar</strong><small>Ground truth · 40s</small></span><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 12h14m-6-6 6 6-6 6\"/></svg></button></div>",
+      "css": ".ds-programme{background:#10291f;color:var(--paper,#f2f1e9);padding:0 24px}.ds-choice{display:flex;width:100%;gap:18px;align-items:center;background:transparent;color:var(--team-home,#e5f06c);border:0;border-bottom:1px solid #547360;text-align:left;padding:19px 0;cursor:pointer;min-height:98px;font-family:var(--body,\"Replay Body\",sans-serif);}.ds-choice span{flex:1}.ds-choice strong{font-family:var(--vi-display,\"Replay Display\",sans-serif);font-size:23px;line-height:1.12;font-weight:650;display:block}.ds-choice small{display:block;color:#c0d1c3;font-size:12px;margin-top:8px}.ds-choice svg{width:20px;height:20px;stroke:currentColor;stroke-width:1.7;fill:none}.ds-choice:hover{color:var(--team-home,#e5f06c)}.ds-choice:focus-visible{outline:3px solid var(--team-home,#e5f06c);outline-offset:5px}@media(max-width:640px){.ds-choice{gap:16px;padding-block:20px;min-height:104px}.ds-choice strong{font-size:26px}.ds-choice small{line-height:1.7}}"
+    },
+    {
+      "name": "Projection instrument",
+      "kind": "card",
+      "description": "Square dark-green instrument shell with persistent synthetic caption.",
+      "html": "<figure class=\"ds-desk\"><div class=\"ds-toolbar\"><span>Khám phá phép chuyển đổi</span><span>Toạ độ sân · mét</span></div><svg class=\"ds-pitch\" viewBox=\"0 0 400 180\" role=\"img\" aria-label=\"Minh hoạ sân tổng hợp\"><g fill=\"none\" stroke=\"currentColor\"><rect x=\"20\" y=\"20\" width=\"360\" height=\"140\"/><path d=\"M200 20v140\"/><circle cx=\"200\" cy=\"90\" r=\"28\"/></g></svg><figcaption class=\"ds-caption\">Minh hoạ cơ chế · dữ liệu tổng hợp. Không phải bản chạy pipeline.</figcaption></figure>",
+      "css": ".ds-desk{margin:0;background:var(--field,#15372d);color:var(--pitch-line,#c8dccb);border-radius:0;overflow:hidden;font-family:var(--body,\"Replay Body\",sans-serif);}.ds-toolbar{display:flex;justify-content:space-between;gap:16px;padding:18px 24px;border-bottom:1px solid #547360;font-size:12px;color:#dbe6ea}.ds-pitch{display:block;width:100%;height:auto;padding:12px}.ds-caption{margin:0;padding:16px 24px;font-size:11px;line-height:1.6;color:var(--pitch-line,#c8dccb)}",
+      "refersTo": "projection-desk"
+    },
+    {
+      "name": "Shared public navigation",
+      "kind": "nav",
+      "description": "Four public links remain available on mobile; the About route has a visible active state.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Điều hướng chính\"><a href=\"/#showcase\">Demo</a><a href=\"/#pipeline\">Công nghệ</a><a href=\"/#quality\">Chất lượng</a><a href=\"/about\" aria-current=\"page\">Về startup</a></nav>",
+      "css": ".ds-nav{display:flex;gap:28px;font-family:var(--body,\"Replay Body\",sans-serif)}.ds-nav a{display:inline-flex;align-items:center;min-height:44px;min-width:44px;justify-content:center;font-size:14px;font-weight:600;color:var(--ink,#142219);text-decoration:none}.ds-nav a[aria-current=page]{text-decoration:underline;text-underline-offset:6px}.ds-nav a:hover{color:var(--accent,#365b20)}.ds-nav a:focus-visible{outline:3px solid var(--accent,#365b20);outline-offset:5px}@media(max-width:1000px){.ds-nav{justify-content:space-between;gap:16px}}@media(max-width:640px){.ds-nav{flex-wrap:wrap;gap:8px 16px}.ds-nav a{font-size:14px}}@media(max-width:359px){.ds-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.ds-nav a{border-bottom:1px solid var(--rule,#b9c1b6)}}"
+    },
+    {
+      "name": "Native disclosure",
+      "kind": "custom",
+      "description": "Native expandable technical explanation with ruled boundaries.",
+      "html": "<details class=\"ds-disclosure\"><summary>Residual, drift và accuracy khác nhau thế nào?</summary><p>Residual trên landmark đã dùng để fit không đại diện sai số vị trí toàn sân.</p></details>",
+      "css": ".ds-disclosure{margin-top:32px;border-top:1px solid var(--rule,#b9c1b6);border-bottom:1px solid var(--rule,#b9c1b6);font-family:var(--body,\"Replay Body\",sans-serif);}.ds-disclosure summary{padding:20px 0;font-size:14px;font-weight:600;cursor:pointer}.ds-disclosure p{max-width:75ch;padding:0 0 24px;color:var(--muted,#4e5c52);font-size:14px;line-height:1.7}.ds-disclosure summary:hover{color:var(--accent,#365b20)}.ds-disclosure summary:focus-visible{outline:3px solid var(--accent,#365b20);outline-offset:5px}"
+    },
+    {
+      "name": "Startup contact band",
+      "kind": "custom",
+      "description": "Field-green contact band with a real direct email destination and readable adjacent context.",
+      "html": "<section class=\"ds-startup-contact\"><h2>Một tác vụ rõ.</h2><div><p>Trao đổi về pilot và điều kiện footage.</p><a href=\"mailto:kickoff@footlytics.space\">kickoff@footlytics.space</a></div></section>",
+      "css": ".ds-startup-contact{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.9fr);gap:clamp(32px,6vw,96px);padding:var(--space,clamp(64px,8vw,128px)) var(--gutter,clamp(20px,4vw,72px));background:var(--field,#15372d);color:var(--pitch-line,#c8dccb);font-family:var(--body,\"Replay Body\",sans-serif)}.ds-startup-contact h2{font-family:var(--vi-display,\"Replay Display\",sans-serif);font-size:clamp(48px,6vw,86px);font-weight:700;line-height:1.03;letter-spacing:-.025em;margin:0}.ds-startup-contact p{font-size:16px;line-height:1.85;max-width:60ch;margin:0}.ds-startup-contact a{display:inline-flex;align-items:center;min-height:48px;max-width:100%;overflow-wrap:anywhere;margin-top:24px;color:var(--team-home,#e5f06c);font-family:var(--vi-display,\"Replay Display\",sans-serif);font-size:clamp(24px,3vw,40px);font-weight:650;line-height:1.2;text-decoration:underline;text-underline-offset:6px}.ds-startup-contact a:hover{color:var(--white,#fff)}.ds-startup-contact a:focus-visible{outline:3px solid var(--accent,#365b20);outline-offset:5px}@media(max-width:640px){.ds-startup-contact{grid-template-columns:minmax(0,1fr);gap:28px}.ds-startup-contact h2{font-size:clamp(38px,10vw,56px)}.ds-startup-contact p{font-size:16px;line-height:1.8}.ds-startup-contact a{font-size:clamp(24px,6.5vw,32px)}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Football film programme",
+    "overview": "This system is extracted from the final [stylesheet](styles.css), [landing markup](index.html), [About markup](about/index.html), [interactions](site.js), and desktop/mobile review captures. Cream reading paper, field-green stages and chartreuse signals frame real football footage. Oversized condensed headings give the work a clear football identity; readable sans paragraphs support technical inspection. Its authority covers the standalone `web/` surface, not the Python pipeline.\n\nBroad media fields, asymmetric working pairs and ruled technical rows carry the visual rhythm. Actual match footage supplies the moving material; synthetic geometry remains explicitly separate. Depth comes from tonal fields and footage rather than ornamental effects. The reusable palette, type and component rules below describe the implemented cascade, not the earlier direction.\n\nThe user-authorized real-video redesign supersedes the former pale-steel/navy/rust identity and its square actions/softened desk. The prior document remains in the task baseline. Confirmed constraints survive: real source links, native playback and disclosure, legible mobile order, keyboard focus, reduced motion, and explicit evidence boundaries. This was a code-led build with no approved comp; the fresh finish review records disposition `ship`.",
+    "keyCharacteristics": [
+      "Cream reading fields with dark green film and instrument surfaces.",
+      "Self-hosted condensed display above readable sans technical copy.",
+      "Square media, pill actions, thin rules and flat depth.",
+      "Native visitor-controlled film with linked selection and provenance.",
+      "A shared public shell, readable compact captions and ruled startup narrative."
+    ],
+    "rules": [
+      {
+        "name": "Surface Pairing",
+        "body": "Dark green surfaces use their light foregrounds and dark rules; green slate and sage rules belong on reading fields.",
+        "section": "colors"
+      },
+      {
+        "name": "Signal",
+        "body": "Chartreuse marks an active choice or a deliberate emphasis field; cyan distinguishes the opposing diagram group.",
+        "section": "colors"
+      },
+      {
+        "name": "Two Voices",
+        "body": "Dx Figgle carries Latin brand and compatible technical display; complete unsupported Vietnamese headings use Replay Display through the Vietnamese role. Body sans carries explanation, control labels and provenance. Programme choices use Replay Display at (650), and contact/measured values keep that incumbent role.",
+        "section": "typography"
+      },
+      {
+        "name": "Band",
+        "body": "Reading limits constrain inner text; the major bands and real media remain full width.",
+        "section": "layout"
+      },
+      {
+        "name": "Flat Field",
+        "body": "Separate working surfaces with tone and rules; retain the footage as the source of visual depth.",
+        "section": "elevation"
+      },
+      {
+        "name": "Evidence Neighbour",
+        "body": "Keep provenance, configuration and limitations adjacent to the media or measured artifact they qualify.",
+        "section": "components"
+      },
+      {
+        "name": "Shared Route",
+        "body": "Preserve public chapter links and a visible active About state across the landing and startup story.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "**Do** use paired light and dark foregrounds, rules and backgrounds.",
+      "**Do** keep selected film text, thumbnail outline, `aria-pressed` and metadata synchronized.",
+      "**Do** keep complete exports contained and label the cropped hero excerpt.",
+      "**Do** keep GT, prediction, synthetic, historical and roadmap labels adjacent to their artifacts.",
+      "**Do** preserve native playback, local overflow, mobile reading order, keyboard focus and reduced motion.",
+      "**Do** retain all public navigation links on mobile, readable compact captions and visible real email contact.",
+      "**Do** source-label real stills and keep mission, prototype status and roadmap explanations in ruled reading rows."
+    ],
+    "donts": [
+      "**Don't** replace ruled working fields with decorative shadowed card stacks.",
+      "**Don't** use cyan as a generic action color; it distinguishes the opposing synthetic group.",
+      "**Don't** promote compact diagram or provenance annotations into a general reading-text scale.",
+      "**Don't** turn supplied annotations or unscored predictions into claims of validated calibration, kinematics or identity.",
+      "**Don't** present the two prediction clips as a controlled single-parameter experiment."
+    ]
+  }
+}

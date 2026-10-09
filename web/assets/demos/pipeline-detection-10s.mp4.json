@@ -1,0 +1,9 @@
+{
+  "source": "https://raw.githubusercontent.com/scalliontor/Footlytics/c787ff6d8bbd317f2d14761507dc8a2650556144/docs/demos/pipeline-detection-10s.mp4",
+  "commit": "c787ff6d8bbd317f2d14761507dc8a2650556144",
+  "license": "CC BY 4.0 as attributed in upstream docs/demos/README.md",
+  "provider": "SoccerTrack v2 / AtomScott and contributors",
+  "match": "117092",
+  "sha256": "cd8d93b0ae569215931473c8d50609005b144881a8ae6bfaa963a7caa7d98af0",
+  "bytes": 3633912
+}

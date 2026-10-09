@@ -1,0 +1,7 @@
+{
+  "prompt": "Sourced SoccerTrack v2 / AtomScott and contributors, CC BY 4.0. Derived from Footlytics GT showcase c787ff6, match 117092. Cropped to upper 1600x506 source-video region, first 10 seconds, H.264 CRF24, no audio; poster is first frame. No generated imagery.",
+  "source": "https://github.com/scalliontor/Footlytics/blob/c787ff6d8bbd317f2d14761507dc8a2650556144/docs/demos/gt-video-radar-40s.mp4",
+  "license": "CC BY 4.0",
+  "sha256": "0765fb16d39e005a689463082d9757f33bbea92da643d4b2ec6c3495e1a5cb9e",
+  "bytes": 112690
+}
