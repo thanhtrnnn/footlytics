@@ -374,6 +374,51 @@ def assign_teams_with_roster(
     return tracklets
 
 
+def touchline_people(
+    tracks: pd.DataFrame,
+    tracklets: list[Tracklet],
+    half_length: float,
+    half_width: float,
+    on_line_m: float = 0.5,
+    min_share: float = 0.8,
+    min_frames: int = 25,
+    moving_m: float = 5.0,
+) -> dict[int, str]:
+    """Tracklets that live on the boundary lines, mapped to the role they get.
+
+    Players cross the lines for a throw-in and come back; the people who stay there
+    are the assistant referees, who run up and down a touchline, and ball boys,
+    stewards and staff, who stand still beside it. The pipeline keeps detections up
+    to 2 m outside the lines, so without this they are all labelled players of
+    whichever team their kit is nearest -- on the 3-minute clip a dozen of them were
+    "away" players.
+
+    A tracklet seen for at least `min_frames` frames, with at least `min_share` of
+    its observations within `on_line_m` of a boundary line or beyond it, is returned:
+    `Role.REFEREE` if it travels more than `moving_m` along the line, else
+    `Role.OTHER`. Positions are the tracklet's own rows in `tracks` (pitch metres,
+    centre origin).
+    """
+    out: dict[int, str] = {}
+    if tracks.empty:
+        return out
+    by_tid = {int(t): g for t, g in tracks.groupby("track_id", observed=True)}
+    for t in tracklets:
+        rows = [by_tid[i] for i in t.track_ids if i in by_tid]
+        if not rows:
+            continue
+        g = pd.concat(rows)
+        if len(g) < min_frames:
+            continue
+        x, y = g["x"].to_numpy(float), g["y"].to_numpy(float)
+        on_line = (np.abs(y) >= half_width - on_line_m) | (np.abs(x) >= half_length - on_line_m)
+        if on_line.mean() < min_share:
+            continue
+        span = max(np.ptp(x), np.ptp(y))
+        out[t.id] = Role.REFEREE.value if span > moving_m else Role.OTHER.value
+    return out
+
+
 def apply_to_state(state: MatchState, tracklets: list[Tracklet]) -> MatchState:
     """Rewrite track_id, team and role in a MatchState from resolved tracklets.
 

@@ -66,7 +66,9 @@ Các lỗi có sẵn trong fork, không do việc hợp nhất gây ra; commit `
 
 Clip 3 phút sau cả hai commit: 81.23% frame có calibration (không đổi), 139 lần neo lại, 178 tracklet, ~530 s/phút trận có model bóng, 9.0 v 8.7 cầu thủ/frame. `validate()` giờ báo cầu thủ trải 103% bề rộng 68 m: tìm thêm được người dọc biên, và trợ lý trọng tài vẫn bị tính là cầu thủ vì clip này chưa tách được trọng tài. Không phải lỗi calibration (verdict vẫn good).
 
-Còn mở: trên clip 3 phút trọng tài chưa được tách, nằm lẫn trong hai đội. Tắt ngưỡng id để thử: cụm 94 mảnh (16.7% số lần xuất hiện) cho 3.3 "trọng tài"/frame, trung vị cầu thủ tụt còn 17 và `validate()` báo thiếu người, tức là lại tách quá tay. Cần tách theo tracklet sau khi nối, hoặc thêm vị trí (trợ lý trọng tài đi dọc biên), thay vì chỉ màu áo.
+Người đứng trên vạch biên (commit `4c5bb56`): pipeline giữ detection tới 2 m ngoài vạch, nên trợ lý trọng tài chạy dọc biên và nhặt bóng, nhân viên đứng cạnh biên bị gán làm cầu thủ của đội có màu áo gần nhất. `identity.touchline_people`: tracklet >= 25 frame có >= 80% số lần xuất hiện trong 0.5 m quanh vạch hoặc ngoài vạch thì bị đưa ra khỏi đội trước quota 11 người, di chuyển > 5 m là trợ lý trọng tài, còn lại là `other`. Clip 3 phút: 3 trợ lý trọng tài và 8 người khác ra khỏi đội, `validate()` **sạch** (hết cảnh báo 103% bề rộng), trung vị cầu thủ/frame vẫn 21.
+
+Còn mở: trọng tài chính trên clip 3 phút chưa được tách. Cụm màu áo thứ ba ở clip này là trọng tài (áo đỏ đen, track dài nhất 2777 frame), **thủ môn áo hồng** (nhiều mảnh) và crop chen chúc của cầu thủ áo trắng, chiếm 44% id, nên `split_officials` từ chối là đúng. Tắt ngưỡng id thì tách quá tay (3.3 "trọng tài"/frame, trung vị cầu thủ còn 17). Tách theo tracklet sau khi nối thì kéo luôn thủ môn vào (đã thử trên clip 30 s). Giới hạn trong vòng cấm chỉ bắt được 2/4 mảnh của thủ môn. Màu áo một mình không đủ ở 720p: bước tiếp theo nên là bộ phân loại vai trò trên từng crop (cầu thủ / thủ môn / trọng tài).
 
 ## 4. Compute và chi phí
 M2 cho test và clip ngắn; Colab A100 cho panorama và chấm điểm. Cost per processed match = (giây/phút trận trên A100) x giá GPU/giờ; điền sau F1.
