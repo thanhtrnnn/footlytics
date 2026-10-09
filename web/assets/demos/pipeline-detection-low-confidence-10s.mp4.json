@@ -1,0 +1,9 @@
+{
+  "source": "https://raw.githubusercontent.com/scalliontor/Footlytics/c787ff6d8bbd317f2d14761507dc8a2650556144/docs/demos/pipeline-detection-low-confidence-10s.mp4",
+  "commit": "c787ff6d8bbd317f2d14761507dc8a2650556144",
+  "license": "CC BY 4.0 as attributed in upstream docs/demos/README.md",
+  "provider": "SoccerTrack v2 / AtomScott and contributors",
+  "match": "117092",
+  "sha256": "b7cb796dc1dec62afd448bb25cd3d32c5200af3a30f45eb649623efb53deb410",
+  "bytes": 3820813
+}

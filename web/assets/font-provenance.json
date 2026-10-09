@@ -1,0 +1,34 @@
+[
+  {
+    "file": "display.woff2",
+    "family": "Roboto Condensed",
+    "source": "https://fonts.gstatic.com/l/font?kit=ieVl2ZhZI2eCN5jzbjEETS9weq8-59CpsyYyStJ-WABcyfli6VRnBuy69Yg61asmup3fxm_vugS76Eel2yOLfVm7-QSZFJwyBIQ_NInzfxiv805HuqdFJ_-588CM63iZg2bGjjZVanTZaAFM9jByJnrrXxrw4lFv7CPmiUwBFgKdgTGWCFItZ9_TEEWhZDAx-CGFKkTtF33FXavMo9ke5v3wXgTzJ0QHmVJEfWuZAaex5DJP_g-M3xW5w_YrpZfHtd2zoIFBgyBhxC_tgZA2G32_HhNyGHKjNj6uYinPmTNiFVCrR5NaMrVQ-qfsMUXG3bRzEpcVf1sYSn1zU46CU6t1tLaxfTkvNFW3ICcOYXgDWbTx9eg4a0U43pkuXyjg2o4800KRL1iOvTobSMMr1ntNWb1JOKTNrbeXvegnUF3wdgrXcn2bNMQYuTQd0kVeFynDv09nBsc3o7iZ8xapAdW0FeJQ6F3_AQe2viQvD61kXMRmTZR7HcJSYblEju00kL61vmKHDSeN7hoqG-Vqrz9YV1QCDISr1LemEpgR51f14mroK37O4ECuCVArWN1zbrPqlQxeamP4qqAs77HrAhvi-9zUqpJEPP4e0w2QmkXPnz3-JtqtNWwG9IYVjv1kdFSruD1Y0PPQEyhTBib5N9VHLzZ6vkIJbhpuy7SwYgGVaPtyEKo5JI11245tRudOIG1U-_kRJAR821-U3nEUZ26Vz8ax2QftwczAT92UIbUXajYCmiV9YC7Tq3JetZ2dLJ1WqNcKs-Kv30COtGLN9L8F90QzP-ITdwT4B_HvYSGYeW6BAkl7W242vshUOqFHA2N-jGRPm1nsJvoQhyfIO95wq0EHBrvS5FDPXwDfAU4vx6yupcWgxww5lP-sjywJRQZlUZMsuiEZfONEDjtWjUeOiwhkEndw5z0PGeuURKu2-MUdVUARfV42DvsrOnO5jidT_JM&skey=9986ecffddb755ab&v=v31",
+    "date": "2026-10-08",
+    "kind": "self-hosted font subset"
+  },
+  {
+    "file": "body.woff2",
+    "family": "Manrope",
+    "source": "https://fonts.gstatic.com/l/font?kit=xn7gYHE41ni1AdIRsgWj9NjWXP-sRWsTf-bu9ZHXVvbxOISF9D6in01e0jcnxbjiLxM2JfBM2UvRphuTon4TBMYZCStf-pe0G043s3BhkCRHlUNJ7V6virWC0hzbWrIOL_yUwFZxn-qFdKLXcRaYm8g6Jwe3XARM-S2BjkaGS5dcYenQanJS2JO2TIBFdJWwm9U6YktmDTq4SUA_wztI-9qQCJ3Px-f6UnL7cn8-k4lGquaJYe3FWAJ7n1WAcr98ra043Ob-vNbjBzDvx9zgR16HPASizsfjhsipYbjTLpjXkgV_xeawshq18wPA2glfCPkHwpqyGYP0seQZnyul6mObgrIfFBVaZYfdAZG-PtzywpQNlp4OFFnaAtgh_nUB_7mlgEdOi_tOHcFcDehdnC-gQ5UViP50qVlWebpC1_0p4ewqckFIVnqlrK_iuD1Qs8xgC8Vwzq8_Zxo1ocS49-5VIpXCEiZ5a4CMV3UFnR1vfbtkEYFWk7TVS4bk0u6_vmA2wemdMu9XBPst50802OmzPlKqMCZT4szHgfGOLO5Q91V_JV0NCzlbZXLvzk1jN-vwHXjVRH0T3cjpIuyjMToDBsO790pjxF3IFAWGadCGeu5CVCrJczSa0Y_XCpq50bnhEkulovgdtZTC-mfBXqRX83B4IRNT8c7BsrK1z6k9_gY_obIUEueGgI_OA2Nr3TIEmF95Zsvt8TSZRzblkNXlxDOJtR7J1JK0qn_FvjtMF8uIna0i9QqpFLV-CVYWos_qKVEsDItUPFGU1JgJTfrvQT91J0ASGkTfFzE5jIWRI-5fpeD9Ar0XaS7aj2ipiKwjr0KMQDVmivJZKjqRYJObrLKgLtQwjcMGm9Px8H6GQyV9ees4DMKNjycWxpIwE47ue5eZ_lzlV10d38z2Gok06L4RAfTPaa-cXEpvs19AVpjZ6swYKtI8du0&skey=c397ded15edc0853&v=v20",
+    "date": "2026-10-08",
+    "kind": "self-hosted font subset"
+  },
+  {
+    "file": "dx-figgle.otf",
+    "family": "Dx Figgle Free to Try",
+    "source": "User supplied Dx-Figgle-Free-To-Try-new.zip",
+    "date": "2026-10-09",
+    "kind": "unmodified self-hosted OpenType font",
+    "license": "User explicitly confirmed Web Font license for footlytics.space on 2026-10-09; attached trial terms alone do not authorize commercial use.",
+    "glyph_coverage": "213 codepoints; Vietnamese headings containing unsupported codepoints use Replay Display as a whole role."
+  },
+  {
+    "file": "bricolage-grotesque.ttf",
+    "family": "Bricolage Grotesque",
+    "source": "https://github.com/google/fonts/tree/main/ofl/bricolagegrotesque",
+    "date": "2026-10-09",
+    "kind": "unmodified self-hosted variable TrueType font",
+    "license": "SIL Open Font License; adjacent bricolage-grotesque-OFL.txt",
+    "roles": "All display headings, brand and technology labels; headline weight 550, technology labels 500. Vietnamese supported."
+  }
+]

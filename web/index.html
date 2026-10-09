@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>footlytics — Từ điểm ảnh đến dữ liệu sân</title>
+  <meta name="description" content="Prototype chuyển video bóng đá thành dữ liệu sân: calibration, camera motion, tracking trong mét, Match State và analytics. Khám phá cơ chế, số đo và Tactical Query đang phát triển.">
+  <meta name="theme-color" content="#15372d">
+  <link rel="canonical" href="https://footlytics.space/">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="vi_VN">
+  <meta property="og:title" content="footlytics — Từ điểm ảnh đến dữ liệu sân">
+  <meta property="og:description" content="Geometry. Tracking. Match State. Một pipeline phân tích bóng đá có thể kiểm tra.">
+  <meta property="og:url" content="https://footlytics.space/">
+  <meta property="og:image" content="https://footlytics.space/assets/social.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/assets/bricolage-grotesque.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/site.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#showcase">Đi đến nội dung chính</a>
+<header class="site-header">
+  <a href="/" class="wordmark" aria-label="footlytics, trang chủ"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 25V7h22v18M5 16h22M16 7v18"/><circle cx="16" cy="16" r="4"/></svg>footlytics<span class="brand-dot">.</span></a>
+  <nav aria-label="Điều hướng chính"><a href="#showcase">Demo</a><a href="#pipeline">Công nghệ</a><a href="#quality">Chất lượng</a><a href="/about">Về startup</a></nav>
+  <a class="header-link" href="mailto:kickoff@footlytics.space">Liên hệ <svg class="external-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></a>
+</header>
+<main>
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="hero-intro"><h1 id="hero-title">Trận đấu có<br><em>nhiều lớp để đọc.</em></h1><div class="hero-copy"><p>footlytics biến video bóng đá thành dữ liệu sân. Từ nhận diện và hình học tới tracking, radar và phân tích cấu trúc đội.</p><a class="text-action" href="#showcase">Xem demo thật <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a><p class="hero-stage">Prototype đang phát triển · Xử lý offline</p></div></div>
+    <figure class="hero-film">
+      <video id="hero-video" playsinline muted loop preload="none" poster="/assets/demos/hero-poster.jpg" aria-label="Trích video bóng đá trong showcase ground truth"><source src="/assets/demos/hero-reel.mp4" type="video/mp4"></video>
+      <div class="film-controls"><span>Video trận đấu + annotations</span><button id="reel-toggle" type="button" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 10 7-10 7z"/></svg><span>Phát trích đoạn · 10s</span></button><a href="#showcase">Mở toàn bộ showcase</a></div>
+      <figcaption>Trích lớp video từ showcase ground truth · SoccerTrack v2, trận 117092. Có annotations cung cấp sẵn; đây không phải kết quả model tự nhận diện.</figcaption>
+      <p id="reel-status" class="media-status" aria-live="polite"></p>
+    </figure>
+    <div class="technology-strip" aria-label="Các lớp công nghệ"><span>Computer vision</span><span>Camera geometry</span><span>Tracking trong mét</span><span>Match State</span><span>Tactical analytics</span></div>
+  </section>
+
+  <section class="showcase-section section" id="showcase" aria-labelledby="showcase-title">
+    <div class="section-heading"><h2 id="showcase-title">Xem trận đấu.<br>Rồi mở từng lớp.</h2><p>Bốn đoạn phim từ repository Footlytics. Ground truth cho thấy cách đọc dữ liệu; video prediction cho thấy cả đầu ra và lỗi còn lại của model.</p></div>
+    <div class="showcase-layout">
+      <figure class="demo-stage"><video id="demo-video" controls playsinline preload="none" poster="/assets/demos/gt-video-radar-40s.jpg" aria-labelledby="demo-title" aria-describedby="demo-description demo-limit"><source src="/assets/demos/gt-video-radar-40s.mp4" type="video/mp4"></video><figcaption><span id="demo-kind">Ground truth · 40 giây · 25 fps</span><a id="demo-file" href="/assets/demos/gt-video-radar-40s.mp4">Mở video riêng</a></figcaption><p id="demo-status" class="media-status" aria-live="polite">Chọn Phát để tải video. Không tự tải cả thư viện.</p><button id="demo-retry" class="retry" type="button" hidden>Tải lại video</button></figure>
+      <div class="demo-program"><h3 id="demo-title">Video &amp; radar đồng bộ</h3><p id="demo-description">Footage thật, bbox và số áo từ annotations, cùng radar và quỹ đạo. Hai góc nhìn của cùng một đoạn trận đấu.</p><p id="demo-limit" class="demo-limit">Dùng ground truth cung cấp sẵn, không đo accuracy của model.</p>
+      <div class="demo-selector" role="group" aria-label="Chọn video showcase">
+        <button type="button" data-demo="gt40" aria-pressed="true"><img src="/assets/demos/gt-video-radar-40s.jpg" width="1000" height="984" alt="" loading="lazy"><span><strong>Video &amp; radar</strong><small>Ground truth · 40s</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" data-demo="gt240" aria-pressed="false"><img src="/assets/demos/gt-radar-4min.jpg" width="1000" height="667" alt="" loading="lazy"><span><strong>Quỹ đạo dài hơn</strong><small>Ground truth · 4 phút</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" data-demo="model25" aria-pressed="false"><img src="/assets/demos/pipeline-detection-10s.jpg" width="1000" height="1056" alt="" loading="lazy"><span><strong>Pipeline tự nhận diện</strong><small>Prediction · conf 0.25</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+        <button type="button" data-demo="model10" aria-pressed="false"><img src="/assets/demos/pipeline-detection-low-confidence-10s.jpg" width="1000" height="1056" alt="" loading="lazy"><span><strong>Mở rộng ngưỡng nhận</strong><small>Prediction · conf 0.10</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+      </div><p class="comparison-note">Hai video prediction đổi cả confidence lẫn pitch margin. Chưa thể dùng chúng như thí nghiệm chỉ thay một ngưỡng.</p></div>
+    </div>
+    <details class="demo-provenance"><summary>Nguồn footage, giấy phép và giới hạn phép chiếu</summary><div><p>SoccerTrack v2 / AtomScott và các contributors · <a href="https://huggingface.co/datasets/atomscott/soccertrack-v2">Dataset gốc</a> · <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>. Footlytics trích đoạn, mã hoá lại và thêm bbox, radar, quỹ đạo, smoothing và bố cục ghép. Không hàm ý tác giả dataset bảo chứng sản phẩm.</p><p>Radar legacy dùng giả định sân 105 × 76m chưa xác minh, trong khi dataset card ghi 105 × 68m. Những demo này minh hoạ cách hiển thị; chưa chứng minh calibration trong mét, tốc độ, formation hay identity chính xác.</p><p><a href="https://github.com/scalliontor/Footlytics/blob/c787ff6d8bbd317f2d14761507dc8a2650556144/docs/demos/README.md">Đọc README của bản demo đã công bố</a> · Commit c787ff6.</p></div></details>
+    <noscript><p>JavaScript đang tắt. Video đầu vẫn phát bằng điều khiển trình duyệt; mở các video khác: <a href="/assets/demos/gt-radar-4min.mp4">Radar 4 phút</a>, <a href="/assets/demos/pipeline-detection-10s.mp4">Prediction 0.25</a>, <a href="/assets/demos/pipeline-detection-low-confidence-10s.mp4">Prediction 0.10</a>.</p></noscript>
+  </section>
+
+  <section class="pipeline-section section" id="pipeline" aria-labelledby="pipeline-title">
+    <div class="section-heading"><h2 id="pipeline-title">Đổi model.<br>Giữ một chuẩn dữ liệu.</h2><p>Perception nhìn điểm ảnh. Analytics đọc vị trí trong mét. Match State là hợp đồng nối hai phần, để đầu ra có thể kiểm tra và dùng lại.</p></div>
+    <nav class="chapter-nav" aria-label="Các chương công nghệ"><a href="#geometry">Camera &amp; geometry</a><a href="#tracking">Tracking &amp; identity</a><a href="#analytics">Analytics</a><a href="#quality">Chất lượng</a><a href="#roadmap">Tactical Query</a></nav>
+    <ol class="pipeline"><li><span>01</span><h3>Video</h3><p>Camera &amp; thời gian</p></li><li><span>02</span><h3>Perception</h3><p>Detection &amp; geometry</p></li><li class="pipeline-core"><span>03</span><h3>Match State</h3><p>Tracking · mét · validate</p></li><li><span>04</span><h3>Analytics</h3><p>Đặc trưng &amp; chỉ số</p></li><li><span>05</span><h3>Đầu ra</h3><p>Radar · overlay · quality</p></li></ol>
+    <div class="data-contract"><div><h3>17 cột. Một observation mỗi frame.</h3><p>Frame, thời gian, track, vai trò, đội, bbox, confidence, vị trí và động học. Parquet lưu quan sát; metadata giữ ngữ cảnh trận.</p><p class="note">validate() kiểm cấu trúc và điều kiện dữ liệu; không tự chứng minh vị trí đúng ground truth.</p></div><pre aria-label="Schema Match State"><code>frame_idx   period   timestamp
+track_id    role     team     jersey
+bbox_x      bbox_y   bbox_w   bbox_h
+det_conf    x        y        z
+speed       accel
+
+tracks.parquet  +  meta.json</code></pre></div>
+    <a class="source-link" href="https://github.com/thanhtrnnn/footlytics/blob/2f584af8046b0643f4ea7d73093d28a38d90e5a5/docs/technical-plan.md">Đọc kiến trúc và hợp đồng dữ liệu <svg class="external-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></a>
+  </section>
+
+  <section class="geometry-section section" id="geometry" aria-labelledby="geometry-title">
+    <div class="section-heading"><h2 id="geometry-title">Camera đổi góc.<br>Sân giữ hệ toạ độ.</h2><p>Độ chính xác bắt đầu trước tracking: mô hình sân, điểm chân và phép chiếu. Sai số hình học đi qua mọi lớp phía sau.</p></div>
+    <div class="geometry-lab">    <div class="projection-desk">
+      <div class="desk-toolbar"><span>Khám phá phép chuyển đổi</span><span class="desk-unit" id="desk-unit">Toạ độ sân · mét</span></div>
+      <svg class="pitch" id="projection-pitch" viewBox="0 0 840 490" role="img" aria-labelledby="pitch-title pitch-desc">
+        <title id="pitch-title">Minh hoạ khái niệm vị trí và phép chiếu trên sân</title><desc id="pitch-desc">Dữ liệu tổng hợp, không phải output của trận thật. Chọn lớp bên dưới để xem hình ảnh phối cảnh, phép chiếu xuống sân hoặc quỹ đạo minh hoạ.</desc>
+        <g id="field-lines" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="50" y="45" width="740" height="400"/><path d="M420 45v400"/><circle cx="420" cy="245" r="64"/><circle cx="420" cy="245" r="2"/><path d="M50 120h115v250H50m0-178h40v106H50m740-178H675v250h115m0-178h-40v106h40"/><path d="M165 195a65 65 0 0 1 0 100m510-100a65 65 0 0 0 0 100"/></g>
+        <g class="pitch-guides" id="pitch-guides" fill="none" stroke="currentColor" stroke-dasharray="4 7"><path d="M50 245h740M235 45v400M605 45v400"/></g>
+        <g id="track-lines" class="track-lines" fill="none"><path d="M285 280 304 273 320 260 341 250"/><path d="M523 160 511 174 496 193 480 205"/></g>
+        <g id="players-home" class="players-home"><circle cx="83" cy="245" r="7"/><circle cx="210" cy="130" r="7"/><circle cx="187" cy="220" r="7"/><circle cx="187" cy="305" r="7"/><circle cx="219" cy="377" r="7"/><circle cx="310" cy="163" r="7"/><circle cx="320" cy="260" r="7"/><circle cx="318" cy="348" r="7"/><circle cx="427" cy="103" r="7"/><circle cx="441" cy="226" r="7"/><circle cx="407" cy="386" r="7"/></g>
+        <g id="players-away" class="players-away"><circle cx="756" cy="245" r="7"/><circle cx="624" cy="126" r="7"/><circle cx="647" cy="220" r="7"/><circle cx="644" cy="300" r="7"/><circle cx="626" cy="379" r="7"/><circle cx="518" cy="160" r="7"/><circle cx="514" cy="277" r="7"/><circle cx="540" cy="353" r="7"/><circle cx="458" cy="125" r="7"/><circle cx="470" cy="242" r="7"/><circle cx="442" cy="364" r="7"/></g>
+        <g id="calibration-anchors" class="calibration-anchors" fill="none"><circle cx="50" cy="45" r="11"/><circle cx="790" cy="45" r="11"/><circle cx="50" cy="445" r="11"/><circle cx="790" cy="445" r="11"/><circle cx="420" cy="45" r="11"/><circle cx="420" cy="445" r="11"/></g>
+        <circle class="ball" cx="457" cy="234" r="4"/>
+        <text x="50" y="476" class="pitch-scale">x dọc sân / y ngang sân / gốc tâm sân</text>
+      </svg>
+      <div class="desk-controls" role="group" aria-label="Chọn lớp minh hoạ"><button type="button" data-layer="image" aria-pressed="false">Điểm ảnh</button><button type="button" data-layer="pitch" aria-pressed="true">Chiếu xuống sân</button><button type="button" data-layer="track" aria-pressed="false">Theo dõi</button></div>
+      <p class="desk-caption" id="layer-caption" aria-live="polite">Minh hoạ cơ chế · dữ liệu tổng hợp. Các điểm được đưa về hệ toạ độ sân; không phải bản chạy pipeline.</p>
+    </div>
+<div class="lab-copy"><h3>Từ camera tới mặt sân.</h3><p>Đổi lớp để khám phá phép chiếu và quỹ đạo. Đây là minh hoạ tương tác dùng dữ liệu tổng hợp; các video trận thật nằm ở showcase phía trên.</p><a class="source-link" href="#showcase">Đối chiếu với demo thật</a></div></div>
+    <div class="geometry-layout">
+      <figure class="geometry-diagram"><svg viewBox="0 0 620 350" role="img" aria-labelledby="geo-title"><title id="geo-title">Sơ đồ khái niệm điểm ảnh về frame neo rồi chiếu xuống sân</title><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M75 42h350l80 112H30z"/><path d="M55 80h393M44 111h425M170 42l-25 112M310 42l25 112"/><rect x="125" y="226" width="370" height="90"/><path d="M310 226v90"/><circle cx="310" cy="271" r="29"/><path d="M165 118l35 130M378 118l-5 130" stroke-dasharray="5 6"/></g><g class="geo-anchor"><circle cx="165" cy="118" r="5"/><circle cx="378" cy="118" r="5"/><circle cx="200" cy="248" r="5"/><circle cx="373" cy="248" r="5"/></g><text x="75" y="27">IMAGE SPACE</text><text x="125" y="340">PITCH SPACE · METRES</text><text x="230" y="193">DLT + TPS</text></svg><figcaption>Minh hoạ geometry. Landmark/calibration vẫn cần được chọn và kiểm overlay theo camera.</figcaption></figure>
+      <div class="mechanism-list"><article><h3>DLT + TPS</h3><p>Mô hình sân có 35 landmark. DLT ánh xạ điểm ảnh; TPS hiệu chỉnh méo còn lại. Điểm chân từ bbox được chiếu xuống sân.</p></article><article><h3>KLT + SIFT</h3><p>Theo chuyển động giữa frame và neo lại vào frame tham chiếu để hạn chế drift khi lia/zoom. Điểm được đưa về frame neo trước khi qua calibration.</p></article><article><h3>Mất calibration có trạng thái</h3><p>Frame không xác định được phép chiếu không được dùng như vị trí mét hợp lệ. Tracking coast có giới hạn; cut dài có thể tạo tracklet mới.</p></article></div>
+    </div>
+    <details><summary>Residual, drift và accuracy khác nhau thế nào?</summary><div><p>Residual trên landmark đã dùng để fit không đại diện sai số vị trí toàn sân. Drift camera đo bằng pixel không là tracking error trong mét. Cần ground truth và phép đo riêng để khẳng định độ chính xác.</p><p>Camera cố định là trường hợp biến đổi gần identity; không có cam kết tự hiệu chuẩn hoặc hỗ trợ mọi broadcast cut.</p></div></details>
+  </section>
+
+  <section class="tracking-section section" id="tracking" aria-labelledby="tracking-title">
+    <div class="section-heading"><h2 id="tracking-title">Theo dõi chuyển động.<br>Giữ ranh giới giữa những người.</h2><p>Pixel không có một tỷ lệ vận tốc ổn định khi camera thay đổi. Tracking trên sân dùng vị trí và chuyển động trong mét.</p></div>
+    <div class="tracking-flow"><div class="tracking-observation"><h3>Quan sát</h3><p>YOLO cho người; pass riêng cho bóng nhỏ. Tile và độ phân giải là cấu hình từng lượt chạy.</p><code>bbox → feet → (x, y)</code></div><div class="tracking-model"><h3>Dự đoán &amp; ghép</h3><p>Kalman giữ trạng thái vị trí/vận tốc. Hungarian ghép quan sát với track; appearance và gate chuyển động hỗ trợ phân biệt.</p><code>[x, y, vx, vy] · metres</code></div><div class="tracking-identity"><h3>Nối tracklet</h3><p>Ràng buộc thời gian, đội và jersey veto khi có dữ liệu đọc. Quota đội theo thời gian hạn chế ghép thiếu cân bằng.</p><code>track → tracklet → identity</code></div></div>
+    <div class="tracking-limit"><h3>Identity vẫn là bài toán mở.</h3><p>Giao cắt, occlusion và mất calibration còn gây phân mảnh. Interface nhận số áo chưa là OCR hoàn thiện; quota 11 người không chứng minh luôn có 22 ID chính xác. Tách trọng tài còn hạn chế trên clip 3 phút.</p></div>
+  </section>
+
+  <section class="analytics-section section" id="analytics" aria-labelledby="analytics-title">
+    <div class="section-heading"><h2 id="analytics-title">Làm sạch quỹ đạo.<br>Rồi mới đọc chỉ số.</h2><p>Jitter không tự triệt tiêu khi cộng quãng đường. Pipeline dùng Hampel và làm mượt trước khi tính động học.</p></div>
+    <div class="analytics-layout"><figure class="signal-figure"><svg viewBox="0 0 660 240" role="img" aria-labelledby="signal-title"><title id="signal-title">Minh hoạ khái niệm quỹ đạo có spike và quỹ đạo đã làm mượt, không phải dữ liệu trận thật</title><path d="M40 30v170h580" class="signal-axis"/><polyline points="40,150 80,143 120,148 160,95 200,134 240,118 280,128 320,30 360,105 400,98 440,110 480,78 520,89 560,70 600,75" class="signal-raw"/><path d="M40 150C130 147 150 133 220 130S330 113 370 106S490 89 600 75" class="signal-smooth"/><text x="43" y="229">THỜI GIAN</text><text x="480" y="40">Raw / smoothed</text></svg><figcaption>Minh hoạ tín hiệu tổng hợp. Smoothing có thể làm mất chuyển động ngắn; cần chọn theo mục đích.</figcaption></figure><div class="analytics-copy"><h3>Hampel → smoothing → kinematics</h3><p>Tốc độ, gia tốc, quãng đường; add_kinematics dùng cửa sổ làm mượt mặc định 0.8 giây.</p><h3>Đọc cấu trúc đội</h3><p>Width, depth, centroid, formation, press distance và transitions có nền tảng module. Mỗi hàm cần dữ liệu đầu vào phù hợp.</p><p class="note">Possession hiện lấy từ ballStatus/event feed. PPDA cần events; chưa tự suy ra mọi sự kiện từ video.</p></div></div>
+  </section>
+
+  <section class="quality-section section" id="quality" aria-labelledby="quality-title">
+    <div class="section-heading"><h2 id="quality-title">Bằng chứng có điều kiện.<br>Giới hạn có mẫu số.</h2><p>Quality report ghi phần dữ liệu xuất được. Presence, calibration, sai số vị trí và độ đúng identity là các phép đo khác nhau.</p></div>
+    <div class="run-context"><span>F2 · 23/09/2026</span><p>Brazil–France tactical cam · M2 · YOLOv8x6 tile=0 / 1280 + bóng riêng 1920 · stride 1</p></div>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Bảng kết quả kỹ thuật; cuộn ngang trên màn hình nhỏ"><table><caption>Số đo lịch sử từ tài liệu feasibility §3.4; chưa chạy lại cho bản landing</caption><thead><tr><th scope="col">Phép đo</th><th scope="col">Kết quả</th><th scope="col">Phạm vi &amp; giới hạn</th></tr></thead><tbody><tr><th scope="row">Presence bóng · 30 giây</th><td>745 / 750</td><td>99.3% frame; không phải accuracy</td></tr><tr><th scope="row">Presence bóng · 3 phút</th><td>3605 / 3657</td><td>98.6% frame có calibration; 80.1% toàn clip</td></tr><tr><th scope="row">Calibration · 3 phút</th><td>81.23%</td><td>139 re-anchor; cut cảnh 34 giây bị loại</td></tr><tr><th scope="row">Identity · 3 phút</th><td>261 → 179</td><td>Raw track → tracklet; còn phân mảnh</td></tr><tr><th scope="row">Compute trên M2</th><td>~595 s</td><td>Mỗi phút trận, có model bóng; xử lý offline</td></tr></tbody></table></div>
+    <p class="note">Các cửa sổ 30 giây và 3 phút khác nhau. Không ngoại suy sang cả trận, GPU hoặc mọi camera; không đổi presence thành accuracy.</p>
+    <a class="source-link" href="https://github.com/thanhtrnnn/footlytics/blob/2f584af8046b0643f4ea7d73093d28a38d90e5a5/docs/feasibility.md">Đọc nguồn, cấu hình và ca lỗi <svg class="external-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></a>
+    <article class="engineering-case"><div><h3>Detector thấy bóng.<br>Bộ lọc vẫn làm mất bóng.</h3><p>Báo cáo F2 ghi nhận dùng lề sân cầu thủ cho cả bóng làm mất output gần biên. Tách ball margin đưa presence clip 30 giây từ 11.7% lên 99.3%.</p></div><div><p class="engineering-result">11.7% <span aria-hidden="true">→</span> 99.3%</p><p>Bài học: kiểm cả geometry và bộ lọc sau detector. Presence tăng không tự chứng minh sai số toạ độ giảm.</p><p class="note">Case báo cáo lịch sử; chưa có before/after footage công bố trên trang.</p></div></article>
+  </section>
+
+  <section class="roadmap-section section" id="roadmap" aria-labelledby="roadmap-title">
+    <div class="section-heading"><h2 id="roadmap-title"><span class="primary-display" lang="en">Tactical Query.</span><br>Phần chúng tôi đang xây.</h2><p>Match State và đặc trưng đội là nền tảng. Tìm chuỗi chiến thuật trong nhiều trận cần thêm các lớp suy luận, xác thực và chỉ mục.</p></div>
+    <div class="layer-map"><article><h3>Video → Match State → metrics</h3><span>L0–L2 · Nền tảng có mã</span><p>Vị trí và cấu trúc đội tạo đầu vào cho bước diễn giải.</p></article><article><h3>Possession → chuỗi có kiểm chứng</h3><span>L3–L4 · Còn thiếu để thành sản phẩm</span><p>Suy ra possession độc lập event feed; phát hiện chuỗi bằng quy tắc, để analyst chấm và điều chỉnh.</p></article><article><h3>Index nhiều trận → query</h3><span>L5 · Lộ trình</span><p>Thiết kế DuckDB index, đồng bộ clip/radar và vòng rule → analyst → classifier.</p></article></div>
+    <blockquote class="query-concept"><p>“Tìm các đoạn đối thủ dựng khối phòng ngự thấp.”</p><footer>Câu hỏi concept · Chưa có app query hoặc kết quả trận thật trên landing</footer></blockquote>
+    <a class="source-link" href="https://github.com/thanhtrnnn/footlytics/blob/2f584af8046b0643f4ea7d73093d28a38d90e5a5/docs/tactical-query-vision.md">Đọc tầm nhìn và các lớp còn thiếu <svg class="external-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></a>
+  </section>
+
+  <section class="pilot-section section" id="pilot" aria-labelledby="pilot-title"><div class="section-heading"><h2 id="pilot-title">Xây cùng người<br>đọc trận đấu.</h2><p>footlytics là dự án khởi nghiệp đang phát triển pipeline phân tích video và dữ liệu sân. Pilot kỹ thuật tập trung vào một tác vụ, footage có quyền xử lý và đầu ra analyst có thể chấm.</p></div><ol class="pilot-steps"><li><h3>Chọn tác vụ &amp; camera</h3><p>Xác định câu hỏi chuyên môn và điều kiện footage.</p></li><li><h3>Kiểm một clip</h3><p>Đối chiếu geometry, tracking, quality và đầu ra.</p></li><li><h3>Analyst phản hồi</h3><p>Chấm lỗi, điều chỉnh phạm vi, xác định điều kiện mở rộng.</p></li></ol><div class="pilot-close"><div><p>Trao đổi pilot, footage và tác vụ bạn muốn kiểm chứng.</p><a class="contact-address" href="mailto:kickoff@footlytics.space">kickoff@footlytics.space</a></div><a class="button button-light" href="/about#contact">Bắt đầu trao đổi <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div></section>
+</main>
+<footer class="site-footer"><a href="/" class="wordmark">footlytics<span class="brand-dot">.</span></a><p>Đọc trận đấu qua dữ liệu.</p><div><a href="/about">Về startup</a><a href="mailto:kickoff@footlytics.space">Liên hệ</a><a href="#quality">Điều kiện số đo</a><a href="https://github.com/thanhtrnnn/footlytics">Mã nguồn</a><a href="/privacy.html">Quyền riêng tư</a></div><span>Prototype · © 2026 footlytics</span></footer>
+</body>
+</html>

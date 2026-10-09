@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Về startup · footlytics</title>
+  <meta name="description" content="Về startup footlytics: xây công cụ đọc video bóng đá qua geometry, tracking và dữ liệu sân. Trao đổi pilot tại kickoff@footlytics.space.">
+  <meta name="theme-color" content="#15372d">
+  <link rel="canonical" href="https://footlytics.space/about/">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="vi_VN">
+  <meta property="og:title" content="Về startup · footlytics">
+  <meta property="og:description" content="Geometry. Tracking. Match State. Một pipeline phân tích bóng đá có thể kiểm tra.">
+  <meta property="og:url" content="https://footlytics.space/about/">
+  <meta property="og:image" content="https://footlytics.space/assets/social.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/assets/bricolage-grotesque.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+  
+</head>
+<body class="about-page"><a class="skip-link" href="#about-main">Đi đến nội dung chính</a><header class="site-header">
+  <a href="/" class="wordmark" aria-label="footlytics, trang chủ"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 25V7h22v18M5 16h22M16 7v18"/><circle cx="16" cy="16" r="4"/></svg>footlytics<span class="brand-dot">.</span></a>
+  <nav aria-label="Điều hướng chính"><a href="/#showcase">Demo</a><a href="/#pipeline">Công nghệ</a><a href="/#quality">Chất lượng</a><a href="/about" aria-current="page">Về startup</a></nav>
+  <a class="header-link" href="mailto:kickoff@footlytics.space">Liên hệ <svg class="external-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></a>
+</header>
+<main id="about-main">
+  <section class="about-intro section"><div class="section-heading"><h1>Hiểu trận đấu.<br>Từ những gì thấy được.</h1><div class="about-lead"><p>footlytics là dự án khởi nghiệp xây công cụ phân tích video bóng đá. Chúng tôi muốn đưa những gì camera quan sát được vào một lớp dữ liệu sân mà analyst có thể đọc, đối chiếu và sử dụng.</p><p class="about-stage">Prototype đang phát triển · Tập trung vào kiểm chứng kỹ thuật</p><a class="text-action" href="#contact">Trao đổi về pilot <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></a></div></div></section>
+  <figure class="about-footage"><img src="/assets/demos/hero-poster.jpg" width="1600" height="506" alt="Video trận bóng đá ban đêm với bbox và số áo từ annotations cung cấp sẵn"><figcaption>Trích showcase ground truth · SoccerTrack v2 / AtomScott và contributors · CC BY 4.0. Bbox từ annotations cung cấp sẵn. <a href="/#showcase">Xem demo và nguồn đầy đủ</a>.</figcaption></figure>
+  <section class="section"><div class="section-heading"><h2>Video là điểm bắt đầu.<br>Câu hỏi của analyst là đích đến.</h2><p>Một trận đấu có chuyển động, không gian và những thời điểm cần xem lại. Định hướng của footlytics là kết nối clip với vị trí, quỹ đạo và cấu trúc đội, để việc đọc dữ liệu luôn quay lại được với hình ảnh gốc.</p></div><div class="about-rows"><article><h3>Thị giác &amp; hình học</h3><p>Nhận diện người và bóng; calibration cùng bù chuyển động camera đưa quan sát từ điểm ảnh về hệ toạ độ sân. Chất lượng phép chiếu là điều kiện cho các lớp phía sau.</p></article><article><h3>Tracking &amp; Match State</h3><p>Theo dõi vị trí và chuyển động trong mét, nối tracklet và giữ một hợp đồng dữ liệu chung. Parquet và metadata giúp đầu ra có thể kiểm tra và dùng lại.</p></article><article><h3>Analytics cùng analyst</h3><p>Làm sạch quỹ đạo trước khi đọc động học và cấu trúc đội. Những tác vụ mới cần được đối chiếu trên một clip, với tiêu chí lỗi do analyst cùng xác định.</p></article></div><a class="source-link" href="/#pipeline">Khám phá từng lớp công nghệ</a></section>
+  <section class="section about-progress"><div class="section-heading"><h2>Đang xây.<br>Và đang kiểm chứng.</h2><p>Chúng tôi công bố cơ chế, ví dụ đầu ra và giới hạn để cuộc trao đổi kỹ thuật bắt đầu từ bằng chứng cụ thể.</p></div><div class="about-rows"><article><h3>Đã có nền tảng</h3><p>Pipeline và các module geometry, tracking, Match State, analytics; demo ground truth và video prediction công khai. Hai loại demo phục vụ hai câu hỏi khác nhau.</p></article><article><h3>Cần kiểm chứng thêm</h3><p>Calibration, ID qua occlusion, phân biệt trọng tài và chất lượng trên từng camera. Video prediction chưa có scoring; radar legacy còn giả định kích thước sân chưa xác minh.</p></article><article><h3>Hướng phát triển</h3><p>Tactical Query: chuỗi có analyst kiểm chứng, chỉ mục nhiều trận và vòng phản hồi để tìm lại những tình huống chiến thuật. Đây là lộ trình đang phát triển.</p></article></div></section>
+  <section class="section pilot-section about-contact" id="contact"><div class="section-heading"><h2>Một tác vụ rõ.<br>Một cuộc trao đổi tốt.</h2><div><p>Bạn là analyst, câu lạc bộ hay đối tác kỹ thuật? Hãy bắt đầu bằng câu hỏi chuyên môn, điều kiện camera và đầu ra bạn muốn đối chiếu.</p><a class="contact-address" href="mailto:kickoff@footlytics.space">kickoff@footlytics.space</a><p class="contact-context">Có thể nêu tác vụ, nguồn footage có quyền sử dụng và cách bạn đánh giá kết quả. Chúng tôi sẽ cùng xác định phạm vi trao đổi.</p></div></div><a class="source-link" href="/#showcase">Xem showcase trước khi trao đổi</a></section>
+</main><footer class="site-footer"><a href="/" class="wordmark">footlytics<span class="brand-dot">.</span></a><p>Đọc trận đấu qua dữ liệu.</p><div><a href="/about">Về startup</a><a href="mailto:kickoff@footlytics.space">Liên hệ</a><a href="/#quality">Điều kiện số đo</a><a href="https://github.com/thanhtrnnn/footlytics">Mã nguồn</a><a href="/privacy.html">Quyền riêng tư</a></div><span>Prototype · © 2026 footlytics</span></footer>
+</body>
+</html>

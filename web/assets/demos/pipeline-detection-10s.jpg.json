@@ -1,0 +1,10 @@
+{
+  "source": "https://raw.githubusercontent.com/scalliontor/Footlytics/c787ff6d8bbd317f2d14761507dc8a2650556144/docs/demos/pipeline-detection-10s.jpg",
+  "commit": "c787ff6d8bbd317f2d14761507dc8a2650556144",
+  "license": "CC BY 4.0 as attributed in upstream docs/demos/README.md",
+  "provider": "SoccerTrack v2 / AtomScott and contributors",
+  "match": "117092",
+  "sha256": "e4823854ccad4f1ba0dd7286eafb5e3f9de911337c87b693882a7bb500f6a807",
+  "bytes": 142105,
+  "prompt": "Pre-existing upstream demo poster, unchanged. Origin: https://raw.githubusercontent.com/scalliontor/Footlytics/c787ff6d8bbd317f2d14761507dc8a2650556144/docs/demos/pipeline-detection-10s.jpg. SoccerTrack v2 / AtomScott and contributors, CC BY 4.0; Footlytics overlays/radar. GT and model-prediction provenance follow upstream README."
+}

@@ -13,3 +13,14 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 calib/_synthetic*
+
+# Public landing site and local design/build artifacts
+dist-web/
+!web/assets/demos/*.mp4
+.impeccable/review/
+.impeccable/build/
+.impeccable/config.local.json
+web/.impeccable/review/
+web/.impeccable/build/
+web/.impeccable/config.local.json
+.wrangler/

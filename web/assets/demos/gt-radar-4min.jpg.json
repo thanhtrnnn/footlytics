@@ -1,0 +1,10 @@
+{
+  "source": "https://raw.githubusercontent.com/scalliontor/Footlytics/c787ff6d8bbd317f2d14761507dc8a2650556144/docs/demos/gt-radar-4min.jpg",
+  "commit": "c787ff6d8bbd317f2d14761507dc8a2650556144",
+  "license": "CC BY 4.0 as attributed in upstream docs/demos/README.md",
+  "provider": "SoccerTrack v2 / AtomScott and contributors",
+  "match": "117092",
+  "sha256": "7305c52eda6e42a01a2445a21560029fd146a3945c24d4bbdfa4c38d4d0747e3",
+  "bytes": 56144,
+  "prompt": "Pre-existing upstream demo poster, unchanged. Origin: https://raw.githubusercontent.com/scalliontor/Footlytics/c787ff6d8bbd317f2d14761507dc8a2650556144/docs/demos/gt-radar-4min.jpg. SoccerTrack v2 / AtomScott and contributors, CC BY 4.0; Footlytics overlays/radar. GT and model-prediction provenance follow upstream README."
+}
