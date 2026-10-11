@@ -100,17 +100,41 @@ def _ball_centres(t: pd.DataFrame) -> dict:
     return dict(zip(b["frame_idx"], c))
 
 
+BALL_HIT_PX = 20.0
+
+
+def ball_summary(dists, gt_frames: int, hit_px: float = BALL_HIT_PX) -> dict:
+    """The ball numbers from per-frame distances (px, GT centre to ours) over `gt_frames`
+    GT-ball frames. The distances may be pooled across clips: a clip has no number of its own
+    that averages correctly.
+
+    - `ball_recall`: share of GT-ball frames where our box centre is within `hit_px`.
+    - `ball_px_median_hits`: median distance over those hits (how well a found ball is placed).
+    - `ball_wrong_share`: share of GT-ball frames where we have a box but farther than `hit_px`
+      (the pipeline followed the wrong object). The rest are frames with no box at all.
+    """
+    hits = [x for x in dists if x <= hit_px]
+    if not gt_frames:
+        return {"ball_recall": None, "ball_px_median_hits": None, "ball_wrong_share": None}
+    return {"ball_recall": round(len(hits) / gt_frames, 4),
+            "ball_px_median_hits": round(float(np.median(hits)), 2) if hits else None,
+            "ball_wrong_share": round((len(dists) - len(hits)) / gt_frames, 4)}
+
+
 def ball_metrics(gt: pd.DataFrame, pred: pd.DataFrame, frames,
-                 hit_px: float = 20.0) -> dict:
-    """In the image (detection, not calibration): recall = share of GT-ball frames where our
-    ball box centre is within `hit_px`; px median over frames where both have a box.
-    Interpolated balls have no box and do not count."""
+                 hit_px: float = BALL_HIT_PX) -> dict:
+    """End to end, in the image: our ball box against the GT ball box on each GT-ball frame (see
+    `ball_summary`). It judges the whole pipeline, not the detector alone: a frame without a
+    calibration drops every detection, and the on-pitch filter and the ball selector work on
+    pitch positions. Interpolated balls have no box and do not count as a box.
+
+    `_dists` (the per-frame distances where we have a box) and `_gt_frames` (the GT-ball frame
+    count) are the raw values to pool across clips; they are not metrics to store.
+    """
     g, p = _ball_centres(gt), _ball_centres(pred)
     gt_frames = [f for f in frames if f in g]
     d = [float(np.linalg.norm(g[f] - p[f])) for f in gt_frames if f in p]
-    return {"ball_recall": round(sum(x <= hit_px for x in d) / len(gt_frames), 4)
-            if gt_frames else None,
-            "ball_px_median": round(float(np.median(d)), 2) if d else None}
+    return {**ball_summary(d, len(gt_frames), hit_px), "_dists": d, "_gt_frames": len(gt_frames)}
 
 
 def _shape(xy: np.ndarray) -> dict:

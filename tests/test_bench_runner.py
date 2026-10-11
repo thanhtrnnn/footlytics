@@ -609,11 +609,14 @@ CALIB_STATS = {"keyframes": 1, "keyframes_accepted": 1, "solver_errors": 0}
 _SWAP = {Team.HOME.value: Team.AWAY.value, Team.AWAY.value: Team.HOME.value}
 
 
-def pipeline_fakes(monkeypatch, empty=(), uncalibrated=(), crash=(), real_calibration=False):
+def pipeline_fakes(monkeypatch, empty=(), uncalibrated=(), crash=(), real_calibration=False,
+                   ball_shift=None):
     """No GPU, no model. Calibration is a stub (identity homographies), the pipeline returns the
     ground truth with HOME and AWAY swapped (a side-mapping bug would show as wrong teams).
     `empty`: run_frames raises "no detections at all"; `uncalibrated`: no homography on any
-    frame, so the pipeline sees nothing; `crash`: the calibrator itself raises."""
+    frame, so the pipeline sees nothing; `crash`: the calibrator itself raises;
+    `ball_shift`: `{clip: px}` moves that clip's predicted ball box right by `px` pixels."""
+    ball_shift = ball_shift or {}
     seen = {"vram": [], "calibrated": [], "run": [], "mapped": {}}
     monkeypatch.setattr(runner, "require_vram", lambda mib: seen["vram"].append(mib))
     monkeypatch.setattr(runner, "_detector", lambda paths, cfg: "detector")
@@ -640,6 +643,10 @@ def pipeline_fakes(monkeypatch, empty=(), uncalibrated=(), crash=(), real_calibr
         state = gt_to_state(make_labels(seq=meta.match_id, n_frames=3))
         state.tracks["team"] = (state.tracks["team"].astype(str)
                                 .map(lambda t: _SWAP.get(t, t)).astype("category"))
+        if meta.match_id in ball_shift:
+            tr = state.tracks
+            tr["bbox_x"] = tr["bbox_x"].astype(float)
+            tr.loc[tr["role"].astype(str) == "ball", "bbox_x"] += ball_shift[meta.match_id]
         return state, {"frames_processed": n, "frames_calibrated": n, "calib_success_rate": 1.0}
     monkeypatch.setattr(runner, "run_frames", run_frames)
     return seen
@@ -670,7 +677,10 @@ def test_gsr_pipeline_scores_a_clip_and_its_extras(paths, monkeypatch):
     assert c["team_accuracy"] == 1.0 and agg["team_accuracy"] == 1.0   # the swap is not an error
     assert c["shape_error_m"] is None and agg["shape_error_m"] is None   # 3 a side < min_players
     assert c["ball_recall"] == 1.0 and agg["ball_recall"] == 1.0
-    assert c["ball_px_median"] == 0.0
+    assert c["ball_px_median_hits"] == agg["ball_px_median_hits"] == 0.0
+    assert c["ball_wrong_share"] == agg["ball_wrong_share"] == 0.0
+    assert "ball_px_median" not in c and "ball_px_median" not in agg
+    assert not [k for k in c if k.startswith("_")]               # raw pooling data stays private
     assert c["calib_success_rate"] == 1.0 and agg["calib_success_rate"] == 1.0
     assert c["seconds_per_match_minute"] >= 0 and agg["seconds_per_match_minute"] >= 0
     assert t["leakage"] == {"status": "unverified"} and t["failed"] == {}
@@ -683,6 +693,46 @@ def test_gsr_pipeline_scores_a_clip_and_its_extras(paths, monkeypatch):
     assert seen["calibrated"] == [("SNGS-990", 10, 25.0, False)]
     assert seen["run"] == [("SNGS-990", 3, 25.0, False, "detector")]
     assert seen["mapped"]["SNGS-990"].tolist() == [[5.0, 10.0]]
+
+
+def run_pool(paths, monkeypatch, run_id, **fakes):
+    """Every clip of the split through the fake pipeline; the task's result."""
+    pipeline_fakes(monkeypatch, **fakes)
+    monkeypatch.setattr(runner, "run_gsr", fake_scores([]))
+    return runner.run_suite("t", run_id, paths, "sha", "h", suite_spec=spec(
+        pipeline_task("all")))["tasks"]["gp"]
+
+
+def test_gsr_pipeline_pools_ball_frames_across_clips(paths, monkeypatch):
+    """One clip localises every ball at 4 px, the other picks a wrong object 900 px away on
+    every frame: the aggregate is over the pooled frames, never an average of clip numbers, so
+    the wrong object cannot drag the localisation error and the hits cannot hide the wrongs."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    t = run_pool(paths, monkeypatch, "pl1",
+                 ball_shift={"SNGS-990": 4.0, "SNGS-991": 900.0})
+    assert t["status"] == "complete", t
+    a, b = t["clips"]["SNGS-990"], t["clips"]["SNGS-991"]
+    assert (a["ball_recall"], a["ball_px_median_hits"], a["ball_wrong_share"]) == (1.0, 4.0, 0.0)
+    assert (b["ball_recall"], b["ball_px_median_hits"], b["ball_wrong_share"]) == (0.0, None, 1.0)
+    agg = t["aggregate"]
+    assert agg["ball_recall"] == 0.5 and agg["ball_px_median_hits"] == 4.0
+    assert agg["ball_wrong_share"] == 0.5
+    assert "ball_px_median" not in agg
+    assert not [k for c in t["clips"].values() for k in c if k.startswith("_")]
+
+
+def test_gsr_pipeline_ball_aggregate_weights_clips_by_their_gt_ball_frames(paths, monkeypatch):
+    """A clip with more labelled ball frames counts for more: 3 hits of 3 and 3 hits of 6 pool
+    to 6 of 9, where the mean of the clips' recalls would say 0.75."""
+    write_gsr_clip(paths, seq="SNGS-990", n=3)
+    write_gsr_clip(paths, seq="SNGS-991", n=6)            # the fake pipeline sees 3 of its frames
+    t = run_pool(paths, monkeypatch, "pl2",
+                 ball_shift={"SNGS-990": 4.0, "SNGS-991": 10.0})
+    assert t["clips"]["SNGS-991"]["ball_recall"] == 0.5
+    agg = t["aggregate"]
+    assert agg["ball_recall"] == round(6 / 9, 4) and agg["ball_wrong_share"] == 0.0
+    assert agg["ball_px_median_hits"] == 7.0                      # median of 4, 4, 4, 10, 10, 10
 
 
 def test_gsr_pipeline_isolates_a_clip_with_no_detections(paths, monkeypatch):
