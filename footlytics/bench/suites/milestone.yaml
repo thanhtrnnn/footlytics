@@ -1,0 +1,10 @@
+# Milestones only: the test split is never used for tuning.
+name: milestone
+tasks:
+  - id: sncalib-test
+    kind: sncalib
+    split: test
+    frames: all
+    # SoccerMaster's training games are not published; until they are, the score is reported
+    # with leakage "unverified" and is not quoted externally (spec: Leakage).
+    leakage_games: []

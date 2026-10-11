@@ -151,3 +151,199 @@ def test_preflight_records_the_evaluator_commit(paths, monkeypatch):
     monkeypatch.setitem(runner.KINDS, "ok", lambda task, ctx: {"aggregate": {}})
     row = runner.run_suite("t", "r7", paths, "sha", "h", suite_spec=spec({"id": "a", "kind": "ok"}))
     assert row["env"]["evaluators"]["sn-trackeval"] == sha
+
+
+# ---------------------------------------------------------------- calibration kinds
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
+
+from footlytics.bench.evaluators import CalibScores  # noqa: E402
+from footlytics.geometry.calib_nn import CameraFit  # noqa: E402
+from footlytics.geometry.sn_camera import ground_homography, make_camera  # noqa: E402
+
+CAM = make_camera(0, 80, 0, 750, (0, 55, -15), 960, 540)
+
+
+def jpg(w=96, h=54):
+    return cv2.imencode(".jpg", np.zeros((h, w, 3), np.uint8))[1].tobytes()
+
+
+class FakeCal:
+    def decode(self, frames, **kw):
+        return [({1: {"x": 0.1, "y": 0.1, "p": 1}}, {}) for _ in frames]
+
+    def fit(self, frames, which=None, **kw):
+        H = np.linalg.inv(ground_homography(CAM))
+        return {i: CameraFit(CAM, 3.0, H / H[2, 2]) for i in (which or range(len(frames)))}
+
+
+@pytest.fixture
+def calib(paths, monkeypatch):
+    monkeypatch.setattr(runner, "_calibrator", lambda p: FakeCal())
+    monkeypatch.setattr(runner, "require_vram", lambda mib: None)
+    evals = []
+
+    def fake_eval(python, sc, gt_root, pred_root, split, out_dir, **kw):
+        gts = sorted(p.stem for p in (gt_root / split).glob("*.json"))
+        preds = sorted(p.stem for p in (pred_root / split).glob("camera_*.json"))
+        evals.append((gts, preds))
+        return CalibScores(score=50.0, completeness=100.0 * len(preds) / max(len(gts), 1),
+                           jac=50.0, precision=60.0, recall=70.0)
+    monkeypatch.setattr(runner, "run_sncalib", fake_eval)
+    return evals
+
+
+def write_calib_zip(paths, frames, match=True):
+    paths.calib_zip("valid").parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(paths.calib_zip("valid"), "w") as z:
+        for f in frames:
+            z.writestr(f"valid/{f}.jpg", jpg())
+            z.writestr(f"valid/{f}.json", json.dumps({"Middle line": [{"x": 0.5, "y": 0.2},
+                                                                      {"x": 0.5, "y": 0.8}]}))
+        if match:
+            z.writestr("valid/match_info.json", json.dumps(
+                {f"{f}.jpg": {"league": "l", "season": "s", "match": "m", "date": "d"}
+                 for f in frames}))
+
+
+def test_sncalib_scores_only_the_selected_frames(paths, calib, monkeypatch):
+    write_calib_zip(paths, ["00000", "00001", "00002"])
+
+    def solve(code, jobs, workers=1, **kw):
+        H = np.linalg.inv(ground_homography(CAM))
+        fit = CameraFit(CAM, 2.0, H / H[2, 2])
+        return [(fit, None), (None, "LinAlgError: singular")]
+    monkeypatch.setattr(runner, "solve_many", solve)
+    row = runner.run_suite("t", "c1", paths, "sha", "h", suite_spec=spec(
+        {"id": "sc", "kind": "sncalib", "split": "valid", "frames": ["00000", "00002"]}))
+    t = row["tasks"]["sc"]
+    assert t["status"] == "complete", t
+    gts, preds = calib[0]
+    assert gts == ["00000", "00002"] and preds == ["camera_00000"]    # no match_info, no 00001
+    assert t["aggregate"]["solver_errors"] == 1 and t["aggregate"]["frames"] == 2
+    assert t["aggregate"]["score"] == 50.0 and t["leakage"]["status"] == "unverified"
+    assert t["clips"]["00000"]["calibrated"] == 1 and t["clips"]["00002"]["calibrated"] == 0
+
+
+def test_sncalib_frame_stride_with_exclusions(paths, calib, monkeypatch):
+    write_calib_zip(paths, [f"{i:05d}" for i in range(40)])
+    monkeypatch.setattr(runner, "solve_many", lambda code, jobs, workers=1, **kw:
+                        [(None, None)] * len(jobs))
+    row = runner.run_suite("t", "c2", paths, "sha", "h", suite_spec=spec(
+        {"id": "sc", "kind": "sncalib", "split": "valid",
+         "frames": {"every": 16, "offset": 12, "exclude": ["00028"]}}))
+    assert calib[0][0] == ["00012"]
+
+
+def test_sncalib_leakage_subset_is_scored_when_games_are_listed(paths, calib, monkeypatch):
+    write_calib_zip(paths, ["00000", "00001"])
+    monkeypatch.setattr(runner, "solve_many", lambda code, jobs, workers=1, **kw:
+                        [(None, None)] * len(jobs))
+    row = runner.run_suite("t", "c3", paths, "sha", "h", suite_spec=spec(
+        {"id": "sc", "kind": "sncalib", "split": "valid", "frames": "all",
+         "leakage_games": ["l|s|m|d"]}))
+    lk = row["tasks"]["sc"]["leakage"]
+    assert lk["status"] == "checked" and lk["frames_kept"] == 0
+
+
+def test_sncalib_writes_cameras_at_the_evaluation_resolution(paths, calib, monkeypatch):
+    write_calib_zip(paths, ["00000"])
+    big = make_camera(0, 80, 0, 1500, (0, 55, -15), 1920, 1080)
+    H = np.linalg.inv(ground_homography(big))
+    monkeypatch.setattr(runner, "solve_many", lambda code, jobs, workers=1, **kw:
+                        [(CameraFit(big, 2.0, H / H[2, 2]), None)] * len(jobs))
+    seen = {}
+    real = runner.run_sncalib
+
+    def spy(python, sc, gt_root, pred_root, split, out_dir, **kw):
+        seen.update(json.loads((pred_root / split / "camera_00000.json").read_text()))
+        return real(python, sc, gt_root, pred_root, split, out_dir, **kw)
+    monkeypatch.setattr(runner, "run_sncalib", spy)
+    runner.run_suite("t", "c3b", paths, "sha", "h", suite_spec=spec(
+        {"id": "sc", "kind": "sncalib", "split": "valid", "frames": "all"}))
+    assert seen["principal_point"] == [480.0, 270.0]
+
+
+def write_gsr_clip(paths, seq="SNGS-990", n=3):
+    labels = make_labels(seq=seq, n_frames=n)
+    for img in labels["images"]:
+        img["has_labeled_pitch"] = img["is_labeled"]
+    for a in labels["annotations"]:
+        if a["supercategory"] == "pitch":
+            a["lines"] = {"Middle line": [{"x": 0.5, "y": 0.2}, {"x": 0.5, "y": 0.8}]}
+    d = paths.gsr_labels / "valid" / seq
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "Labels-GameState.json").write_text(json.dumps(labels))
+    paths.gsr_zip("valid").parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(paths.gsr_zip("valid"), "a") as z:
+        for f in range(n):
+            z.writestr(f"{seq}/img1/{f + 1:06d}.jpg", jpg(192, 108))
+
+
+def test_gsr_calibration_scores_labelled_frames_per_clip(paths, calib):
+    write_gsr_clip(paths)
+    row = runner.run_suite("t", "c4", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid", "clips": ["SNGS-990"],
+         "every": 1}))
+    t = row["tasks"]["gc"]
+    assert t["status"] == "complete", t
+    c = t["clips"]["SNGS-990"]
+    assert c["calibrated_share"] == 1.0 and c["keyframes"] == 3 and c["keyframes_accepted"] == 3
+    assert c["solver_errors"] == 0
+    per_clip, combined = calib[0], calib[-1]
+    assert per_clip[0] == ["SNGS-990-000001", "SNGS-990-000002", "SNGS-990-000003"]
+    assert combined[1] == ["camera_SNGS-990-000001", "camera_SNGS-990-000002",
+                           "camera_SNGS-990-000003"]
+    assert "seconds_per_frame" in t["aggregate"]
+
+
+def test_gsr_calibration_writes_cameras_at_the_evaluation_resolution(paths, calib, monkeypatch):
+    write_gsr_clip(paths)
+    big = make_camera(0, 80, 0, 1500, (0, 55, -15), 1920, 1080)
+    H = np.linalg.inv(ground_homography(big))
+
+    class BigCal(FakeCal):
+        def fit(self, frames, which=None, **kw):
+            return {i: CameraFit(big, 3.0, H / H[2, 2]) for i in (which or range(len(frames)))}
+    monkeypatch.setattr(runner, "_calibrator", lambda p: BigCal())
+    seen = {}
+    real = runner.run_sncalib
+
+    def spy(python, sc, gt_root, pred_root, split, out_dir, **kw):
+        for p in (pred_root / split).glob("camera_*.json"):
+            seen[p.name] = json.loads(p.read_text())
+        return real(python, sc, gt_root, pred_root, split, out_dir, **kw)
+    monkeypatch.setattr(runner, "run_sncalib", spy)
+    row = runner.run_suite("t", "c4b", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid", "clips": ["SNGS-990"],
+         "every": 1}))
+    assert row["tasks"]["gc"]["status"] == "complete", row["tasks"]["gc"]
+    assert seen and all(c["principal_point"] == [480.0, 270.0] for c in seen.values())
+
+
+def test_gsr_calibration_reports_solver_errors(paths, calib, monkeypatch):
+    write_gsr_clip(paths)
+
+    class ErrCal(FakeCal):
+        def fit(self, frames, which=None, **kw):
+            self.last_errors = {0: "ZeroDivisionError: x"}
+            out = super().fit(frames, which, **kw)
+            out[0] = None
+            return out
+    monkeypatch.setattr(runner, "_calibrator", lambda p: ErrCal())
+    row = runner.run_suite("t", "c4c", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid", "clips": ["SNGS-990"],
+         "every": 1}))
+    t = row["tasks"]["gc"]
+    assert t["status"] == "complete", t
+    assert t["clips"]["SNGS-990"]["solver_errors"] > 0
+    assert t["aggregate"]["solver_errors"] == t["clips"]["SNGS-990"]["solver_errors"]
+
+
+def test_calibration_suites_are_valid():
+    for name in ("quick", "milestone", "calib-tune"):
+        s = runner.load_suite(name)
+        assert {t["kind"] for t in s["tasks"]} <= set(runner.KINDS)
+    q = runner.load_suite("quick")
+    sc = next(t for t in q["tasks"] if t["kind"] == "sncalib")
+    assert len(sc["frames"]) == 60 and len(set(sc["frames"])) == 60
