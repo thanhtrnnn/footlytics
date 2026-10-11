@@ -600,7 +600,8 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
     A clip whose pipeline produces nothing (calibration or `run_frames` raises, e.g. "no
     detections at all" when no frame was calibrated) is still scored, with an empty predictions
     file: every GT person is a miss. Leaving it out would shrink the GS-HOTA denominator and
-    flatter the score. Only a clip we cannot even prepare (bad labels, no frames) is left out.
+    flatter the score. Only a clip we cannot even prepare (bad labels, no frames) is left out;
+    a ground-truth conversion that fails (it feeds only our extra metrics) does not.
     """
     split, cfg = task["split"], task.get("calibrator", {})
     every, gate = task.get("every", 10), float(task.get("gate_px", 25.0))
@@ -618,7 +619,7 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
     with zipfile.ZipFile(ctx.paths.gsr_zip(split)) as z:
         for seq in _resolve(ctx.paths, split, task.get("clips", "all")):
             try:
-                gt = gt_to_state(_labels(ctx.paths, split, seq))
+                labels = _labels(ctx.paths, split, seq)
                 names = _frame_names(z, split, seq, ctx.paths)
             except Exception as e:  # noqa: BLE001 - no predictions file can be written for it
                 failed[seq] = f"{type(e).__name__}: {e}"
@@ -644,16 +645,20 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                 if calib:           # calibration that found no frame belongs in the mean
                     per[seq]["calib_success_rate"] = round(
                         sum(fc.H_img_to_pitch is not None for fc in calib) / len(calib), 4)
-                # its GT-ball frames are all missed: they stay in the pooled recall's denominator
-                ball = ball_metrics(gt.tracks, gt.tracks.iloc[:0],
-                                    sorted(set(gt.tracks["frame_idx"])))
-                ball_gt += ball.pop("_gt_frames")
-                per[seq].update({k: v for k, v in ball.items() if k != "_dists"})
+                try:        # its GT-ball frames are all missed: they stay in the recall's denominator
+                    gt = gt_to_state(labels)
+                    ball = ball_metrics(gt.tracks, gt.tracks.iloc[:0],
+                                        sorted(set(gt.tracks["frame_idx"])))
+                    ball_gt += ball.pop("_gt_frames")
+                    per[seq].update({k: v for k, v in ball.items() if k != "_dists"})
+                except Exception as ge:  # noqa: BLE001 - no GT state: no frames to charge
+                    per[seq]["ball_error"] = f"{type(ge).__name__}: {ge}"
                 ctx.log(f"{seq}: pipeline produced nothing, scored as misses ({failed[seq]})")
                 continue
             scored.append(seq)
             ran.append(seq)
             try:
+                gt = gt_to_state(labels)      # only our extra metrics need it: the clip is scored
                 sides = team_sides(state.tracks)
                 frames = sorted(set(gt.tracks["frame_idx"]))
                 m = match_people(gt.tracks, state.tracks, frames)

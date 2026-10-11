@@ -861,6 +861,55 @@ def test_gsr_pipeline_a_clip_whose_metrics_fail_is_still_scored(paths, monkeypat
     assert t["clips"]["SNGS-990"]["hota_jersey_off"] == 99.9 and calls
 
 
+def convert_failing_for(monkeypatch, seq):
+    """`gt_to_state` as the runner sees it raises for one clip (the fakes' own copy is not it)."""
+    real = runner.gt_to_state
+
+    def convert(labels):
+        if labels["info"]["name"] == seq:
+            raise ValueError("bad gt")
+        return real(labels)
+    monkeypatch.setattr(runner, "gt_to_state", convert)
+
+
+def test_gsr_pipeline_a_gt_conversion_failure_keeps_the_clip_scored(paths, monkeypatch):
+    """`gt_to_state` feeds only our extra metrics: when it fails the clip's predictions are
+    already written, so the clip stays in the GS-HOTA denominator (the milestone headline must
+    not silently lose a clip); the reason is recorded and the task is partial."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    pipeline_fakes(monkeypatch)
+    calls = []
+    monkeypatch.setattr(runner, "run_gsr", fake_scores(calls))
+    convert_failing_for(monkeypatch, "SNGS-991")
+    row = runner.run_suite("t", "p10", paths, "sha", "h", suite_spec=spec(pipeline_task("all")))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "partial" and t["failed"] == {"SNGS-991": "ValueError: bad gt"}
+    assert len(calls) == 2 and all(c[2] == ("SNGS-990", "SNGS-991") for c in calls)
+    bad = t["clips"]["SNGS-991"]
+    assert bad["error"] == "ValueError: bad gt" and bad["hota_jersey_off"] == 99.9
+    assert json.loads((pipeline_dir(paths, "p10") / "SNGS-991.json").read_text())["predictions"]
+    good = t["clips"]["SNGS-990"]
+    assert "error" not in good and good["hota_jersey_off"] == 99.9 and good["ball_recall"] == 1.0
+    assert t["aggregate"]["hota_jersey_off"] == 99.9
+    assert t["aggregate"]["team_accuracy"] == 1.0 and t["aggregate"]["ball_recall"] == 1.0
+
+
+def test_gsr_pipeline_an_empty_clip_whose_gt_cannot_be_converted_has_no_ball_numbers(
+        paths, monkeypatch):
+    """Without a GT state there is no ball frame count to charge: the clip stays scored and
+    recorded, says why it has no ball numbers, and the aggregate is the other clip's."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    convert_failing_for(monkeypatch, "SNGS-991")
+    t = run_pool(paths, monkeypatch, "pl3b", empty=("SNGS-991",), ball_shift={"SNGS-990": 4.0})
+    assert t["failed"] == {"SNGS-991": "RuntimeError: no detections at all"}
+    dead = t["clips"]["SNGS-991"]
+    assert dead["hota_jersey_off"] == 99.9 and dead["ball_error"] == "ValueError: bad gt"
+    assert "ball_recall" not in dead
+    assert t["aggregate"]["ball_recall"] == 1.0
+
+
 def test_clip_calibration_is_shared_and_fresh_bypasses_it(paths, monkeypatch):
     write_gsr_clip(paths)
     fits = []
