@@ -42,3 +42,5 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# SoccerMaster's checkout imports a deprecated timm path; not ours to fix
+filterwarnings = ["ignore:Importing from timm.models.layers is deprecated:FutureWarning"]

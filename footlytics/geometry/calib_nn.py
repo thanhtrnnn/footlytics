@@ -1,7 +1,7 @@
 """Per-frame camera calibration: SoccerMaster's keypoint and line heads, solved by PnLCalib.
 
-One backbone pass over up to 30 consecutive frames feeds both heads (`SoccerMasterLines`
-loads the backbone and the lines head; this adds the keypoints head). Heatmaps are decoded and
+One pass through the backbone's early layers feeds both heads, frame by frame
+(`SoccerMasterLines` loads the backbone and the lines head; this adds the keypoints head). Heatmaps are decoded and
 solved with PnLCalib's code as vendored in the SoccerMaster repository. That repository has no
 licence (internal R&D), so it is imported from `code_dir` at runtime and never copied here. The
 output is the full SoccerNet camera (`sn_camera`), which SN-Calibration scores, plus the
@@ -42,6 +42,34 @@ def _plain(v):
     return float(v)
 
 
+def _peaks(hm, min_dist: int, k: int, pad_with_ones: bool, scale: int = 2):
+    """Heatmaps [B, C, H, W] -> [B, C, k, 3] (u, v, score) on the CPU: PnLCalib's max-pool
+    decoders (`get_keypoints_from_heatmap_batch_maxpool` and `_l`) without their Python loops.
+
+    A pixel is a peak when it equals the max over its (2 * min_dist + 1)-square window; the k
+    highest peaks per channel come back, best first (a channel with fewer peaks is filled with
+    zero-score, non-peak pixels, which the thresholds drop). `pad_with_ones` is the keypoint
+    flavour: the window is padded with 1.0, so nothing within `min_dist` of the border can be a
+    peak; the line flavour pads with -inf. (u, v) = (column, row) * `scale`: the heatmaps are
+    half the image size. Runs on the heatmaps' device; the result is tiny, so it is moved
+    to the CPU."""
+    import torch
+    import torch.nn.functional as F
+
+    b, c, h, w = hm.shape
+    kernel = 2 * min_dist + 1
+    if pad_with_ones:
+        pooled = F.max_pool2d(F.pad(hm, (min_dist,) * 4, mode="constant", value=1.0), kernel,
+                              stride=1, padding=0)
+    else:
+        pooled = F.max_pool2d(hm, kernel, stride=1, padding=min_dist)
+    scores, idx = torch.topk((hm * (pooled == hm)).reshape(b, c, -1), k, sorted=True)
+    rows = torch.div(idx, w, rounding_mode="floor")
+    cols = idx % w
+    out = torch.stack([cols * scale, rows * scale, scores], dim=-1)
+    return out.float().cpu()
+
+
 class PnlSolver:
     """PnLCalib's decoding and solving, imported from the SoccerMaster checkout."""
 
@@ -61,12 +89,13 @@ class PnlSolver:
 
     def decode(self, kp_hm, line_hm, kp_threshold: float = DEFAULT_KP_THRESHOLD,
                line_threshold: float = DEFAULT_LINE_THRESHOLD) -> list[tuple[dict, dict]]:
-        """Heatmaps [T, 58, h, w] and [T, 24, h, w] (torch) -> per frame (keypoints, lines),
-        normalised to [0, 1]."""
+        """Heatmaps [T, 58, h, w] and [T, 24, h, w] (torch, any device) -> per frame (keypoints,
+        lines), normalised to [0, 1]. Peaks are found by `_peaks` (PnLCalib's decoders,
+        vectorised); PnLCalib's `coords_to_dict` and `complete_keypoints` do the rest."""
         hm = self._hm
-        kp = hm.coords_to_dict(hm.get_keypoints_from_heatmap_batch_maxpool(kp_hm[:, :-1]),
+        kp = hm.coords_to_dict(_peaks(kp_hm[:, :-1], min_dist=15, k=1, pad_with_ones=True),
                                threshold=kp_threshold)
-        ln = hm.coords_to_dict(hm.get_keypoints_from_heatmap_batch_maxpool_l(line_hm[:, :-1]),
+        ln = hm.coords_to_dict(_peaks(line_hm[:, :-1], min_dist=10, k=2, pad_with_ones=False),
                                threshold=line_threshold)
         side = 2 * kp_hm.shape[-1]          # coordinates come back at twice the heatmap size
         return [hm.complete_keypoints(k, l, w=side, h=side, normalize=True)
@@ -145,11 +174,12 @@ class SoccerMasterCalibrator:
     """Backbone + lines head + keypoints head, decoded and solved per frame."""
 
     def __init__(self, code_dir: str | Path, weights_dir: str | Path,
-                 device: Optional[str] = None):
+                 device: Optional[str] = None, batch: int = 8):
         import torch
 
         from .lines_nn import SoccerMasterLines
 
+        self.batch = max(1, int(batch))
         self.code_dir = Path(code_dir)
         self.lines = SoccerMasterLines(code_dir, weights_dir, device=device)
         self.solver = PnlSolver(code_dir)
@@ -167,22 +197,35 @@ class SoccerMasterCalibrator:
         self.last_errors: dict[int, str] = {}
 
     def heatmaps(self, frames_rgb: Sequence[np.ndarray]):
-        """Up to 30 consecutive RGB frames (a still is repeated) -> (kp, lines) heatmaps on CPU."""
+        """Any number of RGB frames -> (kp, lines) heatmaps [n, 58, 256, 256] and
+        [n, 24, 256, 256], float, on the model's device.
+
+        Only the early layers run, in batches of at most `self.batch` frames. That is exact:
+        SoccerMaster's backbone builds blocks 0 .. temporal_start_layer-1 without temporal
+        attention (spatial attention per frame), and both heads read only
+        `local_features_early`, the output of those blocks, taken before the temporal
+        embedding and the temporal layers (which feed only the global features the heads do
+        not use). A frame's heatmaps therefore depend on that frame alone: no 30-frame clip,
+        no padding, and the later 8 layers are skipped. Equal to the full 30-frame path within
+        float noise (`test_early_layer_heatmaps_equal_the_30_frame_path`)."""
         import torch
 
-        from .lines_nn import NUM_FRAMES
-
         frames = list(frames_rgb)
-        if not 0 < len(frames) <= NUM_FRAMES:
-            raise ValueError(f"pass 1 to {NUM_FRAMES} frames, got {len(frames)}")
-        n = len(frames)
-        x = self.lines._preprocess(frames + [frames[-1]] * (NUM_FRAMES - n))
+        if not frames:
+            raise ValueError("pass at least one frame")
+        bb = self.lines.backbone
+        kps, lns = [], []
         with torch.no_grad():
-            local, pooled = self.lines.backbone(x)
-            feats = {"global_features": pooled, "local_features": local}
-            kp = self.kp_head(feats, metas=None)["pred_keypoints_heatmap"][0, :n]
-            ln = self.lines.head(feats, metas=None)["pred_lines_heatmap"][0, :n]
-        return kp.float().cpu(), ln.float().cpu()
+            for i in range(0, len(frames), self.batch):
+                x = self.lines._preprocess(frames[i:i + self.batch])[0]     # [n, 3, 512, 512]
+                n = x.shape[0]
+                f = bb.vision_model_embedding(x)
+                for blk in bb.encoder_blocks[:bb.temporal_start_layer]:
+                    f = blk(f, 1, n)
+                feats = {"global_features": None, "local_features": f[None]}
+                kps.append(self.kp_head(feats, metas=None)["pred_keypoints_heatmap"][0])
+                lns.append(self.lines.head(feats, metas=None)["pred_lines_heatmap"][0])
+        return torch.cat(kps).float(), torch.cat(lns).float()
 
     def decode(self, frames_rgb: Sequence[np.ndarray], kp_threshold: float = DEFAULT_KP_THRESHOLD,
                line_threshold: float = DEFAULT_LINE_THRESHOLD) -> list[tuple[dict, dict]]:

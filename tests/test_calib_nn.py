@@ -154,3 +154,109 @@ def test_solve_many_survives_a_worker_that_dies():
     assert len(out) == len(jobs)
     assert out[3][0] is None and out[3][1].startswith("BrokenProcessPool")
     assert all(r == (None, None) or r[1].startswith("BrokenProcessPool") for r in out)
+
+
+# ---------------------------------------------------------------- speed-up: decoders, heatmaps
+
+def _peak_cases():
+    import torch
+
+    g = torch.Generator().manual_seed(0)
+    rand_kp = torch.rand(2, 57, 256, 256, generator=g)
+    rand_ln = torch.rand(2, 23, 256, 256, generator=g)
+    # peaks on and near the borders, one flat zero channel, one channel of equal values
+    edge_kp = torch.zeros(2, 57, 256, 256)
+    edge_ln = torch.zeros(2, 23, 256, 256)
+    for t in (edge_kp, edge_ln):
+        t[0, 0, 0, 0] = 0.9
+        t[0, 1, 255, 255] = 0.8
+        t[0, 2, 3, 200] = 0.7
+        t[1, 3, 128, 255] = 0.6
+        t[1, 4, 14, 100] = 0.5          # inside the keypoint exclusion border
+        t[1, 5, 16, 100] = 0.5          # just outside it
+        t[1, 6] = 0.25                  # a flat plateau: every pixel ties
+        t[0, 7, 100, 100] = 0.9         # two peaks closer than the line min distance
+        t[0, 7, 100, 105] = 0.8
+        t[0, 7, 100, 140] = 0.6
+    return {"rand": (rand_kp, rand_ln), "edge": (edge_kp, edge_ln)}
+
+
+@needs_code
+@pytest.mark.parametrize("case", ["rand", "edge"])
+def test_peaks_equal_pnlcalib_maxpool_decoders(case):
+    import torch
+
+    from footlytics.geometry.calib_nn import PnlSolver, _peaks
+
+    hm = PnlSolver(CODE)._hm
+    kp, ln = _peak_cases()[case]
+    ref_kp = hm.get_keypoints_from_heatmap_batch_maxpool(kp)
+    ref_ln = hm.get_keypoints_from_heatmap_batch_maxpool_l(ln)
+    mine_kp = _peaks(kp, min_dist=15, k=1, pad_with_ones=True)
+    mine_ln = _peaks(ln, min_dist=10, k=2, pad_with_ones=False)
+    for ref, mine in ((ref_kp, mine_kp), (ref_ln, mine_ln)):
+        assert mine.shape == ref.shape and mine.device.type == "cpu"
+        assert mine.dtype == ref.dtype
+        assert torch.equal(mine[..., :2], ref[..., :2])
+        assert torch.allclose(mine[..., 2], ref[..., 2], atol=1e-6)
+
+
+@needs_code
+def test_decode_matches_pnlcalib_decoders_end_to_end():
+    from footlytics.geometry.calib_nn import PnlSolver
+
+    solver = PnlSolver(CODE)
+    hm = solver._hm
+    kp, ln = _peak_cases()["rand"]
+    kp = torch_pad_background(kp)
+    ln = torch_pad_background(ln)
+    ref_k = hm.coords_to_dict(hm.get_keypoints_from_heatmap_batch_maxpool(kp[:, :-1]), threshold=0.9)
+    ref_l = hm.coords_to_dict(hm.get_keypoints_from_heatmap_batch_maxpool_l(ln[:, :-1]),
+                              threshold=0.9)
+    want = [hm.complete_keypoints(k, l, w=512, h=512, normalize=True) for k, l in zip(ref_k, ref_l)]
+    assert solver.decode(kp, ln, 0.9, 0.9) == want
+
+
+def torch_pad_background(t):
+    import torch
+
+    return torch.cat([t, torch.zeros_like(t[:, :1])], dim=1)
+
+
+needs_weights = pytest.mark.skipif(not (CODE and WEIGHTS),
+                                   reason="set FOOTLYTICS_SOCCERMASTER_CODE/_WEIGHTS")
+
+
+@pytest.fixture(scope="module")
+def calibrator():
+    from footlytics.geometry.calib_nn import SoccerMasterCalibrator
+
+    return SoccerMasterCalibrator(CODE, WEIGHTS, device="cpu", batch=4)
+
+
+@needs_weights
+def test_early_layer_heatmaps_equal_the_30_frame_path(calibrator):
+    import torch
+
+    rng = np.random.default_rng(0)
+    frames = [rng.integers(0, 256, (540, 960, 3), dtype=np.uint8) for _ in range(2)]
+    kp, ln = calibrator.heatmaps(frames)
+    assert kp.shape == (2, 58, 256, 256) and ln.shape == (2, 24, 256, 256)
+
+    lines = calibrator.lines              # the reference: all 30 frames through all 24 layers
+    x = lines._preprocess(frames + [frames[-1]] * (30 - len(frames)))
+    with torch.no_grad():
+        local, pooled = lines.backbone(x)
+        feats = {"global_features": pooled, "local_features": local}
+        ref_kp = calibrator.kp_head(feats, metas=None)["pred_keypoints_heatmap"][0, :2].float()
+        ref_ln = lines.head(feats, metas=None)["pred_lines_heatmap"][0, :2].float()
+    assert torch.allclose(kp.cpu(), ref_kp.cpu(), atol=2e-3)
+    assert torch.allclose(ln.cpu(), ref_ln.cpu(), atol=2e-3)
+
+
+@needs_weights
+def test_heatmaps_take_any_number_of_frames(calibrator):
+    frames = [np.full((54, 96, 3), 20 * i, np.uint8) for i in range(9)]    # more than `batch`
+    kp, ln = calibrator.heatmaps(frames)
+    assert tuple(kp.shape) == (9, 58, 256, 256) and tuple(ln.shape) == (9, 24, 256, 256)
+    assert kp.device.type == calibrator.lines.device
