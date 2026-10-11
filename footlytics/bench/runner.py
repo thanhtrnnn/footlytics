@@ -342,22 +342,30 @@ def sncalib(task: dict, ctx: TaskContext) -> dict:
         group = task.get("batch", 8)
         pending: list[tuple[str, np.ndarray]] = []
 
+        def decode(batch: list[tuple[str, np.ndarray]]):
+            return cal.decode([img[:, :, ::-1] for _, img in batch], **_thresholds(cfg))
+
         def flush():
-            """One network call for the buffered frames; a failure there fails each of them."""
+            """One network call for the buffered frames. If it raises (an out-of-memory batch,
+            or one pathological frame in the decoder), retry each frame alone: only a frame
+            that still fails is lost, so a bad neighbour or a big batch never costs results."""
             if not pending:
                 return
             try:
-                decoded = cal.decode([img[:, :, ::-1] for _, img in pending],
-                                     **_thresholds(cfg))
+                decoded = decode(pending)
                 if len(decoded) != len(pending):
                     raise RuntimeError(f"decoded {len(decoded)} of {len(pending)} frames")
-            except Exception as e:  # noqa: BLE001
-                for f, _ in pending:
-                    failed[f] = f"{type(e).__name__}: {e}"
-            else:
-                for (f, img), (kp, ln) in zip(pending, decoded):
-                    jobs.append((kp, ln, img.shape[1], img.shape[0]))
-                    ids.append(f)
+                results = list(zip(pending, decoded))
+            except Exception:  # noqa: BLE001
+                results = []
+                for item in pending:
+                    try:
+                        results.append((item, decode([item])[0]))
+                    except Exception as e:  # noqa: BLE001
+                        failed[item[0]] = f"{type(e).__name__}: {e}"
+            for (f, img), (kp, ln) in results:
+                jobs.append((kp, ln, img.shape[1], img.shape[0]))
+                ids.append(f)
             pending.clear()
 
         for f in frames:

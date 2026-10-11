@@ -479,23 +479,32 @@ def test_sncalib_unreadable_image_fails_alone_before_batching(paths, calib, monk
     assert calib[0][0] == ["00000", "00001", "00002"]        # GT written for every frame first
 
 
-def test_sncalib_a_group_that_fails_to_decode_is_recorded_per_frame(paths, calib, monkeypatch):
+def test_sncalib_a_group_that_fails_to_decode_is_retried_frame_by_frame(paths, calib, monkeypatch):
     write_calib_zip(paths, ["00000", "00001", "00002"])
+    with zipfile.ZipFile(paths.calib_zip("valid")) as z:
+        members = {n: z.read(n) for n in z.namelist()}
+    members["valid/00001.jpg"] = cv2.imencode(".jpg", np.full((54, 96, 3), 255, np.uint8))[1].tobytes()
+    with zipfile.ZipFile(paths.calib_zip("valid"), "w") as z:
+        for n, b in members.items():
+            z.writestr(n, b)
+    sizes = []
 
-    class Boom(FakeCal):
-        def decode(self, frames, **kw):
-            if len(frames) == 2:
-                raise RuntimeError("CUDA out of memory")
+    class PathologicalFrame(FakeCal):
+        def decode(self, frames, **kw):          # raises for any call containing the white frame
+            sizes.append(len(frames))
+            if any(f.mean() > 128 for f in frames):
+                raise ZeroDivisionError("degenerate detections")
             return super().decode(frames, **kw)
-    monkeypatch.setattr(runner, "_calibrator", lambda p: Boom())
+    monkeypatch.setattr(runner, "_calibrator", lambda p: PathologicalFrame())
     monkeypatch.setattr(runner, "solve_many", lambda code, jobs, workers=1, **kw:
                         [(None, None)] * len(jobs))
     row = runner.run_suite("t", "b3", paths, "sha", "h", suite_spec=spec(
         {"id": "sc", "kind": "sncalib", "split": "valid", "frames": "all", "batch": 2}))
     t = row["tasks"]["sc"]
-    assert sorted(t["failed"]) == ["00000", "00001"]
-    assert all("out of memory" in v for v in t["failed"].values())
-    assert "00002" in t["clips"]
+    assert t["status"] == "partial"
+    assert list(t["failed"]) == ["00001"] and "ZeroDivisionError" in t["failed"]["00001"]
+    assert sorted(t["clips"]) == ["00000", "00002"]          # the good neighbour is still solved
+    assert sizes == [2, 1, 1, 1]                             # group, then its frames singly, then the rest
 
 
 def two_clips(paths):

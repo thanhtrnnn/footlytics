@@ -260,3 +260,50 @@ def test_heatmaps_take_any_number_of_frames(calibrator):
     kp, ln = calibrator.heatmaps(frames)
     assert tuple(kp.shape) == (9, 58, 256, 256) and tuple(ln.shape) == (9, 24, 256, 256)
     assert kp.device.type == calibrator.lines.device
+
+
+def test_fit_computes_heatmaps_only_for_the_requested_frames():
+    import torch
+
+    from footlytics.geometry.calib_nn import CameraFit, SoccerMasterCalibrator
+
+    ok = CameraFit({"x_focal_length": 1.0}, 0.5, np.eye(3))
+    seen = []
+
+    class StubSolver:
+        def decode(self, kp, ln, kp_threshold, line_threshold):
+            assert kp.shape[0] == ln.shape[0] == 2
+            return [({}, {}), ({}, {})]
+
+        def solve(self, kp, ln, w, h, **kw):
+            return ok
+
+    def heatmaps(frames):
+        seen.append([int(f[0, 0, 0]) for f in frames])
+        return torch.zeros(len(frames), 58, 4, 4), torch.zeros(len(frames), 24, 4, 4)
+
+    cal = object.__new__(SoccerMasterCalibrator)
+    cal.heatmaps, cal.solver, cal.last_errors = heatmaps, StubSolver(), {}
+    frames = [np.full((8, 8, 3), i, np.uint8) for i in range(5)]
+    assert cal.fit(frames, which=[0, 3]) == {0: ok, 3: ok}
+    assert seen == [[0, 3]]
+    assert cal.fit(frames, which=[]) == {} and seen == [[0, 3]]      # nothing asked, no network
+
+
+@needs_weights
+def test_fit_on_a_subset_equals_fit_restricted_to_it(calibrator):
+    import torch
+
+    rng = np.random.default_rng(1)
+    frames = [rng.integers(0, 256, (108, 192, 3), dtype=np.uint8) for _ in range(5)]
+    full = calibrator.fit(frames, voting=False, refine_lines=False)
+    part = calibrator.fit(frames, which=[0, 3], voting=False, refine_lines=False)
+    assert set(part) == {0, 3}
+    for i in part:
+        assert (part[i] is None) == (full[i] is None)
+        if part[i] is not None:
+            assert part[i].cam == pytest.approx(full[i].cam)
+    kp, ln = calibrator.heatmaps([frames[0], frames[3]])
+    kp5, ln5 = calibrator.heatmaps(frames)
+    assert torch.allclose(kp.cpu(), kp5[[0, 3]].cpu(), atol=1e-4)
+    assert torch.allclose(ln.cpu(), ln5[[0, 3]].cpu(), atol=1e-4)

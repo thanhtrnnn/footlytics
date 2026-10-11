@@ -236,17 +236,19 @@ class SoccerMasterCalibrator:
             kp_threshold: float = DEFAULT_KP_THRESHOLD,
             line_threshold: float = DEFAULT_LINE_THRESHOLD,
             **solve_kw) -> dict[int, Optional[CameraFit]]:
-        """Heatmaps for all frames (temporal context), cameras for `which` (default all).
-        A frame whose detections the solver cannot use gets None; if the solver raised, the
-        reason is in `self.last_errors[frame]` (reset on every call)."""
+        """Cameras for the frames in `which` (default all), keyed by index into `frames_rgb`.
+        Heatmaps are computed only for those frames: they are independent of each other (see
+        `heatmaps`), so the rest of a chunk costs nothing. A frame whose detections the solver
+        cannot use gets None; if the solver raised, the reason is in `self.last_errors[frame]`
+        (reset on every call)."""
         self.last_errors = {}
         frames = list(frames_rgb)
         h, w = frames[0].shape[:2]
-        kp, ln = self.heatmaps(frames)
         which = list(range(len(frames)) if which is None else which)
         if not which:
             return {}
-        decoded = self.solver.decode(kp[which], ln[which], kp_threshold, line_threshold)
+        kp, ln = self.heatmaps([frames[i] for i in which])
+        decoded = self.solver.decode(kp, ln, kp_threshold, line_threshold)
         out: dict[int, Optional[CameraFit]] = {}
         for i, (k, l) in zip(which, decoded):
             try:
