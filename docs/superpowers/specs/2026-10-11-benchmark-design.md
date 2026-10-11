@@ -73,7 +73,7 @@ libraries and kernel module disagree until its admin reboots it, and we have no 
 
 | Suite | Data | Metrics |
 |---|---|---|
-| quick | 6 pinned GSR valid clips | GS-HOTA (jersey off) with DetA/AssA, team accuracy, ball recall and px error, tactical-feature error (m), seconds per match minute |
+| quick | 6 pinned GSR valid clips | GS-HOTA (jersey off) with DetA, AssA, LocA and IDF1; GS-HOTA with teams off too (the gap is what team errors cost); team accuracy, keeper side accuracy, per-side player count error and share of frames over 11 a side; keeper recall, referee recall and precision; position error (median, p90, m) and recall within 2 m; ball recall and px error; tactical-feature error (m); seconds per match minute |
 | quick | 60 pinned SN-Calibration valid frames | JaC@5 x completeness, median reprojection px |
 | quick | 6 pinned GSR valid clips, calibrated frame by frame (keyframes + camera tracker) | JaC@5 x completeness on the GSR pitch-line labels, share of labelled frames calibrated, keyframe acceptance |
 | quick | V.League mini-GT: 3 matches x 15 frames, half held out | landmark error (m) on landmarks the solver did not use, % frames under 1 m, frame-to-frame jitter (m) |
