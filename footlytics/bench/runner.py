@@ -13,6 +13,7 @@ import subprocess
 import time
 import traceback
 import zipfile
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,9 +35,10 @@ from .adapters.calib import gsr_line_frames, write_camera
 from .adapters.gsr import check_version, gt_to_state, state_to_predictions, team_sides
 from .evaluators import run_gsr, run_sncalib
 from .host import ResourceError, contention, require_disk, require_vram, torch_info
-from .metrics import (MATCH_M, POS_GATE_M, ball_metrics, ball_summary, match_people,
-                      median_reprojection_px, position_metrics, position_summary,
-                      seconds_per_match_minute, shape_error, team_accuracy)
+from .metrics import (MATCH_M, POS_GATE_M, ROLE_CLASSES, ball_metrics, ball_summary,
+                      keeper_side_accuracy, match_people, median_reprojection_px,
+                      position_metrics, position_summary, role_counts, role_summary,
+                      seconds_per_match_minute, shape_error, share, team_accuracy)
 from .paths import BenchPaths
 
 SUITES_DIR = Path(__file__).parent / "suites"
@@ -649,7 +651,8 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
     scored, ran = [], []            # `scored` goes to the evaluator; `ran` produced predictions
     total_s, total_frames = 0.0, 0
     # every clip's raw values: a pooled metric's aggregate comes from these, not clip numbers
-    pool = {"_dists": [], "_gt_frames": 0, "_pos_dists": [], "_gt_people": 0}
+    pool = {"_dists": [], "_gt_frames": 0, "_pos_dists": [], "_gt_people": 0,
+            "_roles": Counter(), "_keeper_ok": 0, "_keeper_n": 0}
     with zipfile.ZipFile(ctx.paths.gsr_zip(split)) as z:
         for seq in _resolve(ctx.paths, split, task.get("clips", "all")):
             try:
@@ -701,8 +704,14 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                 frames = sorted(set(gt.tracks["frame_idx"]))
                 near = match_people(gt.tracks, state.tracks, frames, max_dist=POS_GATE_M)
                 m = near[near["dist"] <= MATCH_M]
+                roles = role_counts(gt.tracks, state.tracks, match_people(
+                    gt.tracks, state.tracks, frames, roles=ROLE_CLASSES))
+                k_ok, k_n = keeper_side_accuracy(gt.tracks, state.tracks, m, sides)
                 per[seq] = _pool(pool, {
                     "team_accuracy": team_accuracy(gt.tracks, state.tracks, m, sides),
+                    "keeper_side_accuracy": share(k_ok, k_n), "_keeper_ok": k_ok,
+                    "_keeper_n": k_n,
+                    **role_summary(roles), "_roles": roles,
                     **ball_metrics(gt.tracks, state.tracks, frames),
                     **position_metrics(gt.tracks, near, frames),
                     "shape_error_m": shape_error(gt.tracks, state.tracks, frames,
@@ -730,6 +739,8 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
            **{k: mean(k) for k in ("team_accuracy", "shape_error_m", "calib_success_rate")},
            **ball_summary(pool["_dists"], pool["_gt_frames"]),
            **position_summary(pool["_pos_dists"], pool["_gt_people"]),
+           **role_summary(pool["_roles"]),
+           "keeper_side_accuracy": share(pool["_keeper_ok"], pool["_keeper_n"]),
            "seconds_per_match_minute": seconds_per_match_minute(total_s, total_frames)}
     return {"clips": per, "aggregate": agg, "failed": failed,
             "leakage": {"status": "unverified"}}

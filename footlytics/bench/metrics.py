@@ -1,6 +1,8 @@
 """Our own auxiliary metrics. Official scores come from the evaluators (evaluators.py)."""
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 import pandas as pd
 
@@ -48,6 +50,7 @@ def median_reprojection_px(gt_lines: dict, cam: dict, width: int = 960,
 # ------------------------------------------------------------ full pipeline vs ground truth
 
 _PLAYING = ("player", "goalkeeper")
+ROLE_CLASSES = ("player", "goalkeeper", "referee")
 _GT_SIDE = {"home": "left", "away": "right"}       # gt_to_state: left -> HOME, right -> AWAY
 _SHAPE = ("centroid_x", "centroid_y", "width", "depth", "compactness")
 #: A predicted person within MATCH_M metres of a GT one is that person. Position error looks out
@@ -87,10 +90,8 @@ def match_people(gt: pd.DataFrame, pred: pd.DataFrame, frames, max_dist: float =
     return pd.DataFrame(rows, columns=["frame_idx", "gt", "pred", "dist"])
 
 
-def team_accuracy(gt: pd.DataFrame, pred: pd.DataFrame, matches: pd.DataFrame,
-                  pred_sides: dict) -> float | None:
-    """Share of matched players whose predicted side (our team through `pred_sides`) is the
-    GT side. A HOME/AWAY label swap is not an error; a wrong side is."""
+def _side_hits(gt: pd.DataFrame, pred: pd.DataFrame, matches: pd.DataFrame,
+               pred_sides: dict) -> tuple[int, int]:
     ok = n = 0
     for gi, pi in zip(matches["gt"], matches["pred"]):
         side = _GT_SIDE.get(str(gt.at[gi, "team"]))
@@ -98,7 +99,47 @@ def team_accuracy(gt: pd.DataFrame, pred: pd.DataFrame, matches: pd.DataFrame,
             continue
         n += 1
         ok += pred_sides.get(str(pred.at[pi, "team"])) == side
-    return share(ok, n)
+    return ok, n
+
+
+def team_accuracy(gt: pd.DataFrame, pred: pd.DataFrame, matches: pd.DataFrame,
+                  pred_sides: dict) -> float | None:
+    """Share of matched players whose predicted side (our team through `pred_sides`) is the
+    GT side. A HOME/AWAY label swap is not an error; a wrong side is."""
+    return share(*_side_hits(gt, pred, matches, pred_sides))
+
+
+def keeper_side_accuracy(gt: pd.DataFrame, pred: pd.DataFrame, matches: pd.DataFrame,
+                         pred_sides: dict) -> tuple[int, int]:
+    """`(ok, n)` over the matched GT goalkeepers: how many we put on their GT side. A keeper
+    in the other team's colour cluster drags `team_sides` and can flip a whole clip. Raw, to
+    pool across clips: a clip sees its keepers in few frames."""
+    keepers = gt.loc[matches["gt"], "role"].astype(str).to_numpy() == "goalkeeper"
+    return _side_hits(gt, pred, matches[keepers], pred_sides)
+
+
+def role_counts(gt: pd.DataFrame, pred: pd.DataFrame,
+                matches: pd.DataFrame) -> Counter[tuple[str, str]]:
+    """Matched rows per (GT role, predicted role), over a match of `ROLE_CLASSES`."""
+    return Counter(zip(gt.loc[matches["gt"], "role"].astype(str),
+                       pred.loc[matches["pred"], "role"].astype(str)))
+
+
+def role_summary(counts: dict[tuple[str, str], int]) -> dict:
+    """The role numbers from `role_counts`, one clip's or pooled:
+
+    - `keeper_recall`: share of matched GT goalkeepers we call goalkeepers.
+    - `referee_recall`: share of matched GT referees we call referees.
+    - `referee_precision`: share of the matched people we call referees who are referees.
+    """
+    gt_n, pred_n = Counter(), Counter()
+    for (g, p), n in counts.items():
+        gt_n[g] += n
+        pred_n[p] += n
+    hits = {r: counts.get((r, r), 0) for r in ("goalkeeper", "referee")}
+    return {"keeper_recall": share(hits["goalkeeper"], gt_n["goalkeeper"]),
+            "referee_recall": share(hits["referee"], gt_n["referee"]),
+            "referee_precision": share(hits["referee"], pred_n["referee"])}
 
 
 def position_summary(dists, gt_people: int) -> dict:

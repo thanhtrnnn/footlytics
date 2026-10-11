@@ -3,9 +3,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from footlytics.bench.metrics import (ball_metrics, match_people, position_metrics,
-                                      position_summary, seconds_per_match_minute, shape_error,
-                                      team_accuracy)
+from footlytics.bench.metrics import (ROLE_CLASSES, ball_metrics, keeper_side_accuracy,
+                                      match_people, position_metrics, position_summary,
+                                      role_counts, role_summary, seconds_per_match_minute,
+                                      shape_error, team_accuracy)
 
 
 def tracks(rows):
@@ -74,6 +75,54 @@ def test_team_accuracy_ignores_a_label_swap_but_not_a_wrong_side():
     assert team_accuracy(gt, pred, m, {"away": "left", "home": "right"}) == 1.0
     assert team_accuracy(gt, pred, m, {"away": "right", "home": "left"}) == 0.0
     assert team_accuracy(gt, pred, m.iloc[:0], {}) is None
+
+
+SIDES = {"home": "left", "away": "right"}
+
+
+def side(frame, team, sign, start_id, keeper_role="goalkeeper"):
+    """A keeper and two players of `team`, defending the goal at x = sign * 50."""
+    return [(frame, start_id, keeper_role, team, sign * 50.0, 0.0, 0, 0, 10, 20, False),
+            (frame, start_id + 1, "player", team, sign * 20.0, -10.0, 0, 0, 10, 20, False),
+            (frame, start_id + 2, "player", team, sign * 15.0, 10.0, 0, 0, 10, 20, False)]
+
+
+def referee(frame):
+    return (frame, 50, "referee", "official", 0.0, 30.0, 0, 0, 10, 20, False)
+
+
+def keeper_mixup():
+    """Two frames, a keeper and two players a side and a referee. Our version: both keepers
+    called players, the left keeper in the right team's cluster, and in frame 1 a right player
+    called a referee."""
+    gt = tracks([r for f in (0, 1) for r in side(f, "home", -1, 1) + side(f, "away", 1, 11)
+                 + [referee(f)]])
+    pred = tracks([r for f in (0, 1) for r in side(f, "home", -1, 1, "player")
+                   + side(f, "away", 1, 11, "player") + [referee(f)]])
+    pred.loc[pred["track_id"] == 1, "team"] = "away"
+    pred.loc[(pred["frame_idx"] == 1) & (pred["track_id"] == 12), "role"] = "referee"
+    return gt, pred
+
+
+def test_role_counts_and_summary_when_keepers_are_called_players():
+    gt, pred = keeper_mixup()
+    m = match_people(gt, pred, [0, 1], roles=ROLE_CLASSES)
+    assert len(m) == 14 and len(match_people(gt, pred, [0, 1])) == 11   # default: no referees
+    counts = role_counts(gt, pred, m)
+    assert counts == {("goalkeeper", "player"): 4, ("player", "player"): 7,
+                      ("player", "referee"): 1, ("referee", "referee"): 2}
+    assert role_summary(counts) == {"keeper_recall": 0.0, "referee_recall": 1.0,
+                                    "referee_precision": 0.6667}
+    assert role_summary({}) == {"keeper_recall": None, "referee_recall": None,
+                                "referee_precision": None}
+
+
+def test_keeper_side_accuracy_charges_the_keeper_in_the_other_teams_cluster():
+    gt, pred = keeper_mixup()
+    m = match_people(gt, pred, [0, 1])
+    assert keeper_side_accuracy(gt, pred, m, SIDES) == (2, 4)     # the right keeper is fine
+    assert team_accuracy(gt, pred, m, SIDES) == round(9 / 11, 4)
+    assert keeper_side_accuracy(gt, pred, m.iloc[:0], SIDES) == (0, 0)
 
 
 def ball(f, dx, dy, interpolated=False):

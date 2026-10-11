@@ -620,13 +620,15 @@ _SWAP = {Team.HOME.value: Team.AWAY.value, Team.AWAY.value: Team.HOME.value}
 
 
 def pipeline_fakes(monkeypatch, empty=(), uncalibrated=(), crash=(), real_calibration=False,
-                   ball_shift=None, short=(), shift_m=None):
+                   ball_shift=None, short=(), shift_m=None, keeper_bug=()):
     """No GPU, no model. Calibration is a stub (identity homographies), the pipeline returns the
     ground truth with HOME and AWAY swapped (a side-mapping bug would show as wrong teams).
     `empty`: run_frames raises "no detections at all"; `uncalibrated`: no homography on any
     frame, so the pipeline sees nothing; `crash`: the calibrator itself raises;
     `ball_shift`: `{clip: px}` moves that clip's predicted ball box right by `px` pixels;
     `shift_m`: `{clip: m}` moves that clip's predicted pitch positions along x by `m` metres;
+    `keeper_bug`: both keepers come out as players, the left one in the right team's cluster
+    and the right one unseen (the kit-colour failure that flips sides);
     `short`: the calibration returns one frame fewer than the clip has."""
     ball_shift, shift_m = ball_shift or {}, shift_m or {}
     seen = {"vram": [], "calibrated": [], "run": [], "mapped": {}}
@@ -661,6 +663,14 @@ def pipeline_fakes(monkeypatch, empty=(), uncalibrated=(), crash=(), real_calibr
             tr["bbox_x"] = tr["bbox_x"].astype(float)
             tr.loc[tr["role"].astype(str) == "ball", "bbox_x"] += ball_shift[meta.match_id]
         state.tracks["x"] = state.tracks["x"].astype(float) + shift_m.get(meta.match_id, 0.0)
+        if meta.match_id in keeper_bug:
+            tr = state.tracks
+            keeper = tr["role"].astype(str) == "goalkeeper"
+            left, right = keeper & (tr["x"] < 0), keeper & (tr["x"] > 0)
+            right_team = tr.loc[right, "team"].astype(str).iloc[0]
+            tr["team"] = tr["team"].astype(str).where(~left, right_team).astype("category")
+            tr["role"] = tr["role"].astype(str).where(~keeper, "player").astype("category")
+            state.tracks = tr[~right]
         return state, {"frames_processed": n, "frames_calibrated": n, "calib_success_rate": 1.0}
     monkeypatch.setattr(runner, "run_frames", run_frames)
     return seen
@@ -695,6 +705,8 @@ def test_gsr_pipeline_scores_a_clip_and_its_extras(paths, monkeypatch):
     assert c["pos_err_median_m"] == agg["pos_err_median_m"] == 0.0
     assert c["pos_err_p90_m"] == agg["pos_err_p90_m"] == 0.0
     assert c["recall_2m"] == agg["recall_2m"] == 1.0
+    for k in ("keeper_recall", "referee_recall", "referee_precision", "keeper_side_accuracy"):
+        assert c[k] == agg[k] == 1.0, k
     assert not [k for k in c if k.startswith("_")]               # raw pooling data stays private
     assert not [k for k in agg if k.startswith("_")]
     assert c["calib_success_rate"] == 1.0 and agg["calib_success_rate"] == 1.0
@@ -768,6 +780,25 @@ def test_gsr_pipeline_pools_positions_across_clips(paths, monkeypatch):
     assert agg["pos_err_median_m"] == 1.75 and agg["pos_err_p90_m"] == 3.0
     assert agg["team_accuracy"] == 1.0
     assert not [k for c in t["clips"].values() for k in c if k.startswith("_")]
+
+
+def test_gsr_pipeline_pools_roles_and_keeper_sides_across_clips(paths, monkeypatch):
+    """One clip gets the keepers right. In the other both come out as players, the left one in
+    the right team's cluster and the right one unseen. Keepers are few, so the aggregate is over
+    the pooled matched keepers: 6 of 9, where the clips' mean would say 0.5."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    t = run_pool(paths, monkeypatch, "pl5", keeper_bug=("SNGS-991",))
+    assert t["status"] == "complete", t
+    a, b = t["clips"]["SNGS-990"], t["clips"]["SNGS-991"]
+    assert (a["keeper_recall"], a["keeper_side_accuracy"]) == (1.0, 1.0)
+    assert (b["keeper_recall"], b["keeper_side_accuracy"]) == (0.0, 0.0)
+    assert (b["referee_recall"], b["referee_precision"]) == (1.0, 1.0)
+    agg = t["aggregate"]
+    assert agg["keeper_recall"] == agg["keeper_side_accuracy"] == round(6 / 9, 4)
+    assert agg["referee_recall"] == agg["referee_precision"] == 1.0
+    assert not [k for c in t["clips"].values() for k in c if k.startswith("_")]
+    assert not [k for k in agg if k.startswith("_")]
 
 
 def test_gsr_pipeline_an_empty_scored_clip_counts_its_gt_ball_frames_as_missed(paths, monkeypatch):
