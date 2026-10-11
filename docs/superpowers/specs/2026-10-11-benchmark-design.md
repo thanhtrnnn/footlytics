@@ -1,6 +1,7 @@
 # Benchmark design
 
 Date: 2026-10-11. Status: approved in conversation, awaiting written-spec review.
+Revised 2026-10-11: host moved to `iec4090_2` (see Host).
 
 ## Purpose
 
@@ -19,12 +20,51 @@ scope here; the harness is built so it can be added as another suite later.
 - **Approach:** a thin harness around the official evaluators. Our output is converted to
   SoccerNet formats and scored by their code; we do not reimplement HOTA or the calibration
   metric, and we do not port the pipeline into TrackLab.
-- **Everything runs on the 4090** (`ssh iec4090`). The M2 only triggers runs and pulls results.
-  Data and weights live on the 4090 only.
+- **Everything runs on the lab 4090 `iec4090_2`.** The M2 only triggers runs and pulls
+  results. Data and weights live on that host only, under `~/footlytics-bench/`.
 - **Primary score is GS-HOTA with jersey matching off.** The pipeline has no shirt-number OCR;
   with jersey on, every player track is a miss plus a false positive and the score measures
   the missing feature. The official jersey-on score is reported next to it, labelled.
 - **The test split is for milestones only**, never for tuning thresholds.
+
+## Host
+
+`iec4090_2` (ssh alias for `iec@10.170.100.152`). `iec4090` is not used: its NVIDIA driver
+libraries and kernel module disagree until its admin reboots it, and we have no sudo there.
+
+- **Hardware:** RTX 4090 24 GB (driver 555.42.06), 20 cores, 31 GB RAM, one 915 GB disk.
+- **Shared lab account.** Other people log in as `iec` and run their own jobs (on 2026-10-11:
+  42 sessions, three other tmux sessions, a 2.6 GB process on the GPU). So:
+  - everything we create lives under `~/footlytics-bench/`, and our tmux sessions are named
+    `footlytics-<run-id>`; we never touch other files, sessions, Docker volumes or images;
+  - GPU memory is not ours alone: a run checks free VRAM before it starts and fails cleanly
+    with that reason instead of dying mid-clip;
+  - seconds per match minute is noisy, so every row also records the other processes' GPU
+    memory and the load average at the start and end of the run.
+- **Python:** system `python3` 3.12 already has torch 2.7.1+cu128 and torchvision 0.22.1 with
+  CUDA working. The pipeline venv is built with `--system-site-packages` and must not install a
+  second torch (checked after install: `torch.__version__ == "2.7.1+cu128"` and CUDA available).
+  `uv` is installed in the home directory. The evaluators get their own venv (GPL, see below).
+- **Disk:** 41 GB free on 2026-10-11, after a user-approved prune of Docker build cache and
+  dangling images. The disk is shared: downloads and runs check free space first and stop
+  below a 1.5 GB floor. Budget:
+
+  | Item | Size |
+  |---|---|
+  | GSR valid zip | 11.2 GB |
+  | GSR test zip (milestone only) | 8.9 GB |
+  | SN-Calibration valid + test | 1.0 GB |
+  | SoccerMaster + detector weights, venvs | about 5 GB |
+  | Run outputs (predictions, logs) | about 1 GB per nightly run, pruned to the last 5 |
+
+  GSR images are read straight out of the zips (the frames are stored JPEGs) and only the
+  label files are extracted, so the data is not held twice. GSR train and challenge are not
+  downloaded.
+- **SSH:** key login is not set up yet; commands ride on a ControlMaster session the user opens
+  with a password. When it drops, the run itself is unaffected (it lives in tmux on the host);
+  only polling and the result pull stop, and `footlytics bench --resume <run-id>` picks them up
+  after the user reconnects. Suggested permanent fix: `ssh-copy-id` with the `iec220` key, plus
+  `IdentityFile` and `ServerAliveInterval 60` in `~/.ssh/config`.
 
 ## Suites
 
@@ -38,8 +78,8 @@ scope here; the harness is built so it can be added as another suite later.
 | milestone | 49 GSR test clips | GS-HOTA jersey off, re-scored baseline, official jersey-on GS-HOTA |
 | milestone | SN-Calibration test | JaC@5 x completeness, compared with test-split papers (PnLCalib, SoccerMaster) |
 
-Every row records git SHA, suite, host, per-clip and aggregate numbers, and seconds per match
-minute.
+Every row records git SHA, suite, host, per-clip and aggregate numbers, seconds per match
+minute, and the host contention readings above.
 
 Reference points (all GSR): baseline 22.26 test / 18.05 valid (arXiv 2404.11335); challenge
 winners about 64 on the hidden challenge split (2024, 2025 reports); SoccerMaster 64.1 on test
@@ -65,10 +105,13 @@ winners about 64 on the hidden challenge split (2024, 2025 reports); SoccerMaste
 ## Architecture
 
 ```
-M2:    footlytics bench --suite quick --remote iec4090
-         -> rsync the current commit to the 4090, start the run in tmux, poll, pull results back
+M2:    footlytics bench --suite quick --remote iec4090_2
+         -> rsync the current commit to ~/footlytics-bench/src/, start the run in tmux session
+            footlytics-<run-id>, poll, pull results back
+       footlytics bench --resume <run-id>    re-attach polling and pull after an SSH drop
 
-4090:  footlytics/bench/
+iec4090_2:  ~/footlytics-bench/{src,data,weights,runs,venv,venv-eval}
+            footlytics/bench/
          suites/{quick,nightly,milestone}.yaml   pinned clip and frame ids
          datasets.py      locate or download GSR (>= v1.3), SN-Calibration, V.League mini-GT
          adapters/gsr.py  Match State -> GSR predictions (role, left/right team, null jersey);
@@ -97,17 +140,20 @@ Before any number is trusted:
 
 ## Build order
 
-1. 4090 environment (uv, CUDA torch), datasets, and the two harness checks above.
+1. Host environment on `iec4090_2` (uv in the home dir, pipeline venv on the system torch,
+   evaluator venv), GSR valid and SN-Calibration valid downloads, and the two harness checks
+   above. The baseline re-score is on test, so the GSR test zip is downloaded here too; its
+   labels are extracted and its images stay unread until a milestone.
 2. Calibration benchmark on SN-Calibration, together with keyframed per-frame calibration
    (calibrate every N frames with one RANSAC setting, gate at 25 px reprojection, bridge with
    the camera tracker with the score bug and channel logo masked). GSR clips are broadcast with
    moving cameras, so hand landmarks per clip are not an option.
 3. Full-pipeline GSR runs: GS-HOTA, teams, ball, tactical features.
-4. V.League mini-GT once two more matches are on the 4090.
+4. V.League mini-GT once two more matches are on the host.
 
 ## Blockers and constraints
 
-- The 4090 GPU is unusable until its admin reboots or reloads the NVIDIA kernel module (driver
-  libraries 595.99.02, loaded module 595.91.07). Steps that need no GPU can proceed.
+- `iec4090_2` is a shared machine: disk, GPU memory and timing are subject to other users
+  (handled under Host). Runs depend on the user's SSH session until key login is set up.
 - The SoccerMaster code repository has no licence: internal R&D only. Weights are Apache-2.0.
 - SoccerTrack v2 is gated; the possession check waits for access.
