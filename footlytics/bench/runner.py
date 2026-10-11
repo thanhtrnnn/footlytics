@@ -644,6 +644,11 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                 if calib:           # calibration that found no frame belongs in the mean
                     per[seq]["calib_success_rate"] = round(
                         sum(fc.H_img_to_pitch is not None for fc in calib) / len(calib), 4)
+                # its GT-ball frames are all missed: they stay in the pooled recall's denominator
+                ball = ball_metrics(gt.tracks, gt.tracks.iloc[:0],
+                                    sorted(set(gt.tracks["frame_idx"])))
+                ball_gt += ball.pop("_gt_frames")
+                per[seq].update({k: v for k, v in ball.items() if k != "_dists"})
                 ctx.log(f"{seq}: pipeline produced nothing, scored as misses ({failed[seq]})")
                 continue
             scored.append(seq)

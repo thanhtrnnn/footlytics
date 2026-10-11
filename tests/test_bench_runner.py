@@ -735,6 +735,22 @@ def test_gsr_pipeline_ball_aggregate_weights_clips_by_their_gt_ball_frames(paths
     assert agg["ball_px_median_hits"] == 7.0                      # median of 4, 4, 4, 10, 10, 10
 
 
+def test_gsr_pipeline_an_empty_scored_clip_counts_its_gt_ball_frames_as_missed(paths, monkeypatch):
+    """A clip whose pipeline produced nothing has GT balls and no predictions: its recall is 0.0
+    and its frames stay in the pooled denominator, so it cannot flatter the aggregate."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    t = run_pool(paths, monkeypatch, "pl3", empty=("SNGS-991",), ball_shift={"SNGS-990": 4.0})
+    assert t["status"] == "partial" and "SNGS-991" in t["failed"]
+    dead = t["clips"]["SNGS-991"]
+    assert dead["ball_recall"] == 0.0 and dead["ball_wrong_share"] == 0.0
+    assert dead["ball_px_median_hits"] is None and not [k for k in dead if k.startswith("_")]
+    agg = t["aggregate"]
+    assert agg["ball_recall"] == 0.5                  # 3 hits over the 6 GT-ball frames of both clips
+    assert agg["ball_wrong_share"] == 0.0 and agg["ball_px_median_hits"] == 4.0
+    assert agg["team_accuracy"] == 1.0                # the other clip means still skip it
+
+
 def test_gsr_pipeline_isolates_a_clip_with_no_detections(paths, monkeypatch):
     """A clip whose pipeline produces nothing is still scored (empty predictions: all its GT
     people are misses), so it cannot shrink the GS-HOTA denominator; the reason is recorded."""
@@ -758,8 +774,8 @@ def test_gsr_pipeline_isolates_a_clip_with_no_detections(paths, monkeypatch):
     good = t["clips"]["SNGS-990"]
     assert "error" not in good and good["team_accuracy"] == 1.0 and good["ball_recall"] == 1.0
     assert json.loads((out / "SNGS-990.json").read_text())["predictions"]
-    # clip means skip the clip that has no value rather than counting a zero for it
-    assert t["aggregate"]["team_accuracy"] == 1.0 and t["aggregate"]["ball_recall"] == 1.0
+    # the other clip means skip the clip that has no value; the ball recall counts its GT frames
+    assert t["aggregate"]["team_accuracy"] == 1.0 and t["aggregate"]["ball_recall"] == 0.5
 
 
 def test_gsr_pipeline_counts_a_clip_calibration_never_found_as_uncalibrated(paths, monkeypatch):
