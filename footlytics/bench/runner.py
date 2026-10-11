@@ -330,13 +330,14 @@ def sncalib(task: dict, ctx: TaskContext) -> dict:
     gt_dir.mkdir(parents=True, exist_ok=True)
     pred_dir.mkdir(parents=True, exist_ok=True)
     cal = _calibrator(ctx.paths)
-    t0 = time.time()
     failed, jobs, ids, gts = {}, [], [], {}
+    spent = 0.0                    # decode + solve only: not the evaluator runs
     with zipfile.ZipFile(ctx.paths.calib_zip(split)) as z:
         frames = _sncal_frames(z, split, task.get("frames", "all"))
         names = set(z.namelist())
         info = (json.loads(z.read(f"{split}/match_info.json"))
                 if f"{split}/match_info.json" in names else {})
+        t_decode = time.perf_counter()
         for f in frames:
             try:
                 raw = z.read(f"{split}/{f}.json")
@@ -349,10 +350,13 @@ def sncalib(task: dict, ctx: TaskContext) -> dict:
                 continue
             jobs.append((kp, ln, img.shape[1], img.shape[0]))
             ids.append(f)
+        spent += time.perf_counter() - t_decode
     ctx.log(f"decoded {len(ids)} frames, solving on {task.get('workers', 8)} processes")
     solve_kw = {"voting": cfg.get("voting", True), "refine_lines": cfg.get("refine_lines", True)}
+    t_solve = time.perf_counter()
     results = solve_many(ctx.paths.soccermaster_code, jobs, workers=task.get("workers", 8),
                          **solve_kw)
+    spent += time.perf_counter() - t_solve
     per, errors = {}, 0
     for f, (fit, err) in zip(ids, results):
         errors += err is not None
@@ -367,7 +371,7 @@ def sncalib(task: dict, ctx: TaskContext) -> dict:
     med = [c["median_px"] for c in per.values() if c.get("median_px") is not None]
     agg = {"score": s.score, "jac5": s.jac, "completeness": s.completeness,
            "median_px": round(float(np.median(med)), 2) if med else None,
-           "seconds_per_frame": round((time.time() - t0) / max(len(frames), 1), 2),
+           "seconds_per_frame": round(spent / max(len(frames), 1), 2),
            "frames": len(frames), "solver_errors": errors}
     games = {f: _game(info.get(f"{f}.jpg", {})) for f in frames}
     listed = set(task.get("leakage_games", []))
@@ -410,7 +414,7 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
     all_gt, all_pred = ctx.work / "all" / "gt" / split, ctx.work / "all" / "pred" / split
     all_gt.mkdir(parents=True, exist_ok=True)
     all_pred.mkdir(parents=True, exist_ok=True)
-    t0, n_frames = time.time(), 0
+    spent, n_frames = 0.0, 0         # calibration time only: not the evaluator runs
     with zipfile.ZipFile(ctx.paths.gsr_zip(split)) as z:
         for seq in _resolve(ctx.paths, split, task.get("clips", "all")):
             try:
@@ -422,18 +426,19 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
                     raise FileNotFoundError(f"no frames for {seq} in {ctx.paths.gsr_zip(split)}")
                 pick = sorted(set(np.linspace(0, len(names) - 1, min(25, len(names)))
                                   .astype(int).tolist()))
+                t_clip = time.perf_counter()
                 mask = static_overlay_mask([_imread(z.read(names[i])) for i in pick])
                 cc = ClipCalibrator(fit_keyframes, every=every, gate_px=gate,
                                     tracker_factory=TRACKER)
                 res = cc.run((_imread(z.read(n)) for n in names), mask=mask)
+                spent += time.perf_counter() - t_clip
                 n_frames += len(res)
                 gt_d, pred_d = (ctx.work / "clips" / seq / k / split for k in ("gt", "pred"))
                 gt_d.mkdir(parents=True, exist_ok=True)
                 pred_d.mkdir(parents=True, exist_ok=True)
                 # every labelled frame is in the evaluator's denominator, image or not
                 for idx, lines in truth.items():
-                    for d in (gt_d, all_gt):
-                        (d / f"{seq}-{idx + 1:06d}.json").write_text(json.dumps(lines))
+                    (gt_d / f"{seq}-{idx + 1:06d}.json").write_text(json.dumps(lines))
                 calibrated = 0
                 for fc in res:
                     if fc.frame_idx not in truth:
@@ -441,10 +446,13 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
                     name = f"{seq}-{fc.frame_idx + 1:06d}"
                     if fc.cam is not None:
                         calibrated += 1
-                        for d in (pred_d, all_pred):
-                            _write_prediction(d / f"camera_{name}.json", fc.cam)
+                        _write_prediction(pred_d / f"camera_{name}.json", fc.cam)
                 s = run_sncalib(ctx.paths.eval_python, ctx.paths.sn_calibration,
                                 gt_d.parent, pred_d.parent, split, ctx.work / "eval" / seq)
+                # scored: only now does the clip join the combined evaluation
+                for src, dst in ((gt_d, all_gt), (pred_d, all_pred)):
+                    for f in src.glob("*.json"):
+                        shutil.copy(f, dst / f.name)
                 per[seq] = {"score": s.score, "jac5": s.jac, "completeness": s.completeness,
                             "calibrated_share": round(calibrated / max(len(truth), 1), 4),
                             "keyframes": cc.keyframes, "keyframes_accepted": cc.keyframes_accepted,
@@ -463,5 +471,6 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
            "keyframe_accept_rate": round(sum(c["keyframes_accepted"] for c in per.values())
                                          / max(keys, 1), 4),
            "solver_errors": sum(c["solver_errors"] for c in per.values()),
-           "seconds_per_frame": round((time.time() - t0) / max(n_frames, 1), 3)}
-    return {"clips": per, "aggregate": agg, "failed": failed}
+           "seconds_per_frame": round(spent / max(n_frames, 1), 3)}
+    return {"clips": per, "aggregate": agg, "failed": failed,
+            "leakage": {"status": "unverified"}}   # SoccerMaster's training games are unpublished

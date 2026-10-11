@@ -362,3 +362,71 @@ def test_calibration_suites_are_valid():
     q = runner.load_suite("quick")
     sc = next(t for t in q["tasks"] if t["kind"] == "sncalib")
     assert len(sc["frames"]) == 60 and len(set(sc["frames"])) == 60
+
+
+# ---------------------------------------------------------------- review fixes
+
+
+def test_gsr_calibration_survives_a_clip_whose_scoring_fails(paths, calib, monkeypatch):
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    good = runner.run_sncalib
+    combined_seen = []
+
+    def flaky(python, sc, gt_root, pred_root, split, out_dir, **kw):
+        if "SNGS-991" in str(gt_root):
+            raise KeyError("Penalty area left")
+        if "all" in gt_root.parts:
+            combined_seen.append(sorted(p.stem for p in (gt_root / split).glob("*.json")))
+        return good(python, sc, gt_root, pred_root, split, out_dir, **kw)
+    monkeypatch.setattr(runner, "run_sncalib", flaky)
+    row = runner.run_suite("t", "c5", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid",
+         "clips": ["SNGS-990", "SNGS-991"], "every": 1}))
+    t = row["tasks"]["gc"]
+    assert t["status"] == "partial", t
+    assert t["clips"]["SNGS-990"]["score"] == 50.0 and "SNGS-991" not in t["clips"]
+    assert "KeyError" in t["failed"]["SNGS-991"]
+    assert combined_seen == [["SNGS-990-000001", "SNGS-990-000002", "SNGS-990-000003"]]
+
+
+def slow_eval(monkeypatch, seconds=0.3):
+    import time
+    inner = runner.run_sncalib
+
+    def slow(*a, **kw):
+        time.sleep(seconds)
+        return inner(*a, **kw)
+    monkeypatch.setattr(runner, "run_sncalib", slow)
+
+
+def test_sncalib_seconds_per_frame_excludes_the_evaluator(paths, calib, monkeypatch):
+    write_calib_zip(paths, ["00000", "00001", "00002"])
+    monkeypatch.setattr(runner, "solve_many", lambda code, jobs, workers=1, **kw:
+                        [(None, None)] * len(jobs))
+    slow_eval(monkeypatch)
+    row = runner.run_suite("t", "c6", paths, "sha", "h", suite_spec=spec(
+        {"id": "sc", "kind": "sncalib", "split": "valid", "frames": "all",
+         "leakage_games": ["l|s|m|other"]}))
+    t = row["tasks"]["sc"]
+    assert t["status"] == "complete", t
+    assert t["aggregate"]["seconds_per_frame"] < 0.1
+
+
+def test_gsr_calibration_seconds_per_frame_excludes_the_evaluator(paths, calib, monkeypatch):
+    write_gsr_clip(paths)
+    slow_eval(monkeypatch)
+    row = runner.run_suite("t", "c7", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid", "clips": ["SNGS-990"],
+         "every": 1}))
+    t = row["tasks"]["gc"]
+    assert t["status"] == "complete", t
+    assert t["aggregate"]["seconds_per_frame"] < 0.1
+
+
+def test_gsr_calibration_rows_carry_the_unverified_leakage_flag(paths, calib):
+    write_gsr_clip(paths)
+    row = runner.run_suite("t", "c8", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid", "clips": ["SNGS-990"],
+         "every": 1}))
+    assert row["tasks"]["gc"]["leakage"] == {"status": "unverified"}

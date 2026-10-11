@@ -105,16 +105,40 @@ def _solve_job(args) -> tuple[Optional[CameraFit], Optional[str]]:
 
 
 def solve_many(code_dir: str | Path, jobs: Sequence[tuple[dict, dict, int, int]],
-               workers: int = 1, **solve_kw) -> list[tuple[Optional[CameraFit], Optional[str]]]:
+               workers: int = 1, _job=_solve_job,
+               **solve_kw) -> list[tuple[Optional[CameraFit], Optional[str]]]:
     """Solve (keypoints, lines, width, height) jobs, on `workers` CPU processes: the solver,
-    not the network, is the slow part (about 5 s a frame with voting)."""
+    not the network, is the slow part (about 5 s a frame with voting). A worker that dies (OOM
+    kill, a crash in cv2) breaks the pool; every job without a result then comes back as
+    `(None, "BrokenProcessPool: ...")` rather than hanging the run."""
     args = [(str(code_dir), k, l, w, h, solve_kw) for k, l, w, h in jobs]
     if workers <= 1:
-        return [_solve_job(a) for a in args]
-    import multiprocessing as mp
+        return [_job(a) for a in args]
+    import multiprocessing
+    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures.process import BrokenProcessPool
 
-    with mp.get_context("spawn").Pool(workers) as pool:
-        return pool.map(_solve_job, args, chunksize=1)
+    def broken(e):
+        return None, f"BrokenProcessPool: {e}"
+
+    out: list = []
+    with ProcessPoolExecutor(max_workers=workers,
+                             mp_context=multiprocessing.get_context("spawn")) as pool:
+        futures = []
+        for a in args:
+            try:
+                futures.append(pool.submit(_job, a))
+            except BrokenProcessPool as e:      # died while we were still submitting
+                futures.append(e)
+        for f in futures:
+            if isinstance(f, BrokenProcessPool):
+                out.append(broken(f))
+                continue
+            try:
+                out.append(f.result())
+            except BrokenProcessPool as e:
+                out.append(broken(e))
+    return out
 
 
 class SoccerMasterCalibrator:

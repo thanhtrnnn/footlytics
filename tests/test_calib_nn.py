@@ -143,3 +143,14 @@ def test_checkout_packages_win_over_an_installed_regular_package(tmp_path, isola
     assert list(sys.modules["data"].__path__) == [str(checkout / "data")]
     assert importlib.import_module("data.pnlcalib_utils.utils_calib").WHO == "checkout"
     assert sys.modules["data.pnlcalib_utils.utils_calib"].__file__.startswith(str(checkout))
+
+
+def test_solve_many_survives_a_worker_that_dies():
+    from footlytics.geometry.calib_nn import solve_many
+    from tests.calib_job_helpers import die_on_width_666
+
+    jobs = [({}, {}, 100 + i if i != 3 else 666, 10) for i in range(8)]
+    out = solve_many("unused", jobs, workers=2, _job=die_on_width_666)
+    assert len(out) == len(jobs)
+    assert out[3][0] is None and out[3][1].startswith("BrokenProcessPool")
+    assert all(r == (None, None) or r[1].startswith("BrokenProcessPool") for r in out)
