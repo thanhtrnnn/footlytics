@@ -452,6 +452,21 @@ def _frame_names(z: zipfile.ZipFile, split: str, seq: str, paths: BenchPaths) ->
     return names
 
 
+def _check_alignment(seq: str, names: list[str], n_calib: int | None = None) -> None:
+    """Frame i of a clip must be file `<i + 1>.jpg` and, given `n_calib`, calibration i must be
+    that frame's: the GT's frame_idx, the calibration list and the pipeline's frame index all
+    assume it, and a gap or a missing calibration would shift every later frame without any
+    error. Raises ValueError ("frame alignment ...") instead of scoring shifted frames."""
+    for i, n in enumerate(names):
+        stem = Path(n).stem
+        if not stem.isdigit() or int(stem) != i + 1:
+            raise ValueError(f"frame alignment: {seq} frame {i} is {Path(n).name}, expected "
+                             f"number {i + 1} (frames must run 1..{len(names)} without gaps)")
+    if n_calib is not None and n_calib != len(names):
+        raise ValueError(f"frame alignment: {seq} has {len(names)} frames but {n_calib} "
+                         f"calibrated frames")
+
+
 _CLIP_CALIBRATIONS: dict = {}
 
 
@@ -469,6 +484,7 @@ def _clip_calibration(ctx: TaskContext, z: zipfile.ZipFile, split: str, seq: str
     if not fresh and key in _CLIP_CALIBRATIONS:
         return _CLIP_CALIBRATIONS[key]
     names = _frame_names(z, split, seq, ctx.paths)
+    _check_alignment(seq, names)
     cal = _calibrator(ctx.paths)
     thr = _thresholds(cfg)
     solve_kw = {"voting": False, "mode": cfg.get("mode", "full"),
@@ -488,6 +504,7 @@ def _clip_calibration(ctx: TaskContext, z: zipfile.ZipFile, split: str, seq: str
     cc = ClipCalibrator(fit_keyframes, every=every, gate_px=gate, tracker_factory=TRACKER)
     res = cc.run((_imread(z.read(n)) for n in names), mask=mask)
     seconds = time.perf_counter() - t0
+    _check_alignment(seq, names, len(res))
     entry = (res, seconds, {"keyframes": cc.keyframes, "keyframes_accepted": cc.keyframes_accepted,
                             "solver_errors": solver_errors})
     if not fresh:
@@ -626,8 +643,10 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                 continue
             calib = None
             try:
-                calib, calib_s, _ = _clip_calibration(ctx, z, split, seq, cfg, every, gate,
-                                                      fresh=task.get("fresh", False))
+                res, calib_s, _ = _clip_calibration(ctx, z, split, seq, cfg, every, gate,
+                                                    fresh=task.get("fresh", False))
+                _check_alignment(seq, names, len(res))
+                calib = res
                 t0 = time.perf_counter()
                 state, report = run_frames(
                     (_imread(z.read(n)) for n in names), 25.0,
@@ -645,7 +664,7 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                 if calib:           # calibration that found no frame belongs in the mean
                     per[seq]["calib_success_rate"] = round(
                         sum(fc.H_img_to_pitch is not None for fc in calib) / len(calib), 4)
-                try:        # its GT-ball frames are all missed: they stay in the recall's denominator
+                try:         # its GT-ball frames are all missed: they stay in the recall's total
                     gt = gt_to_state(labels)
                     ball = ball_metrics(gt.tracks, gt.tracks.iloc[:0],
                                         sorted(set(gt.tracks["frame_idx"])))

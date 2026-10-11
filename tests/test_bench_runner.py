@@ -610,12 +610,13 @@ _SWAP = {Team.HOME.value: Team.AWAY.value, Team.AWAY.value: Team.HOME.value}
 
 
 def pipeline_fakes(monkeypatch, empty=(), uncalibrated=(), crash=(), real_calibration=False,
-                   ball_shift=None):
+                   ball_shift=None, short=()):
     """No GPU, no model. Calibration is a stub (identity homographies), the pipeline returns the
     ground truth with HOME and AWAY swapped (a side-mapping bug would show as wrong teams).
     `empty`: run_frames raises "no detections at all"; `uncalibrated`: no homography on any
     frame, so the pipeline sees nothing; `crash`: the calibrator itself raises;
-    `ball_shift`: `{clip: px}` moves that clip's predicted ball box right by `px` pixels."""
+    `ball_shift`: `{clip: px}` moves that clip's predicted ball box right by `px` pixels;
+    `short`: the calibration returns one frame fewer than the clip has."""
     ball_shift = ball_shift or {}
     seen = {"vram": [], "calibrated": [], "run": [], "mapped": {}}
     monkeypatch.setattr(runner, "require_vram", lambda mib: seen["vram"].append(mib))
@@ -628,6 +629,7 @@ def pipeline_fakes(monkeypatch, empty=(), uncalibrated=(), crash=(), real_calibr
             if seq in crash:
                 raise RuntimeError("calibrator crashed")
             n = sum(1 for m in z.namelist() if m.startswith(f"{seq}/img1/"))
+            n -= seq in short
             H = None if seq in uncalibrated else np.eye(3)
             return ([FrameCalib(i, H, None, "keyframe" if H is not None else "none")
                      for i in range(n)], 0.0, CALIB_STATS)
@@ -746,7 +748,7 @@ def test_gsr_pipeline_an_empty_scored_clip_counts_its_gt_ball_frames_as_missed(p
     assert dead["ball_recall"] == 0.0 and dead["ball_wrong_share"] == 0.0
     assert dead["ball_px_median_hits"] is None and not [k for k in dead if k.startswith("_")]
     agg = t["aggregate"]
-    assert agg["ball_recall"] == 0.5                  # 3 hits over the 6 GT-ball frames of both clips
+    assert agg["ball_recall"] == 0.5             # 3 hits over the 6 GT-ball frames of both clips
     assert agg["ball_wrong_share"] == 0.0 and agg["ball_px_median_hits"] == 4.0
     assert agg["team_accuracy"] == 1.0                # the other clip means still skip it
 
@@ -908,6 +910,90 @@ def test_gsr_pipeline_an_empty_clip_whose_gt_cannot_be_converted_has_no_ball_num
     assert dead["hota_jersey_off"] == 99.9 and dead["ball_error"] == "ValueError: bad gt"
     assert "ball_recall" not in dead
     assert t["aggregate"]["ball_recall"] == 1.0
+
+
+# ---------------------------------------------------------------- frame alignment
+
+def write_frames(paths, seq, numbers):
+    """Frames of a clip under their own numbers (a gap or a late start shifts every index)."""
+    with zipfile.ZipFile(paths.gsr_zip("valid"), "a") as z:
+        for f in numbers:
+            z.writestr(f"{seq}/img1/{f:06d}.jpg", jpg(192, 108))
+
+
+def test_gsr_pipeline_a_calibration_list_that_does_not_match_the_frames_is_scored_empty(
+        paths, monkeypatch):
+    """Calibration frame i must be clip frame i: one frame short and every homography after the
+    first would sit on the wrong image. The clip is recorded and scored as misses."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    seen = pipeline_fakes(monkeypatch, short=("SNGS-991",))
+    calls = []
+    monkeypatch.setattr(runner, "run_gsr", fake_scores(calls))
+    row = runner.run_suite("t", "p11", paths, "sha", "h", suite_spec=spec(pipeline_task("all")))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "partial"
+    assert list(t["failed"]) == ["SNGS-991"] and "alignment" in t["failed"]["SNGS-991"]
+    assert "3 frames" in t["failed"]["SNGS-991"] and "2 calibrated" in t["failed"]["SNGS-991"]
+    assert t["clips"]["SNGS-991"]["error"] == t["failed"]["SNGS-991"]
+    assert "calib_success_rate" not in t["clips"]["SNGS-991"]      # no trusting that calibration
+    assert json.loads((pipeline_dir(paths, "p11") / "SNGS-991.json").read_text()) == \
+        {"predictions": []}
+    assert calls[0][2] == ("SNGS-990", "SNGS-991")                  # scored, as misses
+    assert [r[0] for r in seen["run"]] == ["SNGS-990"]              # never reached the pipeline
+
+
+def test_gsr_pipeline_frame_names_with_a_gap_are_scored_empty(paths, monkeypatch):
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991", n_images=0)
+    write_frames(paths, "SNGS-991", [1, 2, 4])                      # 3 frames, but no frame 3
+    seen = pipeline_fakes(monkeypatch)                 # its calibration matches the count
+    calls = []
+    monkeypatch.setattr(runner, "run_gsr", fake_scores(calls))
+    row = runner.run_suite("t", "p12", paths, "sha", "h", suite_spec=spec(pipeline_task("all")))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "partial"
+    assert list(t["failed"]) == ["SNGS-991"] and "alignment" in t["failed"]["SNGS-991"]
+    assert "000004" in t["failed"]["SNGS-991"]
+    assert json.loads((pipeline_dir(paths, "p12") / "SNGS-991.json").read_text()) == \
+        {"predictions": []}
+    assert calls[0][2] == ("SNGS-990", "SNGS-991")
+    assert [r[0] for r in seen["run"]] == ["SNGS-990"]
+
+
+def test_clip_calibration_refuses_misaligned_frames_before_and_after_calibrating(
+        paths, monkeypatch):
+    """The shared calibration is where the frame list is made, so it checks too: a gsr_calibration
+    clip would otherwise name its cameras after the wrong frames."""
+    write_gsr_clip(paths, seq="SNGS-990", n_images=0)
+    write_frames(paths, "SNGS-990", [1, 2, 4])
+    write_gsr_clip(paths, seq="SNGS-991")
+    fits = []
+
+    class Spy(FakeCal):
+        def fit(self, frames, which=None, **kw):
+            fits.append(list(which))
+            return super().fit(frames, which, **kw)
+    monkeypatch.setattr(runner, "_calibrator", lambda p: Spy())
+    ctx = runner.TaskContext(paths, paths.root / "work", lambda m: None)
+    with zipfile.ZipFile(paths.gsr_zip("valid")) as z:
+        with pytest.raises(ValueError, match="alignment"):
+            runner._clip_calibration(ctx, z, "valid", "SNGS-990", {}, 1, 25.0)
+        assert fits == []                                           # refused before the network
+
+        class Short:
+            keyframes = keyframes_accepted = 0
+
+            def __init__(self, *a, **kw):
+                pass
+
+            def run(self, frames, mask=None):
+                return [FrameCalib(0, None, None, "none")]
+        monkeypatch.setattr(runner, "ClipCalibrator", Short)
+        with pytest.raises(ValueError, match="alignment"):
+            runner._clip_calibration(ctx, z, "valid", "SNGS-991", {}, 1, 25.0)
+    assert not [k for k in runner._CLIP_CALIBRATIONS if k[:2] == (str(paths.gsr_zip("valid")),
+                                                                   "SNGS-991")]   # not cached
 
 
 def test_clip_calibration_is_shared_and_fresh_bypasses_it(paths, monkeypatch):
