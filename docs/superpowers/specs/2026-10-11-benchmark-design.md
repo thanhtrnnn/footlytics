@@ -75,11 +75,19 @@ libraries and kernel module disagree until its admin reboots it, and we have no 
 |---|---|---|
 | quick | 6 pinned GSR valid clips | GS-HOTA (jersey off) with DetA/AssA, team accuracy, ball recall and px error, tactical-feature error (m), seconds per match minute |
 | quick | 60 pinned SN-Calibration valid frames | JaC@5 x completeness, median reprojection px |
+| quick | 6 pinned GSR valid clips, calibrated frame by frame (keyframes + camera tracker) | JaC@5 x completeness on the GSR pitch-line labels, share of labelled frames calibrated, keyframe acceptance |
 | quick | V.League mini-GT: 3 matches x 15 frames, half held out | landmark error (m) on landmarks the solver did not use, % frames under 1 m, frame-to-frame jitter (m) |
 | quick | synthetic tests; possession rule on SoccerTrack v2 GT positions (when access arrives) | pass/fail; possession accuracy vs `ballStatus` |
 | nightly | all 58 GSR valid clips | as quick, plus run-to-run noise floor (same commit twice) |
 | milestone | 49 GSR test clips | GS-HOTA jersey off, re-scored baseline, official jersey-on GS-HOTA |
 | milestone | SN-Calibration test | JaC@5 x completeness, compared with test-split papers (PnLCalib, SoccerMaster) |
+
+GSR valid comes from only 3 games (ids 2, 3, 5), so its 58 clips are diverse in situations but
+not in stadiums or broadcasters; SN-Calibration valid spans 55 games.
+
+Median reprojection px is ours (auxiliary): for each labelled point of a straight ground-plane
+line, the distance to the predicted camera's projection of that line, at 960x540, taking the
+better of the labels and their mirror as the official evaluator does.
 
 Every row records git SHA, suite, host, per-clip and aggregate numbers, seconds per match
 minute, and the host contention readings above.
@@ -105,7 +113,9 @@ primary metric.
   camera, not only the ground homography.
 - **Leakage:** SoccerMaster was pretrained on SoccerNet-v2 matches. Before quoting any external
   number, check which GSR / SN-Calibration games overlap its training games and report the
-  score on the non-overlapping subset alongside.
+  score on the non-overlapping subset alongside. Its training games are not published, so until
+  they are, calibration rows carry `leakage: unverified` and their numbers are internal only.
+  The SN-Calibration task scores the non-overlapping subset as soon as a list is given.
 - **V.League labels:** scored on held-out landmarks; about 10 frames labelled twice (two people
   or two sessions) to measure labelling error; the held-out half is frozen once labelled.
 - **Noise:** the nightly suite runs the same commit twice; a change smaller than that spread is
