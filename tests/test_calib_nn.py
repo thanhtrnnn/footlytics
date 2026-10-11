@@ -24,6 +24,17 @@ def synthetic_keypoints(solver, cam, width, height):
 
 
 @needs_code
+def test_keypoint_world_is_centre_origin():
+    from footlytics.geometry.calib_nn import PnlSolver
+
+    solver = PnlSolver(CODE)
+    assert solver.keypoint_world(1) == (-52.5, -34.0, 0.0)    # PnLCalib kp 1: the (0, 0) corner
+    assert solver.keypoint_world(3) == (52.5, -34.0, 0.0)
+    assert solver.keypoint_world(12)[2] == -2.44               # crossbar end
+    assert solver.keypoint_world(13)[2] == 0.0                 # its post foot
+
+
+@needs_code
 @pytest.mark.parametrize("voting", [True, False])
 def test_solver_recovers_a_known_camera(voting):
     from footlytics.geometry.calib_nn import PnlSolver
@@ -34,8 +45,9 @@ def test_solver_recovers_a_known_camera(voting):
     assert len(kp) >= 6
     fit = solver.solve(kp, {}, 1920, 1080, voting=voting, refine_lines=False)
     assert fit is not None and fit.rep_err < 2.0
-    for k, tol in (("pan_degrees", 0.5), ("tilt_degrees", 0.5)):
+    for k, tol in (("pan_degrees", 0.5), ("tilt_degrees", 0.5), ("roll_degrees", 0.5)):
         assert fit.cam[k] == pytest.approx(cam[k], abs=tol)
+    assert fit.cam["position_meters"] == pytest.approx(cam["position_meters"], abs=0.5)
     assert fit.cam["x_focal_length"] == pytest.approx(1900, rel=0.03)
     assert "rotation_matrix" not in fit.cam
     assert np.isfinite(fit.H_img_to_pitch @ np.array([960.0, 540.0, 1.0])).all()
@@ -68,3 +80,31 @@ def test_calibrates_a_real_sn_calibration_frame():
     fit = cal.fit([img[:, :, ::-1]])[0]
     assert fit is not None
     assert median_reprojection_px(gt, fit.cam) < 15.0
+
+
+def test_fit_records_solver_errors_per_frame():
+    import torch
+
+    from footlytics.geometry.calib_nn import CameraFit, SoccerMasterCalibrator
+
+    ok = CameraFit({"x_focal_length": 1.0}, 0.5, np.eye(3))
+
+    class StubSolver:
+        def decode(self, kp, ln, kp_threshold, line_threshold):
+            return [({}, {}), ({}, {})]
+
+        def solve(self, kp, ln, w, h, **kw):
+            if self.calls:
+                raise ZeroDivisionError("x")
+            self.calls += 1
+            return ok
+
+        calls = 0
+
+    cal = object.__new__(SoccerMasterCalibrator)
+    cal.heatmaps = lambda frames: (torch.zeros(2, 58, 4, 4), torch.zeros(2, 24, 4, 4))
+    cal.solver = StubSolver()
+    cal.last_errors = {0: "stale"}
+    out = cal.fit([np.zeros((8, 8, 3), np.uint8)] * 2)
+    assert out == {0: ok, 1: None}
+    assert cal.last_errors == {1: "ZeroDivisionError: x"}

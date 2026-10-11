@@ -17,7 +17,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-from .sn_camera import HALF_L, HALF_W, ground_homography
+from .sn_camera import ground_homography
 
 NUM_KEYPOINTS = 58                 # 57 pitch keypoints + background
 #: PnLCalib's published inference thresholds (tuned in the benchmark, plan 2 task 7)
@@ -54,11 +54,12 @@ class PnlSolver:
         self._calib, self._hm = utils_calib, utils_heatmap
 
     def keypoint_world(self, kp_id: int) -> tuple[float, float, float]:
-        """PnLCalib keypoint `kp_id` (1-based) in SoccerNet world metres."""
+        """PnLCalib keypoint `kp_id` (1-based) in SoccerNet world metres. PnLCalib's tables are
+        already centre-origin (`utils_calib` shifts them by 52.5, 34), as SoccerNet's are."""
         c = self._calib
         wp = (c.keypoint_world_coords_2D[kp_id - 1] if kp_id <= 57
               else c.keypoint_aux_world_coords_2D[kp_id - 58])
-        return wp[0] - HALF_L, wp[1] - HALF_W, -2.44 if kp_id in _CROSSBAR else 0.0
+        return wp[0], wp[1], -2.44 if kp_id in _CROSSBAR else 0.0
 
     def decode(self, kp_hm, line_hm, kp_threshold: float = DEFAULT_KP_THRESHOLD,
                line_threshold: float = DEFAULT_LINE_THRESHOLD) -> list[tuple[dict, dict]]:
@@ -141,6 +142,7 @@ class SoccerMasterCalibrator:
             raise RuntimeError(f"keypoints head is missing {len(res.missing_keys)} weights, "
                                f"e.g. {res.missing_keys[:3]}")
         self.kp_head.to(device=self.lines.device, dtype=self.lines.dtype).eval()
+        self.last_errors: dict[int, str] = {}
 
     def heatmaps(self, frames_rgb: Sequence[np.ndarray]):
         """Up to 30 consecutive RGB frames (a still is repeated) -> (kp, lines) heatmaps on CPU."""
@@ -170,7 +172,9 @@ class SoccerMasterCalibrator:
             line_threshold: float = DEFAULT_LINE_THRESHOLD,
             **solve_kw) -> dict[int, Optional[CameraFit]]:
         """Heatmaps for all frames (temporal context), cameras for `which` (default all).
-        A frame whose detections the solver cannot use gets None."""
+        A frame whose detections the solver cannot use gets None; if the solver raised, the
+        reason is in `self.last_errors[frame]` (reset on every call)."""
+        self.last_errors = {}
         frames = list(frames_rgb)
         h, w = frames[0].shape[:2]
         kp, ln = self.heatmaps(frames)
@@ -182,6 +186,7 @@ class SoccerMasterCalibrator:
         for i, (k, l) in zip(which, decoded):
             try:
                 out[i] = self.solver.solve(k, l, w, h, **solve_kw)
-            except Exception:  # noqa: BLE001 - degenerate detections: no camera this frame
+            except Exception as e:  # noqa: BLE001 - degenerate detections: no camera this frame
                 out[i] = None
+                self.last_errors[i] = f"{type(e).__name__}: {e}"
         return out
