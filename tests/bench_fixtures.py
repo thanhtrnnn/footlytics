@@ -34,8 +34,13 @@ def make_labels(seq="SNGS-990", split="valid", n_frames=3, version="1.3"):
                                "x_bottom_right": x + 0.3, "y_bottom_right": y}})
         annotations.append({"id": f"{iid}99", "image_id": iid, "supercategory": "pitch",
                             "category_id": 5, "lines": {}})
-    # one person seen by the camera but not placed on the pitch
-    annotations.append({"id": "x", "image_id": images[0]["image_id"], "track_id": 10,
+    # an unlabelled frame (the evaluator skips it) holding a person not placed on the pitch:
+    # real GT has `bbox_pitch: null` only in such frames
+    blank = image_id(split, seq, n_frames)
+    images.append({"is_labeled": False, "image_id": blank, "file_name": f"{n_frames + 1:06d}.jpg",
+                   "height": 1080, "width": 1920, "has_labeled_person": True,
+                   "has_labeled_pitch": False, "has_labeled_camera": False})
+    annotations.append({"id": "x", "image_id": blank, "track_id": 10,
                         "supercategory": "object", "category_id": 1,
                         "attributes": {"role": "player", "jersey": None, "team": "left"},
                         "bbox_image": {"x": 1, "y": 1, "w": 1, "h": 1}, "bbox_pitch": None})
