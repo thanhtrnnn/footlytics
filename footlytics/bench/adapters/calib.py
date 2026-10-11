@@ -29,6 +29,10 @@ def write_camera(path: str | Path, cam: dict) -> None:
     Path(path).write_text(json.dumps(camera_json(cam)))
 
 
+#: GSR spells one class differently from the evaluator's pitch model, which has a trailing space
+#: in "Goal left post left " (upstream typo); the evaluator raises KeyError on the GSR spelling.
+_EVALUATOR_NAMES = {"Goal left post left": "Goal left post left "}
+
 _SWAP = {"left": "right", "right": "left", "top": "bottom", "bottom": "top"}
 
 
@@ -44,7 +48,7 @@ def gsr_line_frames(labels: dict) -> dict[int, dict]:
     out = {}
     for a in labels["annotations"]:
         if a.get("supercategory") == "pitch" and a["image_id"] in frame_of:
-            lines = {k: v for k, v in (a.get("lines") or {}).items() if v}
+            lines = {_EVALUATOR_NAMES.get(k, k): v for k, v in (a.get("lines") or {}).items() if v}
             if lines:
                 out[frame_of[a["image_id"]]] = lines
     return out

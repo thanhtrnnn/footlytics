@@ -55,6 +55,16 @@ def test_gsr_line_frames_keeps_labelled_frames_only():
                                                            {"x": 0.5, "y": 0.9}]}}
 
 
+def test_gsr_line_frames_uses_the_evaluator_spelling():
+    labels = {"images": [
+        {"image_id": "2990000001", "file_name": "000001.jpg", "has_labeled_pitch": True}],
+        "annotations": [
+            {"image_id": "2990000001", "supercategory": "pitch", "lines": {
+                "Goal left post left": [{"x": 0.1, "y": 0.4}, {"x": 0.1, "y": 0.6}],
+                "Goal right post left": [{"x": 0.9, "y": 0.4}, {"x": 0.9, "y": 0.6}]}}]}
+    assert set(gsr_line_frames(labels)[0]) == {"Goal left post left ", "Goal right post left"}
+
+
 def test_median_px_is_zero_for_the_true_camera_and_grows_with_error():
     gt = labels_for(CAM)
     assert median_reprojection_px(gt, CAM) < 0.5
