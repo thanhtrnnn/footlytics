@@ -969,16 +969,29 @@ def test_noise_of_is_only_measured_between_two_complete_runs(paths, monkeypatch)
 def test_pipeline_suites_are_valid():
     for name in ("quick", "nightly", "milestone"):
         assert {t["kind"] for t in runner.load_suite(name)["tasks"]} <= set(runner.KINDS)
-    quick = {t["id"]: t for t in runner.load_suite("quick")["tasks"]}
+    quick_tasks = runner.load_suite("quick")["tasks"]
+    quick = {t["id"]: t for t in quick_tasks}
     gp = quick["gsr-pipeline-valid-6"]
     assert gp["kind"] == "gsr_pipeline" and gp["split"] == "valid"
     assert gp["clips"] == quick["gsr-calibration-valid-6"]["clips"] == [
         "SNGS-025", "SNGS-028", "SNGS-050", "SNGS-056", "SNGS-081", "SNGS-086"]
-    first, second = runner.load_suite("nightly")["tasks"]
-    assert first["kind"] == second["kind"] == "gsr_pipeline"
-    assert first["clips"] == second["clips"] == "all" and first["split"] == "valid"
-    assert second["noise_of"] == first["id"] and second["fresh"] is True
+    # the pipeline first: its calibration time is measured with no evaluator subprocess running
+    # beside it, and the calibration task then reads the shared cache
+    ids = [t["id"] for t in quick_tasks]
+    assert ids.index("gsr-pipeline-valid-6") < ids.index("gsr-calibration-valid-6")
+    nightly_tasks = runner.load_suite("nightly")["tasks"]
+    first, calibration, repeat = nightly_tasks
+    assert [t["id"] for t in nightly_tasks] == [
+        "gsr-pipeline-valid-all", "gsr-calibration-valid-all", "gsr-pipeline-valid-all-repeat"]
+    assert first["kind"] == repeat["kind"] == "gsr_pipeline"
+    assert first["clips"] == repeat["clips"] == "all" and first["split"] == "valid"
+    assert repeat["noise_of"] == first["id"] and repeat["fresh"] is True
     assert "fresh" not in first and "noise_of" not in first
+    # the spec's nightly: all 58 valid clips scored on calibration too, from the same cache
+    assert calibration["kind"] == "gsr_calibration" and calibration["split"] == "valid"
+    assert calibration["clips"] == "all" and calibration["every"] == 10
+    assert calibration["gate_px"] == 25
+    assert "fresh" not in calibration and "noise_of" not in calibration
     milestone = {t["id"]: t for t in runner.load_suite("milestone")["tasks"]}
     assert milestone["gsr-pipeline-test"]["kind"] == "gsr_pipeline"
     assert milestone["gsr-pipeline-test"]["split"] == "test"

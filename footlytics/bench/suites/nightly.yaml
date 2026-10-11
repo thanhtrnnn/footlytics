@@ -1,6 +1,8 @@
-# All 58 GSR valid clips, twice: the second run re-calibrates and its `noise` is the
-# run-to-run spread; a change smaller than that is no change (spec: Noise). It is recorded
-# only when both runs are complete: a repeat that lost a clip differs for that reason.
+# All 58 GSR valid clips: the pipeline, then the same clips scored on calibration alone (from the
+# shared calibration cache, run after the pipeline so its timing has the machine to itself), then
+# the pipeline again. The repeat re-calibrates and its `noise` is the run-to-run spread; a change
+# smaller than that is no change (spec: Noise). It is recorded only when both runs are complete:
+# a repeat that lost a clip differs for that reason.
 name: nightly
 tasks:
   - id: gsr-pipeline-valid-all
@@ -8,6 +10,12 @@ tasks:
     split: valid
     clips: all
     every: 10
+  - id: gsr-calibration-valid-all
+    kind: gsr_calibration
+    split: valid
+    clips: all
+    every: 10
+    gate_px: 25
   - id: gsr-pipeline-valid-all-repeat
     kind: gsr_pipeline
     split: valid
