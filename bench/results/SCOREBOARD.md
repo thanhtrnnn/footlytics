@@ -26,6 +26,7 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 
 ## quick
 
-| finished (UTC) | commit | status | host | gsr-calibration-valid-6 | sncalib-valid-60 |
-|---|---|---|---|---|---|
-| 2026-10-11 17:12 | 6fea8be | complete | iec4090_2 | calibrated_share 1.00 | completeness 76.67 |
+| finished (UTC) | commit | status | host | gsr-calibration-valid-6 | gsr-pipeline-valid-6 | sncalib-valid-60 |
+|---|---|---|---|---|---|---|
+| 2026-10-11 19:10 | e5bea5b | complete | iec4090_2 | calibrated_share 1.00 | assa_jersey_off 45.77 | completeness 76.67 |
+| 2026-10-11 17:12 | 6fea8be | complete | iec4090_2 | calibrated_share 1.00 |  | completeness 76.67 |
