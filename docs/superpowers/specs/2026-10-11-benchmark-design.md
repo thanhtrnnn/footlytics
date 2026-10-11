@@ -102,6 +102,22 @@ re-score to **23.09** jersey-on on the 49 test clips (published 22.26; those pre
 March 2024, before the v1.3 labels) and **38.34 with jersey off**, the baseline to beat on our
 primary metric.
 
+Calibration, measured on this harness (2026-10-12; SoccerMaster heads + PnLCalib solver at
+PnLCalib's thresholds with line refinement; clips solve every 10th frame and bridge with the
+camera tracker). All rows carry `leakage: unverified` and are internal until SoccerMaster's
+training games are known:
+
+| Set | Score (JaC@5 x completeness) | JaC@5 | Completeness | Median px |
+|---|---|---|---|---|
+| SN-Calibration valid, 60 quick frames | 54.4 | 71.0 | 76.7 % | 2.07 |
+| SN-Calibration test, 3,141 frames (milestone) | **48.8** | 71.5 | 68.2 % | 1.92 |
+| GSR valid, 6 quick clips, every frame | 56.8 | 56.8 | 100 % | |
+
+Published on SN-Calibration test: PnLCalib 51.8, SoccerMaster 56.2. A third of our test frames
+get no camera (too few visible keypoints for the solver), which caps the score; raising
+completeness is the obvious lever. Clip scores vary widely by clip (44 to 86 on the quick set,
+72.5 on the two tuning clips).
+
 ## Validity rules
 
 - **Teams:** GSR scores team as left/right of the camera. HOME/AWAY is mapped to left/right per
