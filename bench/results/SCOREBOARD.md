@@ -20,9 +20,10 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 
 ## milestone
 
-| finished (UTC) | commit | status | host | sncalib-test |
-|---|---|---|---|---|
-| 2026-10-11 17:51 | 1879173 | complete | iec4090_2 | completeness 68.23 |
+| finished (UTC) | commit | status | host | gsr-baseline-test | gsr-pipeline-test | sncalib-test |
+|---|---|---|---|---|---|---|
+| 2026-10-11 20:28 | f6de620 | complete | iec4090_2 | assa_jersey_off 43.22 | assa_jersey_off 48.86 | completeness 68.23 |
+| 2026-10-11 17:51 | 1879173 | complete | iec4090_2 |  |  | completeness 68.23 |
 
 ## quick
 

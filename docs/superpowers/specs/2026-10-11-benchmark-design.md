@@ -118,6 +118,20 @@ get no camera (too few visible keypoints for the solver), which caps the score; 
 completeness is the obvious lever. Clip scores vary widely by clip (44 to 86 on the quick set,
 72.5 on the two tuning clips).
 
+Full pipeline, measured on this harness (2026-10-12; SoccerMaster x6 person detector + roboflow
+ball model, calibration solved every 10th frame and bridged by the camera tracker, no shirt-number
+reader). Rows carry `leakage: unverified` (SoccerMaster's detector) and are internal:
+
+| Set | GS-HOTA jersey off | DetA | AssA | GS-HOTA jersey on | Team side correct | Ball recall / px on hits / wrong ball | Shape error | s per match minute |
+|---|---|---|---|---|---|---|---|---|
+| GSR test, 49 clips (milestone) | **49.1** | 49.5 | 48.9 | 21.1 | 75 % | 26 % / 2.7 / 15 % | 2.4 m | 120 |
+| Baseline (sn-gamestate), re-scored, test | 38.3 | 34.1 | 43.2 | 23.1 | | | | |
+| GSR valid, 6 quick clips | 42.4 | 39.5 | 45.8 | 12.3 | 66 % | 26 % / - / - | 3.7 m | 111 |
+
+Per-clip GS-HOTA on test ranges from 16 to 82. The weakest clips have the team left/right
+mapping wrong: without a goalkeeper class the side falls back to team mean x, which fails when
+both teams stand in one half. Team sides and ball selection are the two biggest levers.
+
 ## Validity rules
 
 - **Teams:** GSR scores team as left/right of the camera. HOME/AWAY is mapped to left/right per
