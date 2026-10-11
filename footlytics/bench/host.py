@@ -63,13 +63,18 @@ def contention(own_pids: Optional[Iterable[int]] = None) -> dict:
 
 
 def require_vram(need_mib: int, readings: Optional[dict] = None) -> None:
+    """Refuse unless other processes leave at least `need_mib` of VRAM for us.
+
+    Our own allocations (e.g. a cached model) are excluded: they are not
+    contention, so only `gpu_other_mib` is subtracted from the total."""
     r = readings or contention()
     if r["gpu_total_mib"] is None:
         raise ResourceError("no GPU readings (nvidia-smi failed)")
-    free = r["gpu_total_mib"] - r["gpu_used_mib"]
-    if free < need_mib:
-        raise ResourceError(f"{free} MiB VRAM free, need {need_mib} MiB "
-                            f"({r['gpu_other_mib']} MiB held by other processes)")
+    other = r["gpu_other_mib"]
+    available = r["gpu_total_mib"] - other
+    if available < need_mib:
+        raise ResourceError(f"{available} MiB VRAM left by other processes, "
+                            f"need {need_mib} MiB ({other} MiB held by them)")
 
 
 def torch_info() -> dict:

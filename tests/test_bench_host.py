@@ -43,6 +43,17 @@ def test_require_vram_names_the_shortfall():
         host.require_vram(8000, readings)
 
 
+def test_require_vram_does_not_count_our_own_allocation():
+    # Our process holds ~6 GB of cached model; only other users' memory matters.
+    readings = {"gpu_used_mib": 15140, "gpu_total_mib": 24564, "gpu_other_mib": 9072,
+                "gpu_procs": 2}
+    host.require_vram(10000, readings)
+    readings = {"gpu_used_mib": 16000, "gpu_total_mib": 24564, "gpu_other_mib": 16000,
+                "gpu_procs": 1}
+    with pytest.raises(host.ResourceError, match="VRAM"):
+        host.require_vram(10000, readings)
+
+
 def test_contention_without_nvidia_smi_still_reports_load(monkeypatch):
     def boom(*a, **k):
         raise FileNotFoundError("nvidia-smi")
