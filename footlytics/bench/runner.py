@@ -215,19 +215,26 @@ def _labels(paths: BenchPaths, split: str, seq: str) -> dict:
     return labels
 
 
+#: The GS-HOTA passes: (key suffix, jersey numbers, teams, metrics kept). Jersey off is the
+#: primary score. Teams off as well drops the team from both sides: its distance above jersey
+#: off is what team errors cost. Jersey on is the official score.
+GSR_PASSES = (("jersey_off", False, True, ("hota", "deta", "assa", "loca", "idf1")),
+              ("teams_off", False, False, ("hota",)),
+              ("jersey_on", True, True, ("hota",)))
+
+
 def _score(ctx: TaskContext, split: str, tracker: str, seqs: list[str]) -> dict:
-    """GS-HOTA jersey off (primary) and on (official) for one tracker folder."""
+    """Every pass of `GSR_PASSES` for one tracker folder, keyed `<metric>_<suffix>`."""
     per: dict[str, dict] = {s: {} for s in seqs}
     agg: dict[str, float] = {}
-    for jersey in (False, True):
-        tag = "on" if jersey else "off"
+    for suffix, jersey, teams, metrics in GSR_PASSES:
         s = run_gsr(ctx.paths.eval_python, ctx.paths.trackeval, ctx.paths.gsr_labels,
-                    ctx.work / "trackers", split, tracker, seqs, ctx.work / f"eval-jersey-{tag}",
-                    use_jersey=jersey)
-        metrics = ("hota", "deta", "assa") if not jersey else ("hota",)
+                    ctx.work / "trackers", split, tracker, seqs,
+                    ctx.work / f"eval-{suffix.replace('_', '-')}", use_jersey=jersey,
+                    use_teams=teams)
         for seq, m in s.clips.items():
-            per.setdefault(seq, {}).update({f"{k}_jersey_{tag}": m[k] for k in metrics})
-        agg.update({f"{k}_jersey_{tag}": s.combined[k] for k in metrics})
+            per.setdefault(seq, {}).update({f"{k}_{suffix}": m[k] for k in metrics})
+        agg.update({f"{k}_{suffix}": s.combined[k] for k in metrics})
     return {"clips": per, "aggregate": agg}
 
 
@@ -612,7 +619,7 @@ def _detector(paths: BenchPaths, det_cfg: dict):
 @kind("gsr_pipeline")
 def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
     """The whole pipeline on GSR clips: calibrate, detect, track, assign teams; scored by
-    GS-HOTA (jersey off, primary; on, official) plus our metrics against GT.
+    GS-HOTA (every pass of `GSR_PASSES`) plus our metrics against GT.
 
     A clip whose pipeline produces nothing (calibration or `run_frames` raises, e.g. "no
     detections at all" when no frame was calibrated) is still scored, with an empty predictions

@@ -57,14 +57,24 @@ def write_gt(paths, split, seqs, bad=()):
         (d / "Labels-GameState.json").write_text(json.dumps(labels))
 
 
+#: The fake evaluator's HOTA for each pass, by (use_jersey, use_teams).
+PASS_HOTA = {(False, True): 99.9, (False, False): 99.95, (True, True): 99.8}
+SCORES = {"hota_jersey_off": 99.9, "deta_jersey_off": 50.0, "assa_jersey_off": 60.0,
+          "loca_jersey_off": 70.0, "idf1_jersey_off": 80.0, "hota_teams_off": 99.95,
+          "hota_jersey_on": 99.8}
+PASSES = [(False, True, "eval-jersey-off"), (False, False, "eval-teams-off"),
+          (True, True, "eval-jersey-on")]
+
+
 def fake_scores(calls):
-    def run_gsr(python, te, gt_root, trackers_root, split, tracker, seqs, out_dir, use_jersey):
-        calls.append((split, tracker, tuple(seqs), use_jersey))
+    def run_gsr(python, te, gt_root, trackers_root, split, tracker, seqs, out_dir, use_jersey,
+                use_teams=True):
+        calls.append((split, tracker, tuple(seqs), use_jersey, use_teams, out_dir.name))
         for s in seqs:
             assert (trackers_root / f"SoccerNetGS-{split}" / tracker / f"{s}.json").exists()
-        v = 99.9 if not use_jersey else 99.8
-        return GsrScores({s: {"hota": v, "deta": v, "assa": v} for s in seqs},
-                         {"hota": v, "deta": v, "assa": v})
+        m = {"hota": PASS_HOTA[(use_jersey, use_teams)], "deta": 50.0, "assa": 60.0,
+             "loca": 70.0, "idf1": 80.0, "dets": 1, "gt_dets": 2}
+        return GsrScores({s: dict(m) for s in seqs}, dict(m))
     return run_gsr
 
 
@@ -78,9 +88,8 @@ def test_gt_roundtrip_isolates_a_bad_clip(paths, monkeypatch):
     t = row["tasks"]["rt"]
     assert row["status"] == "partial" and t["status"] == "partial"
     assert "1.3" in t["failed"]["SNGS-991"]
-    assert t["aggregate"]["hota_jersey_off"] == 99.9 and t["aggregate"]["hota_jersey_on"] == 99.8
-    assert t["clips"]["SNGS-990"]["hota_jersey_off"] == 99.9
-    assert {c[3] for c in calls} == {False, True} and all(c[2] == ("SNGS-990",) for c in calls)
+    assert t["aggregate"] == SCORES and t["clips"]["SNGS-990"] == SCORES
+    assert [c[3:] for c in calls] == PASSES and all(c[2] == ("SNGS-990",) for c in calls)
 
 
 def test_rescore_reads_tracker_files_from_the_zip(paths, monkeypatch):
@@ -96,6 +105,7 @@ def test_rescore_reads_tracker_files_from_the_zip(paths, monkeypatch):
     t = row["tasks"]["bl"]
     assert t["failed"] == {"SNGS-991": "no predictions in baseline/SoccerNetGS-test.zip"}
     assert calls[0][1] == "tracklab"
+    assert t["aggregate"] == SCORES and [c[3:] for c in calls] == PASSES
 
 
 def test_prune_keeps_the_last_runs_work(paths):
@@ -673,9 +683,7 @@ def test_gsr_pipeline_scores_a_clip_and_its_extras(paths, monkeypatch):
     t = row["tasks"]["gp"]
     assert t["status"] == "complete", t
     c, agg = t["clips"]["SNGS-990"], t["aggregate"]
-    assert c["hota_jersey_off"] == agg["hota_jersey_off"] == 99.9
-    assert c["hota_jersey_on"] == agg["hota_jersey_on"] == 99.8
-    assert c["deta_jersey_off"] == 99.9 and c["assa_jersey_off"] == 99.9
+    assert {k: c[k] for k in SCORES} == {k: agg[k] for k in SCORES} == SCORES
     assert c["team_accuracy"] == 1.0 and agg["team_accuracy"] == 1.0   # the swap is not an error
     assert c["shape_error_m"] is None and agg["shape_error_m"] is None   # 3 a side < min_players
     assert c["ball_recall"] == 1.0 and agg["ball_recall"] == 1.0
@@ -686,7 +694,7 @@ def test_gsr_pipeline_scores_a_clip_and_its_extras(paths, monkeypatch):
     assert c["calib_success_rate"] == 1.0 and agg["calib_success_rate"] == 1.0
     assert c["seconds_per_match_minute"] >= 0 and agg["seconds_per_match_minute"] >= 0
     assert t["leakage"] == {"status": "unverified"} and t["failed"] == {}
-    assert {x[3] for x in calls} == {False, True} and all(x[2] == ("SNGS-990",) for x in calls)
+    assert [x[3:] for x in calls] == PASSES and all(x[2] == ("SNGS-990",) for x in calls)
     preds = json.loads((pipeline_dir(paths, "p1") / "SNGS-990.json").read_text())["predictions"]
     assert preds and all(p["attributes"]["jersey"] is None for p in preds)
     # what reached the pipeline: the clip's frames at 25 fps, no montage, the cached detector,
@@ -770,7 +778,7 @@ def test_gsr_pipeline_isolates_a_clip_with_no_detections(paths, monkeypatch):
     # the empty predictions file reached the scorer, beside the good clip's
     out = pipeline_dir(paths, "p2")
     assert json.loads((out / "SNGS-991.json").read_text()) == {"predictions": []}
-    assert all(c[2] == ("SNGS-990", "SNGS-991") for c in calls) and len(calls) == 2
+    assert all(c[2] == ("SNGS-990", "SNGS-991") for c in calls) and len(calls) == 3
     assert t["clips"]["SNGS-991"]["hota_jersey_off"] == 99.9       # scored, not skipped
     # the good clip is scored normally
     good = t["clips"]["SNGS-990"]
@@ -887,7 +895,7 @@ def test_gsr_pipeline_a_gt_conversion_failure_keeps_the_clip_scored(paths, monke
     row = runner.run_suite("t", "p10", paths, "sha", "h", suite_spec=spec(pipeline_task("all")))
     t = row["tasks"]["gp"]
     assert t["status"] == "partial" and t["failed"] == {"SNGS-991": "ValueError: bad gt"}
-    assert len(calls) == 2 and all(c[2] == ("SNGS-990", "SNGS-991") for c in calls)
+    assert len(calls) == 3 and all(c[2] == ("SNGS-990", "SNGS-991") for c in calls)
     bad = t["clips"]["SNGS-991"]
     assert bad["error"] == "ValueError: bad gt" and bad["hota_jersey_off"] == 99.9
     assert json.loads((pipeline_dir(paths, "p10") / "SNGS-991.json").read_text())["predictions"]

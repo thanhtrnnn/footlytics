@@ -46,13 +46,14 @@ def parse_detailed(path: str | Path) -> GsrScores:
 
 
 def trackeval_command(python: Path, trackeval_dir: Path, gt_root: Path, trackers_root: Path,
-                      split: str, tracker: str, seqmap: Path, use_jersey: bool) -> list[str]:
+                      split: str, tracker: str, seqmap: Path, use_jersey: bool,
+                      use_teams: bool = True) -> list[str]:
     # No --OUTPUT_FOLDER: its default is None, which the script's argparse turns into a list
     # and then crashes on. Results land next to the predictions instead (`run_gsr` moves them).
     flags = {
         "--GT_FOLDER": gt_root, "--TRACKERS_FOLDER": trackers_root, "--TRACKER_SUB_FOLDER": "",
         "--TRACKERS_TO_EVAL": tracker, "--SPLIT_TO_EVAL": split, "--SEQMAP_FILE": seqmap,
-        "--USE_JERSEY_NUMBERS": use_jersey,
+        "--USE_JERSEY_NUMBERS": use_jersey, "--USE_TEAMS": use_teams,
         "--USE_PARALLEL": False, "--PRINT_CONFIG": False, "--TIME_PROGRESS": False,
         "--PLOT_CURVES": False,
     }
@@ -64,14 +65,16 @@ def trackeval_command(python: Path, trackeval_dir: Path, gt_root: Path, trackers
 
 def run_gsr(python: Path, trackeval_dir: Path, gt_root: Path, trackers_root: Path, split: str,
             tracker: str, seqs: list[str], out_dir: Path, use_jersey: bool,
-            run=subprocess.run) -> GsrScores:
-    """GS-HOTA for `seqs`, predictions at `trackers_root/SoccerNetGS-<split>/<tracker>/`."""
+            use_teams: bool = True, run=subprocess.run) -> GsrScores:
+    """GS-HOTA for `seqs`, predictions at `trackers_root/SoccerNetGS-<split>/<tracker>/`.
+    With `use_teams` off the evaluator drops the team from both sides, so a wrong team costs
+    nothing."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     seqmap = out_dir / "seqmap.json"
     seqmap.write_text(json.dumps([{"name": s, "nframes": 750} for s in seqs]))  # nframes unused
     cmd = trackeval_command(python, trackeval_dir, gt_root, trackers_root, split, tracker,
-                            seqmap, use_jersey)
+                            seqmap, use_jersey, use_teams)
     pred_dir = Path(trackers_root) / f"SoccerNetGS-{split}" / tracker
     outputs = ("*_detailed.csv", "*_summary.txt")
     for pattern in outputs:                      # a stale CSV must not pass for this run's
