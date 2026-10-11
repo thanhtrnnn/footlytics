@@ -61,11 +61,41 @@ immediately overwritten.
 from __future__ import annotations
 
 import sys
+import types
 from dataclasses import dataclass
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from typing import Optional, Sequence
 
 import numpy as np
+
+#: SoccerMaster's top-level packages. None has an __init__.py, so they are namespace packages,
+#: and any installed regular package of the same name shadows them wherever it sits on sys.path
+#: (the shared GPU host has a `data` package in ~/.local). Bind them to the checkout explicitly.
+_CHECKOUT_PACKAGES = ("data", "models", "utils", "configs", "sn_calibration")
+
+
+def use_soccermaster_checkout(code_dir: str | Path) -> None:
+    """Make `import data...`, `import models...` etc. resolve inside `code_dir`."""
+    code_dir = Path(code_dir)
+    if str(code_dir) not in sys.path:
+        sys.path.insert(0, str(code_dir))
+    for name in _CHECKOUT_PACKAGES:
+        path = str(code_dir / name)
+        if not (code_dir / name).is_dir():
+            continue
+        mod = sys.modules.get(name)
+        if mod is not None and list(getattr(mod, "__path__", [])) == [path]:
+            continue
+        for key in [k for k in sys.modules if k.startswith(name + ".")]:
+            del sys.modules[key]                      # imported from elsewhere: re-import here
+        pkg = types.ModuleType(name)
+        pkg.__path__ = [path]
+        pkg.__package__ = name
+        pkg.__spec__ = ModuleSpec(name, None, is_package=True)
+        pkg.__spec__.submodule_search_locations = [path]
+        sys.modules[name] = pkg
+
 
 #: SoccerNet's line vocabulary, in the order the head emits channels.
 #: Taken verbatim from SoccerMaster's own `data/pnlcalib_utils/utils_lines.py`
@@ -138,8 +168,7 @@ class SoccerMasterLines:
         import torch
 
         self.code_dir = Path(code_dir)
-        if str(self.code_dir) not in sys.path:
-            sys.path.insert(0, str(self.code_dir))
+        use_soccermaster_checkout(self.code_dir)
 
         if device is None:
             device = ("mps" if torch.backends.mps.is_available()

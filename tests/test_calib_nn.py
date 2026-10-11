@@ -1,6 +1,8 @@
 """Calibrator: PnLCalib's solver recovers a known camera; the heads calibrate a real frame."""
+import importlib
 import json
 import os
+import sys
 import zipfile
 
 import numpy as np
@@ -108,3 +110,35 @@ def test_fit_records_solver_errors_per_frame():
     out = cal.fit([np.zeros((8, 8, 3), np.uint8)] * 2)
     assert out == {0: ok, 1: None}
     assert cal.last_errors == {1: "ZeroDivisionError: x"}
+
+
+@pytest.fixture
+def isolated_imports(monkeypatch):
+    """Leave sys.path and sys.modules as found: later tests import the real checkout."""
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    saved = dict(sys.modules)
+    yield
+    sys.modules.clear()
+    sys.modules.update(saved)
+    importlib.invalidate_caches()
+
+
+def test_checkout_packages_win_over_an_installed_regular_package(tmp_path, isolated_imports):
+    from footlytics.geometry.lines_nn import use_soccermaster_checkout
+
+    site, checkout = tmp_path / "site", tmp_path / "checkout"
+    (site / "data").mkdir(parents=True)
+    (site / "data" / "__init__.py").write_text('WHO = "site"\n')
+    (checkout / "data" / "pnlcalib_utils").mkdir(parents=True)
+    (checkout / "data" / "pnlcalib_utils" / "utils_calib.py").write_text('WHO = "checkout"\n')
+    sys.modules.pop("data", None)
+    sys.path.insert(0, str(site))
+    assert importlib.import_module("data").WHO == "site"
+
+    use_soccermaster_checkout(checkout)
+    use_soccermaster_checkout(checkout)                       # idempotent
+
+    assert sys.path[0] == str(checkout) and sys.path.count(str(checkout)) == 1
+    assert list(sys.modules["data"].__path__) == [str(checkout / "data")]
+    assert importlib.import_module("data.pnlcalib_utils.utils_calib").WHO == "checkout"
+    assert sys.modules["data.pnlcalib_utils.utils_calib"].__file__.startswith(str(checkout))

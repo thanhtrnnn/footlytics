@@ -10,13 +10,13 @@ image->pitch homography the pipeline uses.
 from __future__ import annotations
 
 import copy
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Sequence
 
 import numpy as np
 
+from .lines_nn import use_soccermaster_checkout
 from .sn_camera import ground_homography
 
 NUM_KEYPOINTS = 58                 # 57 pitch keypoints + background
@@ -46,9 +46,7 @@ class PnlSolver:
     """PnLCalib's decoding and solving, imported from the SoccerMaster checkout."""
 
     def __init__(self, code_dir: str | Path):
-        code_dir = str(Path(code_dir))
-        if code_dir not in sys.path:
-            sys.path.insert(0, code_dir)
+        use_soccermaster_checkout(code_dir)
         from data.pnlcalib_utils import utils_calib, utils_heatmap
 
         self._calib, self._hm = utils_calib, utils_heatmap

@@ -401,7 +401,7 @@ requires-dist = [
     { name = "shapely", marker = "extra == 'calib'", specifier = ">=2.0" },
     { name = "timm", marker = "extra == 'calib'", specifier = ">=1.0" },
     { name = "torch", specifier = ">=2.3" },
-    { name = "transformers", marker = "extra == 'calib'", specifier = ">=4.50" },
+    { name = "transformers", marker = "extra == 'calib'", specifier = ">=5" },
     { name = "typer", specifier = ">=0.12" },
     { name = "ultralytics", specifier = ">=8.3" },
 ]
