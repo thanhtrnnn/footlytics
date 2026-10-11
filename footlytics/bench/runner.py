@@ -430,13 +430,15 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
                 gt_d, pred_d = (ctx.work / "clips" / seq / k / split for k in ("gt", "pred"))
                 gt_d.mkdir(parents=True, exist_ok=True)
                 pred_d.mkdir(parents=True, exist_ok=True)
+                # every labelled frame is in the evaluator's denominator, image or not
+                for idx, lines in truth.items():
+                    for d in (gt_d, all_gt):
+                        (d / f"{seq}-{idx + 1:06d}.json").write_text(json.dumps(lines))
                 calibrated = 0
                 for fc in res:
                     if fc.frame_idx not in truth:
                         continue
                     name = f"{seq}-{fc.frame_idx + 1:06d}"
-                    for d in (gt_d, all_gt):
-                        (d / f"{name}.json").write_text(json.dumps(truth[fc.frame_idx]))
                     if fc.cam is not None:
                         calibrated += 1
                         for d in (pred_d, all_pred):

@@ -264,7 +264,7 @@ def test_sncalib_writes_cameras_at_the_evaluation_resolution(paths, calib, monke
     assert seen["principal_point"] == [480.0, 270.0]
 
 
-def write_gsr_clip(paths, seq="SNGS-990", n=3):
+def write_gsr_clip(paths, seq="SNGS-990", n=3, n_images=None):
     labels = make_labels(seq=seq, n_frames=n)
     for img in labels["images"]:
         img["has_labeled_pitch"] = img["is_labeled"]
@@ -276,7 +276,7 @@ def write_gsr_clip(paths, seq="SNGS-990", n=3):
     (d / "Labels-GameState.json").write_text(json.dumps(labels))
     paths.gsr_zip("valid").parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(paths.gsr_zip("valid"), "a") as z:
-        for f in range(n):
+        for f in range(n if n_images is None else n_images):
             z.writestr(f"{seq}/img1/{f + 1:06d}.jpg", jpg(192, 108))
 
 
@@ -295,6 +295,21 @@ def test_gsr_calibration_scores_labelled_frames_per_clip(paths, calib):
     assert combined[1] == ["camera_SNGS-990-000001", "camera_SNGS-990-000002",
                            "camera_SNGS-990-000003"]
     assert "seconds_per_frame" in t["aggregate"]
+
+
+def test_gsr_calibration_counts_labelled_frames_without_an_image_as_missed(paths, calib):
+    write_gsr_clip(paths, n=3, n_images=2)
+    row = runner.run_suite("t", "c4d", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid", "clips": ["SNGS-990"],
+         "every": 1}))
+    t = row["tasks"]["gc"]
+    assert t["status"] == "complete", t
+    assert t["clips"]["SNGS-990"]["calibrated_share"] == round(2 / 3, 4)
+    names = ["SNGS-990-000001", "SNGS-990-000002", "SNGS-990-000003"]
+    for gts, preds in (calib[0], calib[-1]):
+        assert gts == names and preds == [f"camera_{n}" for n in names[:2]]
+    assert t["clips"]["SNGS-990"]["completeness"] == pytest.approx(100.0 * 2 / 3)
+    assert t["aggregate"]["completeness"] == pytest.approx(100.0 * 2 / 3)
 
 
 def test_gsr_calibration_writes_cameras_at_the_evaluation_resolution(paths, calib, monkeypatch):
