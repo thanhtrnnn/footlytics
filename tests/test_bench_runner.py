@@ -112,3 +112,42 @@ def test_prune_keeps_the_last_runs_work(paths):
 def test_harness_suite_is_valid():
     s = runner.load_suite("harness")
     assert {t["kind"] for t in s["tasks"]} <= set(runner.KINDS)
+
+
+def test_rescore_isolates_bad_ground_truth_and_bad_predictions(paths, monkeypatch):
+    write_gt(paths, "test", ["SNGS-990", "SNGS-991", "SNGS-992"], bad={"SNGS-992"})
+    paths.baseline_zip.parent.mkdir(parents=True)
+    with zipfile.ZipFile(paths.baseline_zip, "w") as z:
+        z.writestr("tracklab/SNGS-990.json", json.dumps({"predictions": []}))
+        z.writestr("tracklab/SNGS-991.json", "{not json")
+        z.writestr("tracklab/SNGS-992.json", json.dumps({"predictions": []}))
+    calls = []
+    monkeypatch.setattr(runner, "run_gsr", fake_scores(calls))
+    row = runner.run_suite("t", "r5", paths, "sha", "h", suite_spec=spec(
+        {"id": "bl", "kind": "gsr_rescore", "split": "test", "clips": "all",
+         "predictions": "baseline/SoccerNetGS-test.zip", "tracker": "tracklab"}))
+    t = row["tasks"]["bl"]
+    assert t["status"] == "partial"
+    assert "JSON" in t["failed"]["SNGS-991"] and "1.3" in t["failed"]["SNGS-992"]
+    assert all(c[2] == ("SNGS-990",) for c in calls)
+
+
+def test_run_refuses_to_start_below_the_disk_floor(paths, monkeypatch):
+    from footlytics.bench import host
+    monkeypatch.setattr(host, "free_disk_bytes", lambda p: 2_000_000_000)
+    monkeypatch.setitem(runner.KINDS, "ok", lambda task, ctx: pytest.fail("ran a task"))
+    row = runner.run_suite("t", "r6", paths, "sha", "h", suite_spec=spec({"id": "a", "kind": "ok"}))
+    assert row["status"] == "failed" and "free" in row["error"]
+
+
+def test_preflight_records_the_evaluator_commit(paths, monkeypatch):
+    import subprocess
+    repo = paths.trackeval
+    repo.mkdir(parents=True)
+    git = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(git + ["init", "-q"], check=True)
+    subprocess.run(git + ["commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    sha = subprocess.run(git + ["rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    monkeypatch.setitem(runner.KINDS, "ok", lambda task, ctx: {"aggregate": {}})
+    row = runner.run_suite("t", "r7", paths, "sha", "h", suite_spec=spec({"id": "a", "kind": "ok"}))
+    assert row["env"]["evaluators"]["sn-trackeval"] == sha

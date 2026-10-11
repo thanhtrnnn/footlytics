@@ -90,11 +90,11 @@ def extract_gsr_labels(zip_path: str | Path, out_dir: str | Path) -> list[str]:
     out = Path(out_dir)
     seqs = []
     with zipfile.ZipFile(zip_path) as z:
-        for name in z.namelist():
-            m = _LABELS.match(name)
-            if not m:
-                continue
-            raw = z.read(name)
+        members = [(i, _LABELS.match(i.filename)) for i in z.infolist()]
+        members = [(i, m) for i, m in members if m]
+        host.require_disk(out, sum(i.file_size for i, _ in members))
+        for info, m in members:
+            raw = z.read(info)
             check_version(json.loads(raw))
             (out / m.group(1)).mkdir(parents=True, exist_ok=True)
             (out / m.group(1) / "Labels-GameState.json").write_bytes(raw)

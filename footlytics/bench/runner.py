@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import time
 import traceback
 import zipfile
@@ -19,13 +20,16 @@ from typing import Callable
 import yaml
 
 from . import datasets
-from .adapters.gsr import gt_to_state, state_to_predictions
+from .adapters.gsr import check_version, gt_to_state, state_to_predictions
 from .evaluators import run_gsr
-from .host import ResourceError, contention, torch_info
+from .host import ResourceError, contention, require_disk, torch_info
 from .paths import BenchPaths
 
 SUITES_DIR = Path(__file__).parent / "suites"
 DONE = ("complete", "partial", "failed")
+#: Room a run needs for its predictions and evaluator output (the disk is shared).
+RUN_DISK_BYTES = 2_000_000_000
+EVALUATORS = ("sn-trackeval", "sn-calibration")
 KINDS: dict[str, Callable[[dict, "TaskContext"], dict]] = {}
 
 
@@ -84,11 +88,23 @@ def run_status(tasks: dict) -> str:
     return "partial"
 
 
+def _commit(repo: Path) -> str | None:
+    if not (repo / ".git").exists():
+        return None
+    p = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True,
+                       text=True)
+    return p.stdout.strip() or None
+
+
 def preflight(paths: BenchPaths) -> dict:
-    """Refuse to run on a torch other than the one setup pinned (it lives in a shared ~/.local)."""
+    """Refuse to start below the disk floor, or on a torch other than the one setup pinned
+    (it lives in a shared ~/.local). Records the evaluator commits: they are part of what a
+    number means."""
+    require_disk(paths.root, RUN_DISK_BYTES)
+    info: dict = {"evaluators": {name: _commit(paths.ext / name) for name in EVALUATORS}}
     if not paths.torch_pin.exists():
-        return {}
-    info = torch_info()
+        return info
+    info.update(torch_info())
     pinned = paths.torch_pin.read_text().strip()
     if info["torch"] != pinned or not info["cuda"]:
         raise ResourceError(f"torch changed: pinned {pinned} with CUDA, found {info['torch']} "
@@ -155,6 +171,13 @@ def _resolve(paths: BenchPaths, split: str, wanted) -> list[str]:
     return have if wanted == "all" else list(wanted)
 
 
+def _labels(paths: BenchPaths, split: str, seq: str) -> dict:
+    """One clip's ground truth, parsed and version-checked (raises for that clip alone)."""
+    labels = json.loads((paths.gsr_labels / split / seq / "Labels-GameState.json").read_text())
+    check_version(labels)
+    return labels
+
+
 def _score(ctx: TaskContext, split: str, tracker: str, seqs: list[str]) -> dict:
     """GS-HOTA jersey off (primary) and on (official) for one tracker folder."""
     per: dict[str, dict] = {s: {} for s in seqs}
@@ -180,9 +203,8 @@ def gsr_gt_roundtrip(task: dict, ctx: TaskContext) -> dict:
     failed, done = {}, []
     for seq in _resolve(ctx.paths, split, task.get("clips", "all")):
         try:
-            labels = json.loads((ctx.paths.gsr_labels / split / seq / "Labels-GameState.json")
-                                .read_text())
-            pred = state_to_predictions(gt_to_state(labels), split, use_jersey=True)
+            pred = state_to_predictions(gt_to_state(_labels(ctx.paths, split, seq)), split,
+                                        use_jersey=True)
             (out_dir / f"{seq}.json").write_text(json.dumps(pred))
             done.append(seq)
         except Exception as e:  # noqa: BLE001
@@ -207,7 +229,16 @@ def gsr_rescore(task: dict, ctx: TaskContext) -> dict:
             if member not in names:
                 failed[seq] = f"no predictions in {task['predictions']}"
                 continue
-            (out_dir / f"{seq}.json").write_bytes(z.read(member))
+            # one bad clip must fail alone, not take the whole evaluator call with it
+            try:
+                _labels(ctx.paths, split, seq)
+                raw = z.read(member)
+                if not isinstance(json.loads(raw).get("predictions"), list):
+                    raise ValueError(f"{member} has no predictions list")
+            except Exception as e:  # noqa: BLE001
+                failed[seq] = f"{type(e).__name__}: {e}"
+                continue
+            (out_dir / f"{seq}.json").write_bytes(raw)
             done.append(seq)
     if not done:
         raise RuntimeError(f"no predictions for any {split} clip in {task['predictions']}")

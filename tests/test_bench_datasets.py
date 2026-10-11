@@ -68,3 +68,11 @@ def test_fetch_hf_skips_a_verified_file(tmp_path, monkeypatch):
     api = SimpleNamespace(get_paths_info=lambda *a, **k: [info])
     assert datasets.fetch_hf("r", "valid.zip", "rev", p, api=api,
                              download=lambda **k: pytest.fail("re-downloaded")) == p
+
+
+def test_label_extraction_checks_the_disk_first(tmp_path, monkeypatch):
+    make_zip(tmp_path / "valid.zip", ["1.3", "1.3"])
+    monkeypatch.setattr(host, "free_disk_bytes", lambda p: 1_500_000_100)
+    with pytest.raises(host.ResourceError, match="free"):
+        datasets.extract_gsr_labels(tmp_path / "valid.zip", tmp_path / "labels")
+    assert not (tmp_path / "labels").exists()

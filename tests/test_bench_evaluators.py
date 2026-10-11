@@ -43,7 +43,7 @@ def test_evaluator_failure_carries_its_output(tmp_path):
 def test_evaluator_without_csv_is_an_error(tmp_path):
     def fake(cmd, **kw):
         return subprocess.CompletedProcess(cmd, 0, stdout="done", stderr="")
-    with pytest.raises(EvaluatorError, match="person_detailed.csv"):
+    with pytest.raises(EvaluatorError, match="(?s)person_detailed.csv.*done"):
         run_gsr(Path("/py"), Path("/te"), tmp_path, tmp_path, "valid", "fl", ["SNGS-990"],
                 tmp_path / "out", use_jersey=False, run=fake)
 

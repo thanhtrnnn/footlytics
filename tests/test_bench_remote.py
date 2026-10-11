@@ -14,7 +14,7 @@ class FakeSsh:
     def __init__(self, script):
         self.script, self.calls = script, []
 
-    def __call__(self, argv, input=None, capture_output=True):
+    def __call__(self, argv, input=None, capture_output=True, timeout=None):
         cmd = argv[-1]
         self.calls.append(cmd)
         for needle, code, out in self.script:
@@ -91,3 +91,46 @@ def test_fetch_runs_in_tmux_without_the_xet_chunk_cache():
     cmd = next(c for c in ssh.calls if "tmux new-session" in c)
     assert "HF_HUB_DISABLE_XET=1" in cmd and "bench fetch gsr-valid gsr-test" in cmd
     assert log.startswith("/home/iec/footlytics-bench/runs/fetch-")
+
+
+# ---------------------------------------------------------------- review fixes
+
+def test_unsafe_names_never_reach_the_remote_shell():
+    ssh = FakeSsh(ROOT)
+    r = rm.Remote("h", runner=ssh)
+    with pytest.raises(ValueError):
+        r.start("20261012-100000-x;touch-abc1234", "x;touch /tmp/pwn", "abc")
+    with pytest.raises(ValueError):
+        r.status("r1; rm -rf ~")
+    with pytest.raises(ValueError):
+        r.start_fetch("abc", ["gsr-valid;id"])
+    assert not any("tmux" in c for c in ssh.calls)
+
+
+def test_ssh_has_keepalives_and_a_hung_session_is_sshdown():
+    seen = []
+
+    def hung(argv, input=None, capture_output=True, timeout=None):
+        seen.append(argv)
+        raise subprocess.TimeoutExpired(argv, timeout)
+    r = rm.Remote("iec4090_2", runner=hung)
+    with pytest.raises(rm.SshDown, match="ssh iec4090_2 true"):
+        r.root
+    opts = " ".join(seen[0])
+    assert "ConnectTimeout=" in opts and "ServerAliveInterval=" in opts
+
+
+def test_env_fingerprint_matches_the_host_script():
+    import hashlib
+    from pathlib import Path
+    root = Path(rm.__file__).resolve().parents[2]
+    py, sh = (root / "pyproject.toml").read_bytes(), (root / "footlytics/bench/host_setup.sh").read_bytes()
+    assert rm.env_fingerprint(py, sh) == hashlib.sha256(py + sh).hexdigest()
+    assert ('cat "$SRC/pyproject.toml" "$SRC/footlytics/bench/host_setup.sh" | sha256sum'
+            in sh.decode())
+
+
+def test_uv_installer_is_pinned_and_writes_no_receipt():
+    from pathlib import Path
+    sh = (Path(rm.__file__).parent / "host_setup.sh").read_text()
+    assert "astral.sh/uv/0.13.0/install.sh" in sh and "UV_UNMANAGED_INSTALL=" in sh

@@ -10,8 +10,9 @@ export UV_CACHE_DIR="$ROOT/cache/uv" PIP_CACHE_DIR="$ROOT/cache/pip" HF_HOME="$R
   YOLO_CONFIG_DIR="$ROOT/cache/ultralytics" HF_HUB_DISABLE_XET=1
 mkdir -p "$ROOT"/{bin,cache,data,runs,src,ext}
 
-[ -x "$ROOT/bin/uv" ] || curl -LsSf https://astral.sh/uv/install.sh \
-  | env UV_INSTALL_DIR="$ROOT/bin" UV_NO_MODIFY_PATH=1 sh
+# Unmanaged install: no receipt in the shared ~/.config/uv, no PATH edits.
+[ -x "$ROOT/bin/uv" ] || curl -LsSf https://astral.sh/uv/0.13.0/install.sh \
+  | env UV_UNMANAGED_INSTALL="$ROOT/bin" sh
 
 # Pipeline venv on the system torch. pip, not uv: uv ignores system site-packages and would
 # pull a second torch. Code runs from $ROOT/src/<sha> (cwd first on sys.path); the install
@@ -39,5 +40,7 @@ clone() {
 clone sn-trackeval "$TRACKEVAL_SHA"
 clone sn-calibration "$CALIB_SHA"
 
-sha256sum "$SRC/pyproject.toml" | cut -d' ' -f1 > "$ROOT/venv/.deps-sha"
+# remote.env_fingerprint: a change to either file rebuilds the host on the next run
+cat "$SRC/pyproject.toml" "$SRC/footlytics/bench/host_setup.sh" | sha256sum | cut -d' ' -f1 \
+  > "$ROOT/venv/.deps-sha"
 echo "host ready: $ROOT"

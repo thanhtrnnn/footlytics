@@ -77,14 +77,14 @@ def run_gsr(python: Path, trackeval_dir: Path, gt_root: Path, trackers_root: Pat
             f.unlink()
     p = run(cmd, capture_output=True, text=True, cwd=str(trackeval_dir))
     (out_dir / "evaluator.log").write_text(f"{' '.join(cmd)}\n\n{p.stdout}\n{p.stderr}")
+    tail = "\n".join((p.stdout + "\n" + p.stderr).strip().splitlines()[-15:])
     if p.returncode != 0:
-        tail = "\n".join((p.stdout + "\n" + p.stderr).strip().splitlines()[-15:])
         raise EvaluatorError(f"sn-trackeval exited {p.returncode}:\n{tail}")
     for pattern in outputs:
         for f in pred_dir.glob(pattern):
             shutil.move(str(f), out_dir / f.name)
     csv_path = out_dir / "person_detailed.csv"
     if not csv_path.exists():
-        raise EvaluatorError(f"sn-trackeval wrote no person_detailed.csv in {pred_dir}; "
-                             f"see {out_dir / 'evaluator.log'}")
+        raise EvaluatorError(f"sn-trackeval exited 0 but wrote no person_detailed.csv in "
+                             f"{pred_dir}:\n{tail}")
     return parse_detailed(csv_path)

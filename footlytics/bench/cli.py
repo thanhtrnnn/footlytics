@@ -1,7 +1,6 @@
 """`footlytics bench`: run suites on the benchmark host and keep the scoreboard."""
 from __future__ import annotations
 
-import hashlib
 import socket
 import subprocess
 from pathlib import Path
@@ -26,6 +25,22 @@ def _clean_sha() -> str:
     return _git("rev-parse", "HEAD").decode().strip()
 
 
+def _suite_exists(suite: str) -> None:
+    from .runner import SUITES_DIR
+
+    if not (SUITES_DIR / f"{suite}.yaml").exists():
+        known = sorted(p.stem for p in SUITES_DIR.glob("*.yaml"))
+        raise typer.BadParameter(f"no suite {suite!r}; one of {known}")
+
+
+def _fetchable(what: list[str]) -> None:
+    from .datasets import FETCHABLE
+
+    unknown = [w for w in what if w not in FETCHABLE]
+    if unknown:
+        raise typer.BadParameter(f"unknown dataset(s) {unknown}; one of {sorted(FETCHABLE)}")
+
+
 def _remote(host: str):
     from .remote import Remote
 
@@ -41,7 +56,7 @@ def _guard(fn):
     except SshDown as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(2)
-    except RemoteError as e:
+    except (RemoteError, ValueError) as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1)
 
@@ -51,9 +66,10 @@ def run(suite: str = typer.Option("harness"),
         remote: Optional[str] = typer.Option(None, help="ssh alias of the host, e.g. iec4090_2"),
         interval: int = typer.Option(30, help="seconds between polls")) -> None:
     """Run a suite (on the host with --remote) and append its row to bench/results."""
-    from .remote import follow, make_run_id
+    from .remote import env_fingerprint, follow, make_run_id
     from .results import RESULTS_DIR, append_result, write_scoreboard
 
+    _suite_exists(suite)
     sha = _clean_sha()
     run_id = make_run_id(suite, sha)
     if remote is None:
@@ -69,7 +85,8 @@ def run(suite: str = typer.Option("harness"),
     def go():
         r = _remote(remote)
         r.ship(sha, _git("archive", "--format=tar", sha))
-        deps = hashlib.sha256(_git("show", f"{sha}:pyproject.toml")).hexdigest()
+        deps = env_fingerprint(_git("show", f"{sha}:pyproject.toml"),
+                               _git("show", f"{sha}:footlytics/bench/host_setup.sh"))
         if r.ensure_env(sha, deps):
             typer.echo("host environment (re)built")
         r.start(run_id, suite, sha)
@@ -109,6 +126,7 @@ def fetch(what: list[str] = typer.Argument(
           remote: Optional[str] = typer.Option(
               None, help="start the download on this host in tmux")) -> None:
     """Download pinned datasets (on the host; with --remote, start that in tmux and return)."""
+    _fetchable(what)
     if remote:
         sha = _clean_sha()
 
