@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -88,3 +90,50 @@ def run_gsr(python: Path, trackeval_dir: Path, gt_root: Path, trackers_root: Pat
         raise EvaluatorError(f"sn-trackeval exited 0 but wrote no person_detailed.csv in "
                              f"{pred_dir}:\n{tail}")
     return parse_detailed(csv_path)
+
+
+@dataclass
+class CalibScores:
+    score: float          # JaC x completeness, percent
+    completeness: float
+    jac: float
+    precision: float
+    recall: float
+
+
+_CALIB_RE = {"score": r"final score of : (\S+)", "completeness": r"completeness rate of : (\S+)",
+             "jac": r"accuracy mean value :\s+(\S+)%", "precision": r"precision mean value : (\S+)%",
+             "recall": r"recall mean value : (\S+)%"}
+
+
+def parse_sncalib(text: str) -> CalibScores:
+    vals = {}
+    for k, pat in _CALIB_RE.items():
+        m = re.search(pat, text)
+        v = float(m.group(1)) if m else float("nan")
+        if k in ("score", "completeness"):
+            v *= 100
+        vals[k] = 0.0 if v != v else round(v, 3)     # nothing predicted: 0, never NaN
+    return CalibScores(**vals)
+
+
+def run_sncalib(python: Path, sncal_dir: Path, gt_root: Path, pred_root: Path, split: str,
+                out_dir: Path, threshold: int = 5, width: int = 960, height: int = 540,
+                run=subprocess.run) -> CalibScores:
+    """JaC@threshold x completeness from sn-calibration's evaluate_camera.py.
+
+    `gt_root/<split>/` must hold only frame JSONs: the script counts every *.json in it. The
+    script reads each image size from the camera's principal point, so the predicted cameras
+    must be written at width x height (`sn_camera.scale_camera`), not at the video's size."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cmd = [str(python), str(Path(sncal_dir) / "src" / "evaluate_camera.py"), "-s", str(gt_root),
+           "-p", str(pred_root), "--split", split, "-t", str(threshold),
+           "--resolution_width", str(width), "--resolution_height", str(height)]
+    env = {**os.environ, "PYTHONPATH": str(sncal_dir), "MPLBACKEND": "Agg"}
+    p = run(cmd, capture_output=True, text=True, cwd=str(sncal_dir), env=env)
+    (out_dir / "evaluator.log").write_text(f"{' '.join(cmd)}\n\n{p.stdout}\n{p.stderr}")
+    tail = "\n".join((p.stdout + "\n" + p.stderr).strip().splitlines()[-15:])
+    if p.returncode != 0 or "final score of" not in p.stdout:
+        raise EvaluatorError(f"sn-calibration exited {p.returncode}:\n{tail}")
+    return parse_sncalib(p.stdout)
