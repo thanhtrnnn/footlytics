@@ -67,6 +67,22 @@ class BenchPaths:
         return self.ext / "sn-trackeval"
 
     @property
+    def weights(self) -> Path:
+        return self.root / "weights" / "soccermaster"
+
+    @property
+    def soccermaster_code(self) -> Path:
+        """The SoccerMaster checkout (no licence: internal R&D), shipped by `bench setup`."""
+        return self.ext / "SoccerMaster"
+
+    @property
+    def sn_calibration(self) -> Path:
+        return self.ext / "sn-calibration"
+
+    def calib_zip(self, split: str) -> Path:
+        return self.data / "calibration" / f"{split}.zip"
+
+    @property
     def cache(self) -> Path:
         return self.root / "cache"
 

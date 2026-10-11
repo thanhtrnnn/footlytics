@@ -76,3 +76,25 @@ def test_label_extraction_checks_the_disk_first(tmp_path, monkeypatch):
     with pytest.raises(host.ResourceError, match="free"):
         datasets.extract_gsr_labels(tmp_path / "valid.zip", tmp_path / "labels")
     assert not (tmp_path / "labels").exists()
+
+
+def test_soccermaster_weights_come_from_the_model_repo(tmp_path, monkeypatch):
+    import hashlib
+    monkeypatch.setattr(host, "free_disk_bytes", lambda p: 50_000_000_000)
+    sha = hashlib.sha256(b"w").hexdigest()
+    seen = []
+
+    def paths_info(repo, files, repo_type, revision):
+        seen.append((repo, files[0], repo_type, revision))
+        return [SimpleNamespace(size=1, lfs=SimpleNamespace(sha256=sha))]
+    api = SimpleNamespace(get_paths_info=paths_info)
+
+    def download(repo_id, filename, repo_type, revision, local_dir):
+        p = tmp_path / "root" / "weights" / "soccermaster" / filename
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"w")
+        return str(p)
+    monkeypatch.setattr(datasets, "_HF", (api, download))
+    d = datasets.fetch(BenchPaths(tmp_path / "root"), "soccermaster-weights")
+    assert sorted(f.name for f in d.glob("*.pt")) == sorted(datasets.SOCCERMASTER_FILES)
+    assert {s[2] for s in seen} == {"model"} and {s[3] for s in seen} == {datasets.SOCCERMASTER_REVISION}

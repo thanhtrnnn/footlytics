@@ -134,3 +134,19 @@ def test_uv_installer_is_pinned_and_writes_no_receipt():
     from pathlib import Path
     sh = (Path(rm.__file__).parent / "host_setup.sh").read_text()
     assert "astral.sh/uv/0.13.0/install.sh" in sh and "UV_UNMANAGED_INSTALL=" in sh
+
+
+def test_ship_dir_replaces_the_checkout_atomically():
+    ssh = FakeSsh(ROOT)
+    d = rm.Remote("h", runner=ssh).ship_dir("SoccerMaster", b"tar")
+    assert d == "/home/iec/footlytics-bench/ext/SoccerMaster"
+    cmd = next(c for c in ssh.calls if "tar -x" in c)
+    assert "ext/SoccerMaster.tmp" in cmd and "mv " in cmd
+    with pytest.raises(ValueError):
+        rm.Remote("h", runner=FakeSsh(ROOT)).ship_dir("../x", b"")
+
+
+def test_host_setup_installs_the_calib_extra():
+    from pathlib import Path
+    sh = (Path(rm.__file__).parent / "host_setup.sh").read_text()
+    assert '"$SRC[dev,calib]"' in sh

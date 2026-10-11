@@ -19,7 +19,7 @@ mkdir -p "$ROOT"/{bin,cache,data,runs,src,ext}
 # only brings the dependencies.
 [ -x "$ROOT/venv/bin/python" ] || "$ROOT/bin/uv" venv -q --seed --system-site-packages \
   --python /usr/bin/python3 "$ROOT/venv"
-"$ROOT/venv/bin/pip" install -q "$SRC[dev]"
+"$ROOT/venv/bin/pip" install -q "$SRC[dev,calib]"
 "$ROOT/venv/bin/python" - "$TORCH_PIN" <<'PY'
 import sys, torch
 assert torch.__version__ == sys.argv[1], f"torch {torch.__version__}, expected {sys.argv[1]}"

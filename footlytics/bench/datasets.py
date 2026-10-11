@@ -29,6 +29,13 @@ BASELINE_URL = ("https://github.com/SoccerNet/sn-gamestate/raw/"
                 "SoccerNetGS-test.zip")
 BASELINE_SHA256 = "b51bea37ebd036ed95bd7cd89eea2d46134b6e3a704c02a7a30eaf6d91a734a5"
 
+SOCCERMASTER_REPO = "xleprime/SoccerMaster"
+SOCCERMASTER_REVISION = "0d94573662dbd678df22aa5c61ae77f474b939c9"
+SOCCERMASTER_FILES = ("backbone.pt", "LinesDetection.pt", "KeypointsDetection.pt")
+
+#: Test seam: `(api, download)` used by fetch_hf when it is not given its own.
+_HF = None
+
 _LABELS = re.compile(r"^(SNGS-\d+)/Labels-GameState\.json$")
 
 
@@ -55,17 +62,18 @@ def _verify(dest: Path, sha: str) -> Path:
 
 
 def fetch_hf(repo: str, filename: str, revision: str, dest: Path, api=None,
-             download=None) -> Path:
+             download=None, repo_type: str = "dataset") -> Path:
     from huggingface_hub import HfApi, hf_hub_download
 
+    api, download = api or (_HF[0] if _HF else None), download or (_HF[1] if _HF else None)
     api = api or HfApi()
-    info = api.get_paths_info(repo, [filename], repo_type="dataset", revision=revision)[0]
+    info = api.get_paths_info(repo, [filename], repo_type=repo_type, revision=revision)[0]
     if _verified(dest, info.lfs.sha256):
         return dest
     host.require_disk(dest.parent, info.size)
     dest.parent.mkdir(parents=True, exist_ok=True)
     got = Path((download or hf_hub_download)(repo_id=repo, filename=filename,
-                                             repo_type="dataset", revision=revision,
+                                             repo_type=repo_type, revision=revision,
                                              local_dir=str(dest.parent)))
     if got != dest:
         got.replace(dest)
@@ -119,7 +127,14 @@ def _gsr(split: str) -> Callable[[BenchPaths], Path]:
 
 def _calib(split: str) -> Callable[[BenchPaths], Path]:
     return lambda paths: fetch_hf(CALIB_REPO, f"{split}.zip", CALIB_REVISION,
-                                  paths.data / "calibration" / f"{split}.zip")
+                                  paths.calib_zip(split))
+
+
+def _weights(paths: BenchPaths) -> Path:
+    for f in SOCCERMASTER_FILES:
+        fetch_hf(SOCCERMASTER_REPO, f, SOCCERMASTER_REVISION, paths.weights / f,
+                 repo_type="model")
+    return paths.weights
 
 
 FETCHABLE: dict[str, Callable[[BenchPaths], Path]] = {
@@ -127,6 +142,7 @@ FETCHABLE: dict[str, Callable[[BenchPaths], Path]] = {
     "gsr-test": _gsr("test"),
     "calib-valid": _calib("valid"),
     "calib-test": _calib("test"),
+    "soccermaster-weights": _weights,
     "baseline": lambda paths: fetch_url(BASELINE_URL, paths.baseline_zip, BASELINE_SHA256),
 }
 

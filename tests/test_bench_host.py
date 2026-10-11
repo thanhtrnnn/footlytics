@@ -49,3 +49,10 @@ def test_contention_without_nvidia_smi_still_reports_load(monkeypatch):
     monkeypatch.setattr(host.subprocess, "run", boom)
     r = host.contention()
     assert "load1" in r and r["gpu_used_mib"] is None
+
+
+def test_calibration_paths_live_under_the_root(tmp_path):
+    p = BenchPaths(tmp_path)
+    for q in (p.weights, p.soccermaster_code, p.sn_calibration, p.calib_zip("valid")):
+        assert tmp_path in q.parents
+    assert p.calib_zip("test").name == "test.zip"

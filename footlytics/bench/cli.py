@@ -10,10 +10,24 @@ import typer
 
 bench_app = typer.Typer(help="Benchmark: our output scored by the official SoccerNet evaluators.")
 REPO = Path(__file__).resolve().parents[2]
+SOCCERMASTER_CODE = REPO.parent / "SoccerMaster-code" / "codes" / "SoccerMaster"
 
 
 def _git(*args: str) -> bytes:
     return subprocess.run(["git", *args], cwd=REPO, capture_output=True, check=True).stdout
+
+
+def _tar_dir(path: Path) -> bytes:
+    import io
+    import tarfile
+
+    def keep(ti):
+        parts = Path(ti.name).parts
+        return None if "__pycache__" in parts or ".git" in parts else ti
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as t:
+        t.add(str(path), arcname=".", filter=keep)
+    return buf.getvalue()
 
 
 def _clean_sha() -> str:
@@ -109,13 +123,21 @@ def resume(run_id: str, remote: str = typer.Option(...),
 
 
 @bench_app.command("setup")
-def setup(remote: str = typer.Option(...)) -> None:
+def setup(remote: str = typer.Option(...),
+          soccermaster_code: Path = typer.Option(
+              SOCCERMASTER_CODE,
+              help="SoccerMaster checkout to ship (internal R&D, no licence)")) -> None:
     """(Re)build the host: uv, pipeline venv on the system torch, evaluator venv, evaluators."""
     sha = _clean_sha()
 
     def go():
         r = _remote(remote)
         r.ship(sha, _git("archive", "--format=tar", sha))
+        if soccermaster_code.exists():
+            r.ship_dir("SoccerMaster", _tar_dir(soccermaster_code))
+        else:
+            typer.echo(f"warning: no SoccerMaster checkout at {soccermaster_code}; "
+                       "calibration tasks will fail without it", err=True)
         typer.echo(r.setup(sha))
     _guard(go)
 

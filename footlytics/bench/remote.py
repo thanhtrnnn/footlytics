@@ -93,6 +93,14 @@ class Remote:
         self.sh(f"cd {self.root}/src && ls -1t | tail -n +6 | xargs -r rm -rf")
         return d
 
+    def ship_dir(self, name: str, archive: bytes) -> str:
+        """Replace `ext/<name>` with the contents of a tar archive."""
+        _safe(name)
+        d = f"{self.root}/ext/{name}"
+        self.sh(f"rm -rf {d}.tmp && mkdir -p {d}.tmp && tar -x -C {d}.tmp && rm -rf {d} "
+                f"&& mv {d}.tmp {d}", input=archive, timeout=600)
+        return d
+
     def setup(self, sha: str) -> str:
         _safe(sha)
         d = f"{self.root}/src/{sha}"
