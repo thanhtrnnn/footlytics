@@ -1,4 +1,4 @@
-"""Command line: `footlytics run`, `footlytics calib-assist`, `footlytics drift-check`."""
+"""Command line: `footlytics run`, `calib-assist`, `drift-check`, and `bench` (the benchmark)."""
 from __future__ import annotations
 
 import json
@@ -11,6 +11,10 @@ import numpy as np
 import typer
 
 app = typer.Typer(help="Footlytics: video -> Match State (pitch metres) -> analytics")
+
+from .bench.cli import bench_app  # noqa: E402
+
+app.add_typer(bench_app, name="bench")
 
 
 @app.callback()
