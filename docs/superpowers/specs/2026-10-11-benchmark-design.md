@@ -88,6 +88,12 @@ Reference points (all GSR): baseline 22.26 test / 18.05 valid (arXiv 2404.11335)
 winners about 64 on the hidden challenge split (2024, 2025 reports); SoccerMaster 64.1 on test
 (arXiv 2512.11016). Calibration: PnLCalib 51.8 and SoccerMaster 56.2 on the test split.
 
+Measured on this harness (2026-10-11, run `20261011-113649-harness-3b32aa6`): GSR ground truth
+through our adapters scores 100.00 on all 58 valid clips; the sn-gamestate baseline predictions
+re-score to **23.09** jersey-on on the 49 test clips (published 22.26; those predictions date from
+March 2024, before the v1.3 labels) and **38.34 with jersey off**, the baseline to beat on our
+primary metric.
+
 ## Validity rules
 
 - **Teams:** GSR scores team as left/right of the camera. HOME/AWAY is mapped to left/right per
