@@ -42,9 +42,12 @@ libraries and kernel module disagree until its admin reboots it, and we have no 
   - seconds per match minute is noisy, so every row also records the other processes' GPU
     memory and the load average at the start and end of the run.
 - **Python:** system `python3` 3.12 already has torch 2.7.1+cu128 and torchvision 0.22.1 with
-  CUDA working. The pipeline venv is built with `--system-site-packages` and must not install a
-  second torch (checked after install: `torch.__version__ == "2.7.1+cu128"` and CUDA available).
-  `uv` is installed in the home directory. The evaluators get their own venv (GPL, see below).
+  CUDA working (installed in the shared account's `~/.local`, so another user could change it).
+  The pipeline venv is built with `--system-site-packages` and must not install a second torch:
+  it is filled with `pip`, because `uv pip` ignores system site-packages and would pull a new
+  torch. Checked after install and at the start of every run: `torch.__version__ ==
+  "2.7.1+cu128"` and CUDA available. `uv` lives at `~/footlytics-bench/bin/uv`. The evaluators
+  get their own venv.
 - **Disk:** 41 GB free on 2026-10-11, after a user-approved prune of Docker build cache and
   dangling images. The disk is shared: downloads and runs check free space first and stop
   below a 1.5 GB floor. Budget:
@@ -88,8 +91,9 @@ winners about 64 on the hidden challenge split (2024, 2025 reports); SoccerMaste
 ## Validity rules
 
 - **Teams:** GSR scores team as left/right of the camera. HOME/AWAY is mapped to left/right per
-  clip from the teams' mean x after direction normalisation, computed from our own output,
-  never from ground truth.
+  clip from our own output, never from ground truth: a team defends the goal its goalkeeper
+  stands in front of, so the goalkeepers' mean x decides; a team with no goalkeeper sighting
+  falls back to its mean x. GSR x is camera-relative, like the Match State's.
 - **Calibration output:** the SN-Calibration evaluator needs full camera parameters (it scores
   goal posts and crossbars off the ground plane), so the calibrator exports PnLCalib's full
   camera, not only the ground homography.
@@ -118,7 +122,7 @@ iec4090_2:  ~/footlytics-bench/{src,data,weights,runs,venv,venv-eval}
                           GSR ground truth -> Match State (for ball and tactical metrics)
          adapters/calib.py  our camera -> SN-Calibration prediction files
          evaluators.py    official evaluators as subprocesses in their own venv
-                          (sn-trackeval, sn-calibration; GPL code is run, never imported)
+                          (sn-trackeval is MIT, sn-calibration has no licence: run, never imported)
          metrics.py       ball recall/px, tactical-feature error, landmark error, jitter, s/min
          runner.py        suite loop: pipeline -> adapters -> evaluators -> metrics -> results
 
@@ -134,7 +138,9 @@ any failed clip is marked partial and is not compared with complete runs.
 Before any number is trusted:
 
 1. GSR ground truth through our adapter scores close to 100 GS-HOTA.
-2. The published baseline outputs (Zenodo 11065177) re-score to 22.26 on test with jersey on.
+2. The published baseline outputs re-score to 22.26 on test with jersey on. Source: the JSON
+   predictions shipped in sn-gamestate (`examples_predictions/SoccerNetGS-test.zip`, pinned by
+   sha256); the Zenodo 11065177 tracker state is a pickle and is only the fallback.
 3. Unit tests: adapter round trip on a tiny sample, the left/right mapping, each metric on
    synthetic data.
 
