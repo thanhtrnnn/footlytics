@@ -29,12 +29,19 @@ def append_result(path: str | Path, row: dict) -> bool:
     return True
 
 
+#: The number a task kind shows on the scoreboard when its suite gives it no check. `score` is
+#: JaC@5 x completeness.
+PRIMARY = {"gsr_pipeline": "hota_jersey_off", "gsr_gt_roundtrip": "hota_jersey_off",
+           "gsr_rescore": "hota_jersey_on", "sncalib": "score", "gsr_calibration": "score"}
+
+
 def headline(task: dict) -> tuple[str, float | None, bool | None]:
+    """The task's check metric, else its kind's `PRIMARY`, else its first aggregate key."""
     if task.get("status") == "failed":
         return "error", None, None
     check = task.get("check") or {}
     agg = task.get("aggregate") or {}
-    metric = check.get("metric") or next(iter(agg), "")
+    metric = check.get("metric") or PRIMARY.get(task.get("kind")) or next(iter(agg), "")
     return metric, agg.get(metric), check.get("passed")
 
 

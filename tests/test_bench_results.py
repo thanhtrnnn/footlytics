@@ -23,6 +23,26 @@ def test_headline_prefers_the_check_metric():
     assert headline({"status": "failed", "error": "boom"}) == ("error", None, None)
 
 
+def task(kind, aggregate, check=None):
+    return {"kind": kind, "status": "complete", "aggregate": aggregate, "check": check}
+
+
+def test_headline_is_the_kinds_primary_metric_not_the_first_stored_key():
+    """Rows are stored with sorted keys, so the first key is an accident of the alphabet."""
+    gsr = {"assa_jersey_off": 45.77, "hota_jersey_off": 30.12, "hota_jersey_on": 23.09}
+    calib = {"calibrated_share": 1.0, "completeness": 76.67, "score": 54.4}
+    assert headline(task("gsr_pipeline", gsr)) == ("hota_jersey_off", 30.12, None)
+    assert headline(task("gsr_gt_roundtrip", gsr)) == ("hota_jersey_off", 30.12, None)
+    assert headline(task("gsr_rescore", gsr)) == ("hota_jersey_on", 23.09, None)
+    assert headline(task("sncalib", calib)) == ("score", 54.4, None)
+    assert headline(task("gsr_calibration", calib)) == ("score", 54.4, None)
+    assert headline(task("gsr_pipeline", gsr, {"metric": "assa_jersey_off", "passed": True})) \
+        == ("assa_jersey_off", 45.77, True)                             # a check still wins
+    assert headline(task("new_kind", {"b": 2.0, "a": 1.0})) == ("b", 2.0, None)
+    md = render_scoreboard([{**row("r1"), "tasks": {"gp": task("gsr_pipeline", gsr)}}])
+    assert "| hota_jersey_off 30.12 |" in md
+
+
 def test_scoreboard_newest_first_and_marks_partial():
     md = render_scoreboard([row("r1", finished="2026-10-12T10:00:00Z"),
                             row("r2", status="partial", hota=50.0, passed=False,
