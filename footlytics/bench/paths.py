@@ -71,6 +71,15 @@ class BenchPaths:
         return self.root / "weights" / "soccermaster"
 
     @property
+    def detector_weights(self) -> Path:
+        return self.root / "weights" / "detector" / "yolo_v8x6_finetuned.pt"
+
+    @property
+    def ball_weights(self) -> Path:
+        """roboflow football-ball-detection (AGPL-3.0): internal benchmarking only."""
+        return self.root / "weights" / "detector" / "football-ball-detection.pt"
+
+    @property
     def soccermaster_code(self) -> Path:
         """The SoccerMaster checkout (no licence: internal R&D), shipped by `bench setup`."""
         return self.ext / "SoccerMaster"

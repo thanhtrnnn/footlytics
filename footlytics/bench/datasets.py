@@ -32,6 +32,9 @@ BASELINE_SHA256 = "b51bea37ebd036ed95bd7cd89eea2d46134b6e3a704c02a7a30eaf6d91a73
 SOCCERMASTER_REPO = "xleprime/SoccerMaster"
 SOCCERMASTER_REVISION = "0d94573662dbd678df22aa5c61ae77f474b939c9"
 SOCCERMASTER_FILES = ("backbone.pt", "LinesDetection.pt", "KeypointsDetection.pt")
+#: roboflow football-ball-detection (AGPL-3.0): internal benchmarking only.
+BALL_REPO = "martinjolif/yolo-football-ball-detection"
+BALL_REVISION = "63666b30e2a4973e089c982769f146af54530750"
 
 #: Test seam: `(api, download)` used by fetch_hf when it is not given its own.
 _HF = None
@@ -137,12 +140,21 @@ def _weights(paths: BenchPaths) -> Path:
     return paths.weights
 
 
+def _detector(paths: BenchPaths) -> Path:
+    fetch_hf(SOCCERMASTER_REPO, "yolo_v8x6_finetuned.pt", SOCCERMASTER_REVISION,
+             paths.detector_weights, repo_type="model")
+    fetch_hf(BALL_REPO, "yolo-football-ball-detection.pt", BALL_REVISION, paths.ball_weights,
+             repo_type="model")
+    return paths.detector_weights.parent
+
+
 FETCHABLE: dict[str, Callable[[BenchPaths], Path]] = {
     "gsr-valid": _gsr("valid"),
     "gsr-test": _gsr("test"),
     "calib-valid": _calib("valid"),
     "calib-test": _calib("test"),
     "soccermaster-weights": _weights,
+    "detector-weights": _detector,
     "baseline": lambda paths: fetch_url(BASELINE_URL, paths.baseline_zip, BASELINE_SHA256),
 }
 

@@ -67,3 +67,12 @@ def test_calibration_paths_live_under_the_root(tmp_path):
     for q in (p.weights, p.soccermaster_code, p.sn_calibration, p.calib_zip("valid")):
         assert tmp_path in q.parents
     assert p.calib_zip("test").name == "test.zip"
+
+
+def test_detector_paths_live_under_the_root(tmp_path):
+    p = BenchPaths(tmp_path)
+    detector = tmp_path / "weights" / "detector"
+    assert p.detector_weights == detector / "yolo_v8x6_finetuned.pt"
+    assert p.ball_weights == detector / "football-ball-detection.pt"
+    for q in (p.detector_weights, p.ball_weights):
+        assert tmp_path in q.parents
