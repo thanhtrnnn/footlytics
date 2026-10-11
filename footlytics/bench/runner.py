@@ -13,6 +13,7 @@ import subprocess
 import time
 import traceback
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -338,18 +339,39 @@ def sncalib(task: dict, ctx: TaskContext) -> dict:
         info = (json.loads(z.read(f"{split}/match_info.json"))
                 if f"{split}/match_info.json" in names else {})
         t_decode = time.perf_counter()
+        group = task.get("batch", 8)
+        pending: list[tuple[str, np.ndarray]] = []
+
+        def flush():
+            """One network call for the buffered frames; a failure there fails each of them."""
+            if not pending:
+                return
+            try:
+                decoded = cal.decode([img[:, :, ::-1] for _, img in pending],
+                                     **_thresholds(cfg))
+                if len(decoded) != len(pending):
+                    raise RuntimeError(f"decoded {len(decoded)} of {len(pending)} frames")
+            except Exception as e:  # noqa: BLE001
+                for f, _ in pending:
+                    failed[f] = f"{type(e).__name__}: {e}"
+            else:
+                for (f, img), (kp, ln) in zip(pending, decoded):
+                    jobs.append((kp, ln, img.shape[1], img.shape[0]))
+                    ids.append(f)
+            pending.clear()
+
         for f in frames:
             try:
                 raw = z.read(f"{split}/{f}.json")
                 (gt_dir / f"{f}.json").write_bytes(raw)        # the evaluator's denominator
                 gts[f] = json.loads(raw)
-                img = _imread(z.read(f"{split}/{f}.jpg"))
-                (kp, ln), = cal.decode([img[:, :, ::-1]], **_thresholds(cfg))
+                pending.append((f, _imread(z.read(f"{split}/{f}.jpg"))))
             except Exception as e:  # noqa: BLE001
                 failed[f] = f"{type(e).__name__}: {e}"
                 continue
-            jobs.append((kp, ln, img.shape[1], img.shape[0]))
-            ids.append(f)
+            if len(pending) >= group:
+                flush()
+        flush()
         spent += time.perf_counter() - t_decode
     ctx.log(f"decoded {len(ids)} frames, solving on {task.get('workers', 8)} processes")
     solve_kw = {"voting": cfg.get("voting", True), "refine_lines": cfg.get("refine_lines", True)}
@@ -411,11 +433,17 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
         return fits
 
     per, failed = {}, {}
-    all_gt, all_pred = ctx.work / "all" / "gt" / split, ctx.work / "all" / "pred" / split
-    all_gt.mkdir(parents=True, exist_ok=True)
-    all_pred.mkdir(parents=True, exist_ok=True)
     spent, n_frames = 0.0, 0         # calibration time only: not the evaluator runs
-    with zipfile.ZipFile(ctx.paths.gsr_zip(split)) as z:
+
+    def evaluate(seq: str, gt_d: Path, pred_d: Path):
+        return run_sncalib(ctx.paths.eval_python, ctx.paths.sn_calibration, gt_d.parent,
+                           pred_d.parent, split, ctx.work / "eval" / seq)
+
+    # Calibration is sequential (one GPU); each clip's evaluator subprocess then runs beside
+    # the next clip's calibration, `eval_workers` at a time, and is collected at the end.
+    with ThreadPoolExecutor(max_workers=max(1, int(task.get("eval_workers", 4)))) as pool, \
+            zipfile.ZipFile(ctx.paths.gsr_zip(split)) as z:
+        pending: dict = {}
         for seq in _resolve(ctx.paths, split, task.get("clips", "all")):
             try:
                 solver_errors = 0
@@ -447,26 +475,34 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
                     if fc.cam is not None:
                         calibrated += 1
                         _write_prediction(pred_d / f"camera_{name}.json", fc.cam)
-                s = run_sncalib(ctx.paths.eval_python, ctx.paths.sn_calibration,
-                                gt_d.parent, pred_d.parent, split, ctx.work / "eval" / seq)
-                # scored: only now does the clip join the combined evaluation
-                for src, dst in ((gt_d, all_gt), (pred_d, all_pred)):
-                    for f in src.glob("*.json"):
-                        shutil.copy(f, dst / f.name)
-                per[seq] = {"score": s.score, "jac5": s.jac, "completeness": s.completeness,
-                            "calibrated_share": round(calibrated / max(len(truth), 1), 4),
-                            "keyframes": cc.keyframes, "keyframes_accepted": cc.keyframes_accepted,
-                            "solver_errors": solver_errors}
-                ctx.log(f"{seq}: score {s.score:.1f}, {calibrated}/{len(truth)} labelled "
-                        f"frames calibrated, {solver_errors} solver errors")
+                pending[seq] = (pool.submit(evaluate, seq, gt_d, pred_d),
+                                {"labelled": len(truth), "predicted": calibrated,
+                                 "calibrated_share": round(calibrated / max(len(truth), 1), 4),
+                                 "keyframes": cc.keyframes,
+                                 "keyframes_accepted": cc.keyframes_accepted,
+                                 "solver_errors": solver_errors})
             except Exception as e:  # noqa: BLE001
                 failed[seq] = f"{type(e).__name__}: {e}"
+        for seq, (fut, counts) in pending.items():
+            try:
+                s = fut.result()
+            except Exception as e:  # noqa: BLE001
+                failed[seq] = f"{type(e).__name__}: {e}"
+                continue
+            per[seq] = {"score": s.score, "jac5": s.jac, "completeness": s.completeness,
+                        **counts}
+            ctx.log(f"{seq}: score {s.score:.1f}, {counts['predicted']}/{counts['labelled']} "
+                    f"labelled frames calibrated, {counts['solver_errors']} solver errors")
     if not per:
         raise RuntimeError(f"no clip calibrated: {failed}")
-    s = run_sncalib(ctx.paths.eval_python, ctx.paths.sn_calibration, all_gt.parent,
-                    all_pred.parent, split, ctx.work / "eval" / "all")
+    # The evaluator's JaC is the mean accuracy over the frames it was given a prediction for, so
+    # the pooled value is the mean of the clips' JaC weighted by their predicted frames.
+    n_gt = sum(c["labelled"] for c in per.values())
+    n_pred = sum(c["predicted"] for c in per.values())
+    completeness = 100.0 * n_pred / max(n_gt, 1)
+    jac5 = (sum(c["jac5"] * c["predicted"] for c in per.values()) / n_pred) if n_pred else 0.0
     keys = sum(c["keyframes"] for c in per.values())
-    agg = {"score": s.score, "jac5": s.jac, "completeness": s.completeness,
+    agg = {"score": completeness * jac5 / 100, "jac5": jac5, "completeness": completeness,
            "calibrated_share": round(float(np.mean([c["calibrated_share"] for c in per.values()])), 4),
            "keyframe_accept_rate": round(sum(c["keyframes_accepted"] for c in per.values())
                                          / max(keys, 1), 4),

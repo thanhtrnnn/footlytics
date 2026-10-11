@@ -290,10 +290,12 @@ def test_gsr_calibration_scores_labelled_frames_per_clip(paths, calib):
     c = t["clips"]["SNGS-990"]
     assert c["calibrated_share"] == 1.0 and c["keyframes"] == 3 and c["keyframes_accepted"] == 3
     assert c["solver_errors"] == 0
-    per_clip, combined = calib[0], calib[-1]
-    assert per_clip[0] == ["SNGS-990-000001", "SNGS-990-000002", "SNGS-990-000003"]
-    assert combined[1] == ["camera_SNGS-990-000001", "camera_SNGS-990-000002",
-                           "camera_SNGS-990-000003"]
+    assert len(calib) == 1
+    gts, preds = calib[0]
+    assert gts == ["SNGS-990-000001", "SNGS-990-000002", "SNGS-990-000003"]
+    assert preds == ["camera_SNGS-990-000001", "camera_SNGS-990-000002",
+                     "camera_SNGS-990-000003"]
+    assert c["labelled"] == 3 and c["predicted"] == 3
     assert "seconds_per_frame" in t["aggregate"]
 
 
@@ -306,8 +308,9 @@ def test_gsr_calibration_counts_labelled_frames_without_an_image_as_missed(paths
     assert t["status"] == "complete", t
     assert t["clips"]["SNGS-990"]["calibrated_share"] == round(2 / 3, 4)
     names = ["SNGS-990-000001", "SNGS-990-000002", "SNGS-990-000003"]
-    for gts, preds in (calib[0], calib[-1]):
-        assert gts == names and preds == [f"camera_{n}" for n in names[:2]]
+    assert len(calib) == 1
+    gts, preds = calib[0]
+    assert gts == names and preds == [f"camera_{n}" for n in names[:2]]
     assert t["clips"]["SNGS-990"]["completeness"] == pytest.approx(100.0 * 2 / 3)
     assert t["aggregate"]["completeness"] == pytest.approx(100.0 * 2 / 3)
 
@@ -371,13 +374,10 @@ def test_gsr_calibration_survives_a_clip_whose_scoring_fails(paths, calib, monke
     write_gsr_clip(paths, seq="SNGS-990")
     write_gsr_clip(paths, seq="SNGS-991")
     good = runner.run_sncalib
-    combined_seen = []
 
     def flaky(python, sc, gt_root, pred_root, split, out_dir, **kw):
         if "SNGS-991" in str(gt_root):
             raise KeyError("Penalty area left")
-        if "all" in gt_root.parts:
-            combined_seen.append(sorted(p.stem for p in (gt_root / split).glob("*.json")))
         return good(python, sc, gt_root, pred_root, split, out_dir, **kw)
     monkeypatch.setattr(runner, "run_sncalib", flaky)
     row = runner.run_suite("t", "c5", paths, "sha", "h", suite_spec=spec(
@@ -387,7 +387,9 @@ def test_gsr_calibration_survives_a_clip_whose_scoring_fails(paths, calib, monke
     assert t["status"] == "partial", t
     assert t["clips"]["SNGS-990"]["score"] == 50.0 and "SNGS-991" not in t["clips"]
     assert "KeyError" in t["failed"]["SNGS-991"]
-    assert combined_seen == [["SNGS-990-000001", "SNGS-990-000002", "SNGS-990-000003"]]
+    # the aggregate is the surviving clip alone
+    assert t["aggregate"]["score"] == 50.0 and t["aggregate"]["completeness"] == 100.0
+    assert t["aggregate"]["jac5"] == 50.0
 
 
 def slow_eval(monkeypatch, seconds=0.3):
@@ -430,3 +432,159 @@ def test_gsr_calibration_rows_carry_the_unverified_leakage_flag(paths, calib):
         {"id": "gc", "kind": "gsr_calibration", "split": "valid", "clips": ["SNGS-990"],
          "every": 1}))
     assert row["tasks"]["gc"]["leakage"] == {"status": "unverified"}
+
+
+# ---------------------------------------------------------------- speed-up: batching, one pass
+
+def test_sncalib_decodes_stills_in_groups(paths, calib, monkeypatch):
+    write_calib_zip(paths, ["00000", "00001", "00002"])
+    sizes = []
+
+    class Spy(FakeCal):
+        def decode(self, frames, **kw):
+            sizes.append(len(frames))
+            return super().decode(frames, **kw)
+    monkeypatch.setattr(runner, "_calibrator", lambda p: Spy())
+    monkeypatch.setattr(runner, "solve_many", lambda code, jobs, workers=1, **kw:
+                        [(None, None)] * len(jobs))
+    row = runner.run_suite("t", "b1", paths, "sha", "h", suite_spec=spec(
+        {"id": "sc", "kind": "sncalib", "split": "valid", "frames": "all", "batch": 2}))
+    assert row["tasks"]["sc"]["status"] == "complete", row["tasks"]["sc"]
+    assert sizes == [2, 1]
+    assert calib[0][0] == ["00000", "00001", "00002"]
+
+
+def test_sncalib_unreadable_image_fails_alone_before_batching(paths, calib, monkeypatch):
+    write_calib_zip(paths, ["00000", "00001", "00002"])
+    with zipfile.ZipFile(paths.calib_zip("valid")) as z:
+        members = {n: z.read(n) for n in z.namelist()}
+    members["valid/00001.jpg"] = b"not an image"
+    with zipfile.ZipFile(paths.calib_zip("valid"), "w") as z:
+        for n, b in members.items():
+            z.writestr(n, b)
+    sizes = []
+
+    class Spy(FakeCal):
+        def decode(self, frames, **kw):
+            sizes.append(len(frames))
+            return super().decode(frames, **kw)
+    monkeypatch.setattr(runner, "_calibrator", lambda p: Spy())
+    monkeypatch.setattr(runner, "solve_many", lambda code, jobs, workers=1, **kw:
+                        [(None, None)] * len(jobs))
+    row = runner.run_suite("t", "b2", paths, "sha", "h", suite_spec=spec(
+        {"id": "sc", "kind": "sncalib", "split": "valid", "frames": "all", "batch": 2}))
+    t = row["tasks"]["sc"]
+    assert t["status"] == "partial" and list(t["failed"]) == ["00001"]
+    assert sizes == [2]                                      # 00000 and 00002 share a group
+    assert calib[0][0] == ["00000", "00001", "00002"]        # GT written for every frame first
+
+
+def test_sncalib_a_group_that_fails_to_decode_is_recorded_per_frame(paths, calib, monkeypatch):
+    write_calib_zip(paths, ["00000", "00001", "00002"])
+
+    class Boom(FakeCal):
+        def decode(self, frames, **kw):
+            if len(frames) == 2:
+                raise RuntimeError("CUDA out of memory")
+            return super().decode(frames, **kw)
+    monkeypatch.setattr(runner, "_calibrator", lambda p: Boom())
+    monkeypatch.setattr(runner, "solve_many", lambda code, jobs, workers=1, **kw:
+                        [(None, None)] * len(jobs))
+    row = runner.run_suite("t", "b3", paths, "sha", "h", suite_spec=spec(
+        {"id": "sc", "kind": "sncalib", "split": "valid", "frames": "all", "batch": 2}))
+    t = row["tasks"]["sc"]
+    assert sorted(t["failed"]) == ["00000", "00001"]
+    assert all("out of memory" in v for v in t["failed"].values())
+    assert "00002" in t["clips"]
+
+
+def two_clips(paths):
+    write_gsr_clip(paths, seq="SNGS-990", n=3)                  # 3 labelled, 3 predicted
+    write_gsr_clip(paths, seq="SNGS-991", n=3, n_images=2)      # 3 labelled, 2 predicted
+
+
+JAC = {"SNGS-990": 80.0, "SNGS-991": 20.0}
+
+
+@pytest.fixture
+def per_clip_eval(paths, monkeypatch):
+    """Evaluator fake: a different JaC per clip, completeness from the files, call log."""
+    monkeypatch.setattr(runner, "_calibrator", lambda p: FakeCal())
+    monkeypatch.setattr(runner, "require_vram", lambda mib: None)
+    calls = []
+
+    def fake_eval(python, sc, gt_root, pred_root, split, out_dir, **kw):
+        seq = next(p.stem for p in (gt_root / split).glob("*.json")).rsplit("-", 1)[0]
+        gts = sorted(p.stem for p in (gt_root / split).glob("*.json"))
+        preds = sorted(p.stem for p in (pred_root / split).glob("camera_*.json"))
+        calls.append((seq, gts, preds))
+        return CalibScores(score=JAC[seq] * len(preds) / len(gts),
+                           completeness=100.0 * len(preds) / len(gts), jac=JAC[seq],
+                           precision=1.0, recall=1.0)
+    monkeypatch.setattr(runner, "run_sncalib", fake_eval)
+    return calls
+
+
+def test_gsr_calibration_one_evaluator_pass_per_clip_and_exact_aggregate(paths, per_clip_eval):
+    two_clips(paths)
+    row = runner.run_suite("t", "b4", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid",
+         "clips": ["SNGS-990", "SNGS-991"], "every": 1, "eval_workers": 2}))
+    t = row["tasks"]["gc"]
+    assert t["status"] == "complete", t
+    assert sorted(c[0] for c in per_clip_eval) == ["SNGS-990", "SNGS-991"]    # once per clip
+    assert not (paths.run_dir("b4") / "work" / "gc" / "all").exists()
+    a, b = t["clips"]["SNGS-990"], t["clips"]["SNGS-991"]
+    assert (a["labelled"], a["predicted"], b["labelled"], b["predicted"]) == (3, 3, 3, 2)
+    assert a["jac5"] == 80.0 and b["jac5"] == 20.0
+    completeness = 100.0 * (3 + 2) / (3 + 3)
+    jac5 = (80.0 * 3 + 20.0 * 2) / (3 + 2)
+    agg = t["aggregate"]
+    assert agg["completeness"] == pytest.approx(completeness)
+    assert agg["jac5"] == pytest.approx(jac5) and jac5 == 56.0
+    assert agg["score"] == pytest.approx(completeness * jac5 / 100)
+    assert agg["calibrated_share"] == round((1.0 + 0.6667) / 2, 4)   # mean of rounded clip shares
+    assert agg["keyframe_accept_rate"] == 1.0 and agg["solver_errors"] == 0
+    assert "seconds_per_frame" in agg and t["leakage"] == {"status": "unverified"}
+
+
+def test_gsr_calibration_a_clip_whose_evaluation_raises_is_dropped_from_the_aggregate(
+        paths, per_clip_eval, monkeypatch):
+    two_clips(paths)
+    good = runner.run_sncalib
+
+    def flaky(python, sc, gt_root, pred_root, split, out_dir, **kw):
+        if "SNGS-991" in str(gt_root):
+            raise KeyError("Penalty area left")
+        return good(python, sc, gt_root, pred_root, split, out_dir, **kw)
+    monkeypatch.setattr(runner, "run_sncalib", flaky)
+    row = runner.run_suite("t", "b5", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid",
+         "clips": ["SNGS-990", "SNGS-991"], "every": 1}))
+    t = row["tasks"]["gc"]
+    assert t["status"] == "partial" and "KeyError" in t["failed"]["SNGS-991"]
+    assert list(t["clips"]) == ["SNGS-990"]
+    agg = t["aggregate"]
+    assert agg["completeness"] == 100.0 and agg["jac5"] == 80.0 and agg["score"] == 80.0
+    assert agg["calibrated_share"] == 1.0 and agg["keyframe_accept_rate"] == 1.0
+
+
+def test_gsr_calibration_evaluations_overlap_the_next_clips_calibration(paths, calib, monkeypatch):
+    """Calibration stays sequential, evaluation runs beside it: with a slow evaluator the whole
+    task takes about one evaluation per worker-wave, not one per clip."""
+    import time
+    for seq in ("SNGS-990", "SNGS-991", "SNGS-992", "SNGS-993"):
+        write_gsr_clip(paths, seq=seq)
+    slow_eval(monkeypatch, seconds=0.5)
+    t0 = time.perf_counter()
+    row = runner.run_suite("t", "b6", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid", "every": 1,
+         "clips": ["SNGS-990", "SNGS-991", "SNGS-992", "SNGS-993"], "eval_workers": 4}))
+    assert row["tasks"]["gc"]["status"] == "complete", row["tasks"]["gc"]
+    assert time.perf_counter() - t0 < 1.5                    # sequential would be >= 2.0 s
+
+
+def test_quick_suite_samples_the_gsr_clips_every_10_frames():
+    q = runner.load_suite("quick")
+    gc = next(t for t in q["tasks"] if t["id"] == "gsr-calibration-valid-6")
+    assert gc["every"] == 10
