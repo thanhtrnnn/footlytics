@@ -163,15 +163,30 @@ def run_suite(suite: str, run_id: str, paths: BenchPaths, git_sha: str, host_lab
             _log(f"task {tid} failed: {res['error']}")
         res["seconds"] = round(time.time() - t0, 1)
         res["check"] = evaluate_check(task.get("check"), res.get("aggregate") or {})
-        ref = task.get("noise_of")
-        if ref in row["tasks"]:        # a repeat of `ref`: how far the same run moved (the noise)
-            a, b = res.get("aggregate") or {}, row["tasks"][ref].get("aggregate") or {}
-            res["noise"] = {k: round(abs(a[k] - b[k]), 4) for k in a
-                            if isinstance(a[k], (int, float)) and isinstance(b.get(k), (int, float))}
+        if task.get("noise_of"):
+            _add_noise(res, tid, task["noise_of"], row["tasks"])
         row["tasks"][tid] = res
     row["status"] = run_status(row["tasks"])
     row["finished_at"] = _now()
     return _finish(run_dir, row, paths)
+
+
+def _is_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _add_noise(res: dict, tid: str, ref: str, done: dict) -> None:
+    """A task that repeats `ref` records how far the same run moved: the absolute difference of
+    every numeric aggregate key they share. Only between two complete runs: a repeat that lost
+    a clip differs for that reason, not by chance, and would inflate the noise floor."""
+    for name, t in ((ref, done.get(ref)), (tid, res)):
+        status = t["status"] if t else "not run"
+        if status != "complete":
+            res["noise_skipped"] = f"{name} {'has not run' if t is None else 'is ' + status}"
+            return
+    a, b = res.get("aggregate") or {}, done[ref].get("aggregate") or {}
+    res["noise"] = {k: round(abs(a[k] - b[k]), 4) for k in a
+                    if _is_number(a[k]) and _is_number(b.get(k))}
 
 
 def _finish(run_dir: Path, row: dict, paths: BenchPaths) -> dict:
@@ -487,6 +502,7 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
     split, cfg = task["split"], task.get("calibrator", {})
     every, gate = task.get("every", 25), float(task.get("gate_px", 25.0))
     require_vram(task.get("vram_mib", VRAM_MIB))
+    _calibrator(ctx.paths)       # a load failure fails the task here, not once per clip
     per, failed = {}, {}
     spent, n_frames = 0.0, 0         # calibration time only: not the evaluator runs
 
@@ -589,6 +605,9 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
     split, cfg = task["split"], task.get("calibrator", {})
     every, gate = task.get("every", 10), float(task.get("gate_px", 25.0))
     require_vram(task.get("vram_mib", PIPELINE_VRAM_MIB))
+    # Both models load before the clip loop and a failure there fails the task. Inside the
+    # loop it would be retried per clip and score each as all misses.
+    _calibrator(ctx.paths)
     det = _detector(ctx.paths, task.get("detector", {}))
     out_dir = ctx.work / "trackers" / f"SoccerNetGS-{split}" / "footlytics"
     out_dir.mkdir(parents=True, exist_ok=True)

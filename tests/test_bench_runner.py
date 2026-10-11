@@ -618,6 +618,8 @@ def pipeline_fakes(monkeypatch, empty=(), uncalibrated=(), crash=(), real_calibr
     monkeypatch.setattr(runner, "require_vram", lambda mib: seen["vram"].append(mib))
     monkeypatch.setattr(runner, "_detector", lambda paths, cfg: "detector")
     if not real_calibration:
+        monkeypatch.setattr(runner, "_calibrator", lambda paths: FakeCal())   # loaded up front
+
         def calibration(ctx, z, split, seq, cfg, every, gate, fresh=False):
             seen["calibrated"].append((seq, every, gate, fresh))
             if seq in crash:
@@ -880,14 +882,38 @@ def test_detector_is_built_once_per_config_from_the_pinned_weights(paths, monkey
 
 
 def test_noise_of_reports_absolute_differences(paths, monkeypatch):
-    monkeypatch.setitem(runner.KINDS, "n1", lambda task, ctx: {"aggregate": {"m": 1.0, "s": "x"}})
-    monkeypatch.setitem(runner.KINDS, "n2", lambda task, ctx: {"aggregate": {"m": 1.25}})
+    monkeypatch.setitem(runner.KINDS, "n1", lambda task, ctx: {
+        "aggregate": {"m": 1.0, "s": "x", "flag": True}})
+    monkeypatch.setitem(runner.KINDS, "n2", lambda task, ctx: {
+        "aggregate": {"m": 1.25, "flag": False}})
     row = runner.run_suite("t", "n1", paths, "sha", "h", suite_spec=spec(
         {"id": "a", "kind": "n1"},
-        {"id": "b", "kind": "n2", "noise_of": "a"},
-        {"id": "c", "kind": "n2", "noise_of": "not-run"}))
-    assert row["tasks"]["b"]["noise"] == {"m": 0.25}
-    assert "noise" not in row["tasks"]["a"] and "noise" not in row["tasks"]["c"]
+        {"id": "b", "kind": "n2", "noise_of": "a"}))
+    assert row["tasks"]["b"]["noise"] == {"m": 0.25}          # a bool is not a measurement
+    assert "noise" not in row["tasks"]["a"] and "noise_skipped" not in row["tasks"]["b"]
+
+
+def test_noise_of_is_only_measured_between_two_complete_runs(paths, monkeypatch):
+    """A repeat that lost a clip scores differently for that reason, not by chance: its
+    difference is not noise, and must not widen the floor."""
+    agg = {"aggregate": {"m": 1.0}}
+    monkeypatch.setitem(runner.KINDS, "ok", lambda task, ctx: agg)
+    monkeypatch.setitem(runner.KINDS, "part", lambda task, ctx: {**agg, "failed": {"SNGS-1": "x"}})
+    monkeypatch.setitem(runner.KINDS, "boom", lambda task, ctx: 1 / 0)
+    row = runner.run_suite("t", "n2", paths, "sha", "h", suite_spec=spec(
+        {"id": "a", "kind": "ok"}, {"id": "p", "kind": "part"}, {"id": "x", "kind": "boom"},
+        {"id": "b", "kind": "ok", "noise_of": "a"},
+        {"id": "c", "kind": "ok", "noise_of": "p"},         # the reference is partial
+        {"id": "d", "kind": "part", "noise_of": "a"},       # this repeat is partial
+        {"id": "e", "kind": "ok", "noise_of": "x"},         # the reference crashed
+        {"id": "f", "kind": "ok", "noise_of": "not-run"}))  # a typo is not silence
+    t = row["tasks"]
+    assert t["b"]["noise"] == {"m": 0.0} and "noise_skipped" not in t["b"]
+    assert t["c"]["noise_skipped"] == "p is partial"
+    assert t["d"]["noise_skipped"] == "d is partial"
+    assert t["e"]["noise_skipped"] == "x is failed"
+    assert t["f"]["noise_skipped"] == "not-run has not run"
+    assert all("noise" not in t[k] for k in "cdef")
 
 
 def test_pipeline_suites_are_valid():
@@ -908,3 +934,44 @@ def test_pipeline_suites_are_valid():
     assert milestone["gsr-pipeline-test"]["split"] == "test"
     assert milestone["gsr-baseline-test"]["kind"] == "gsr_rescore"
     assert milestone["gsr-baseline-test"]["split"] == "test"
+
+
+# ---------------------------------------------------------------- calibrator load: task level
+
+def broken_calibrator(monkeypatch, loads):
+    def load(paths):
+        loads.append(1)
+        raise RuntimeError("weights missing")
+    monkeypatch.setattr(runner, "_calibrator", load)
+
+
+def test_gsr_pipeline_loads_the_calibrator_once_up_front_and_fails_loudly(paths, monkeypatch):
+    """A broken calibrator is a broken run, not a clip scored as all misses: it is loaded
+    before the clip loop, once, and its failure fails the task with that error."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    seen = pipeline_fakes(monkeypatch, real_calibration=True)
+    loads = []
+    broken_calibrator(monkeypatch, loads)
+    calls = []
+    monkeypatch.setattr(runner, "run_gsr", fake_scores(calls))
+    row = runner.run_suite("t", "p9", paths, "sha", "h", suite_spec=spec(pipeline_task("all")))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "failed" and t["error"] == "RuntimeError: weights missing"
+    assert len(loads) == 1 and calls == [] and seen["run"] == []
+    out = pipeline_dir(paths, "p9")
+    assert not out.exists() or not list(out.glob("*.json"))      # no clip was written or scored
+
+
+def test_gsr_calibration_loads_the_calibrator_once_up_front_and_fails_loudly(
+        paths, calib, monkeypatch):
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    loads = []
+    broken_calibrator(monkeypatch, loads)
+    row = runner.run_suite("t", "c9", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid",
+         "clips": ["SNGS-990", "SNGS-991"], "every": 1}))
+    t = row["tasks"]["gc"]
+    assert t["status"] == "failed" and t["error"] == "RuntimeError: weights missing"
+    assert len(loads) == 1 and calib == []                       # nothing reached the evaluator
