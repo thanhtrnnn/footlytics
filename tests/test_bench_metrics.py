@@ -6,7 +6,7 @@ import pytest
 from footlytics.bench.metrics import (ROLE_CLASSES, ball_metrics, keeper_side_accuracy,
                                       match_people, position_metrics, position_summary,
                                       role_counts, role_summary, seconds_per_match_minute,
-                                      shape_error, team_accuracy)
+                                      shape_error, team_accuracy, team_counts)
 
 
 def tracks(rows):
@@ -123,6 +123,23 @@ def test_keeper_side_accuracy_charges_the_keeper_in_the_other_teams_cluster():
     assert keeper_side_accuracy(gt, pred, m, SIDES) == (2, 4)     # the right keeper is fine
     assert team_accuracy(gt, pred, m, SIDES) == round(9 / 11, 4)
     assert keeper_side_accuracy(gt, pred, m.iloc[:0], SIDES) == (0, 0)
+
+
+def test_team_counts_compare_each_side_per_frame_and_flag_more_than_11():
+    """The keeper in the wrong cluster puts 2 left and 4 right in frame 0 (truth 3 and 3); in
+    frame 1 the right player called a referee leaves 3 right. A referee is never counted."""
+    gt, pred = keeper_mixup()
+    assert team_counts(gt, pred, [0, 1], SIDES) == {"team_count_err": 0.75,
+                                                    "quota_breach_share": 0.0}
+    crowd = tracks(people(0, LEFT_X * 2, "home", 1) + people(1, LEFT_X, "home", 1)
+                   + people(1, RIGHT_X, "away", 101))
+    truth = tracks(gt_frame(0) + gt_frame(1))
+    assert team_counts(truth, crowd, [0, 1], SIDES) == {"team_count_err": 3.0,
+                                                        "quota_breach_share": 0.5}
+    assert team_counts(truth, crowd.iloc[:0], [0], SIDES) == {"team_count_err": 6.0,
+                                                              "quota_breach_share": 0.0}
+    assert team_counts(truth, crowd, [], SIDES) == {"team_count_err": None,
+                                                    "quota_breach_share": None}
 
 
 def ball(f, dx, dy, interpolated=False):

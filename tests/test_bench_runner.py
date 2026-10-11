@@ -707,6 +707,8 @@ def test_gsr_pipeline_scores_a_clip_and_its_extras(paths, monkeypatch):
     assert c["recall_2m"] == agg["recall_2m"] == 1.0
     for k in ("keeper_recall", "referee_recall", "referee_precision", "keeper_side_accuracy"):
         assert c[k] == agg[k] == 1.0, k
+    assert c["team_count_err"] == agg["team_count_err"] == 0.0
+    assert c["quota_breach_share"] == agg["quota_breach_share"] == 0.0
     assert not [k for k in c if k.startswith("_")]               # raw pooling data stays private
     assert not [k for k in agg if k.startswith("_")]
     assert c["calib_success_rate"] == 1.0 and agg["calib_success_rate"] == 1.0
@@ -799,6 +801,18 @@ def test_gsr_pipeline_pools_roles_and_keeper_sides_across_clips(paths, monkeypat
     assert agg["referee_recall"] == agg["referee_precision"] == 1.0
     assert not [k for c in t["clips"].values() for k in c if k.startswith("_")]
     assert not [k for k in agg if k.startswith("_")]
+
+
+def test_gsr_pipeline_team_counts_are_the_mean_over_clips(paths, monkeypatch):
+    """The keeper in the wrong cluster leaves 2 left and 3 right against 3 and 3 on each frame:
+    that clip is off by 0.5 a side, the clean one by 0, and the aggregate is their mean."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    t = run_pool(paths, monkeypatch, "pl6", keeper_bug=("SNGS-991",))
+    assert t["clips"]["SNGS-990"]["team_count_err"] == 0.0
+    assert t["clips"]["SNGS-991"]["team_count_err"] == 0.5
+    assert t["aggregate"]["team_count_err"] == 0.25
+    assert t["aggregate"]["quota_breach_share"] == 0.0
 
 
 def test_gsr_pipeline_an_empty_scored_clip_counts_its_gt_ball_frames_as_missed(paths, monkeypatch):

@@ -38,7 +38,8 @@ from .host import ResourceError, contention, require_disk, require_vram, torch_i
 from .metrics import (MATCH_M, POS_GATE_M, ROLE_CLASSES, ball_metrics, ball_summary,
                       keeper_side_accuracy, match_people, median_reprojection_px,
                       position_metrics, position_summary, role_counts, role_summary,
-                      seconds_per_match_minute, shape_error, share, team_accuracy)
+                      seconds_per_match_minute, shape_error, share, team_accuracy,
+                      team_counts)
 from .paths import BenchPaths
 
 SUITES_DIR = Path(__file__).parent / "suites"
@@ -712,6 +713,7 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                     "keeper_side_accuracy": share(k_ok, k_n), "_keeper_ok": k_ok,
                     "_keeper_n": k_n,
                     **role_summary(roles), "_roles": roles,
+                    **team_counts(gt.tracks, state.tracks, frames, sides),
                     **ball_metrics(gt.tracks, state.tracks, frames),
                     **position_metrics(gt.tracks, near, frames),
                     "shape_error_m": shape_error(gt.tracks, state.tracks, frames,
@@ -736,7 +738,8 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
         v = [c[k] for c in per.values() if c.get(k) is not None]
         return round(float(np.mean(v)), 4) if v else None
     agg = {**scores["aggregate"],
-           **{k: mean(k) for k in ("team_accuracy", "shape_error_m", "calib_success_rate")},
+           **{k: mean(k) for k in ("team_accuracy", "team_count_err", "quota_breach_share",
+                                   "shape_error_m", "calib_success_rate")},
            **ball_summary(pool["_dists"], pool["_gt_frames"]),
            **position_summary(pool["_pos_dists"], pool["_gt_people"]),
            **role_summary(pool["_roles"]),

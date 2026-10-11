@@ -242,5 +242,32 @@ def shape_error(gt: pd.DataFrame, pred: pd.DataFrame, frames, pred_sides: dict,
     return out
 
 
+SIDE_QUOTA = 11
+
+
+def team_counts(gt: pd.DataFrame, pred: pd.DataFrame, frames, pred_sides: dict) -> dict:
+    """Players and keepers on each side per GT frame, ours (through `pred_sides`) against GT's.
+    A keeper in the wrong colour cluster moves a player across; a team model that drifts piles
+    the crowd onto one side.
+
+    - `team_count_err`: mean over the frames and both sides of |ours - GT's|.
+    - `quota_breach_share`: share of the frames where we put more than 11 on a side.
+
+    The task's aggregate is the mean of the clips' numbers: every GSR clip has 750 frames, so
+    each frame weighs the same.
+    """
+    frames = list(frames)
+    g, p = _on_pitch(gt), _on_pitch(pred)
+    gn = g.assign(side=g["team"].astype(str).map(_GT_SIDE)).groupby(["frame_idx", "side"]).size()
+    pn = p.assign(side=p["team"].astype(str).map(pred_sides)).groupby(["frame_idx", "side"]).size()
+    errs, breaches = [], 0
+    for f in frames:
+        ours = {s: int(pn.get((f, s), 0)) for s in ("left", "right")}
+        errs += [abs(n - int(gn.get((f, s), 0))) for s, n in ours.items()]
+        breaches += max(ours.values()) > SIDE_QUOTA
+    return {"team_count_err": round(float(np.mean(errs)), 3) if errs else None,
+            "quota_breach_share": share(breaches, len(frames))}
+
+
 def seconds_per_match_minute(seconds: float, frames: int, fps: float = 25.0) -> float:
     return round(seconds / (frames / fps / 60.0), 2) if frames else float("nan")
