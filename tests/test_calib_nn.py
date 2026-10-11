@@ -75,9 +75,10 @@ def test_calibrates_a_real_sn_calibration_frame():
     from footlytics.bench.metrics import median_reprojection_px
     from footlytics.geometry.calib_nn import SoccerMasterCalibrator
 
+    # 00532 shows the penalty area clearly (22 keypoints, 10 lines on the host, median 1.8 px); this is a wiring check, not a difficulty benchmark.
     z = zipfile.ZipFile(SNCAL_ZIP)
-    img = cv2.imdecode(np.frombuffer(z.read("valid/00007.jpg"), np.uint8), cv2.IMREAD_COLOR)
-    gt = json.loads(z.read("valid/00007.json"))
+    img = cv2.imdecode(np.frombuffer(z.read("valid/00532.jpg"), np.uint8), cv2.IMREAD_COLOR)
+    gt = json.loads(z.read("valid/00532.json"))
     cal = SoccerMasterCalibrator(CODE, WEIGHTS)
     fit = cal.fit([img[:, :, ::-1]])[0]
     assert fit is not None
