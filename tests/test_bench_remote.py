@@ -81,3 +81,13 @@ def test_run_id_is_sortable_and_names_suite_and_commit():
     from datetime import datetime, timezone
     rid = rm.make_run_id("harness", "abcdef123456", datetime(2026, 10, 12, 10, 0, tzinfo=timezone.utc))
     assert rid == "20261012-100000-harness-abcdef1"
+
+
+def test_fetch_runs_in_tmux_without_the_xet_chunk_cache():
+    # hf_xet keeps a second copy of every chunk (up to 10 GB) next to the download: on a
+    # shared disk with 40 GB free that is not affordable, so downloads go over plain HTTP
+    ssh = FakeSsh(ROOT)
+    log = rm.Remote("iec4090_2", runner=ssh).start_fetch("abc", ["gsr-valid", "gsr-test"])
+    cmd = next(c for c in ssh.calls if "tmux new-session" in c)
+    assert "HF_HUB_DISABLE_XET=1" in cmd and "bench fetch gsr-valid gsr-test" in cmd
+    assert log.startswith("/home/iec/footlytics-bench/runs/fetch-")

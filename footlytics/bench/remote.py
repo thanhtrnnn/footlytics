@@ -78,7 +78,8 @@ class Remote:
 
     def _python(self, sha: str, args: str, log: str, session: str) -> None:
         cmd = (f"cd {self.root}/src/{sha} && FOOTLYTICS_BENCH_ROOT={self.root} "
-               f"HF_HOME={self.root}/cache/hf YOLO_CONFIG_DIR={self.root}/cache/ultralytics "
+               f"HF_HOME={self.root}/cache/hf HF_HUB_DISABLE_XET=1 "
+               f"YOLO_CONFIG_DIR={self.root}/cache/ultralytics "
                f"{self.root}/venv/bin/python -m footlytics.cli "
                f"{args} > {log} 2>&1")
         self.sh(f"mkdir -p {Path(log).parent} && tmux new-session -d -s {session} "
