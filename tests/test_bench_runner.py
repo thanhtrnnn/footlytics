@@ -597,3 +597,314 @@ def test_quick_suite_samples_the_gsr_clips_every_10_frames():
     q = runner.load_suite("quick")
     gc = next(t for t in q["tasks"] if t["id"] == "gsr-calibration-valid-6")
     assert gc["every"] == 10
+
+
+# ---------------------------------------------------------------- gsr_pipeline (plan 3)
+
+from footlytics.bench.adapters.gsr import gt_to_state  # noqa: E402
+from footlytics.geometry.clip_calib import FrameCalib  # noqa: E402
+from footlytics.state.schema import Team  # noqa: E402
+
+CALIB_STATS = {"keyframes": 1, "keyframes_accepted": 1, "solver_errors": 0}
+_SWAP = {Team.HOME.value: Team.AWAY.value, Team.AWAY.value: Team.HOME.value}
+
+
+def pipeline_fakes(monkeypatch, empty=(), uncalibrated=(), crash=(), real_calibration=False):
+    """No GPU, no model. Calibration is a stub (identity homographies), the pipeline returns the
+    ground truth with HOME and AWAY swapped (a side-mapping bug would show as wrong teams).
+    `empty`: run_frames raises "no detections at all"; `uncalibrated`: no homography on any
+    frame, so the pipeline sees nothing; `crash`: the calibrator itself raises."""
+    seen = {"vram": [], "calibrated": [], "run": [], "mapped": {}}
+    monkeypatch.setattr(runner, "require_vram", lambda mib: seen["vram"].append(mib))
+    monkeypatch.setattr(runner, "_detector", lambda paths, cfg: "detector")
+    if not real_calibration:
+        def calibration(ctx, z, split, seq, cfg, every, gate, fresh=False):
+            seen["calibrated"].append((seq, every, gate, fresh))
+            if seq in crash:
+                raise RuntimeError("calibrator crashed")
+            n = sum(1 for m in z.namelist() if m.startswith(f"{seq}/img1/"))
+            H = None if seq in uncalibrated else np.eye(3)
+            return ([FrameCalib(i, H, None, "keyframe" if H is not None else "none")
+                     for i in range(n)], 0.0, CALIB_STATS)
+        monkeypatch.setattr(runner, "_clip_calibration", calibration)
+
+    def run_frames(frames, fps, mapper, detector, meta, cfg=None, tracker_cfg=None,
+                   source="frames"):
+        n = sum(1 for _ in frames)
+        seen["run"].append((meta.match_id, n, fps, cfg.montage, detector))
+        seen["mapped"][meta.match_id] = mapper(0, None, np.array([[0.0, 0.0, 10.0, 10.0, 0.9, 0]]))
+        if meta.match_id in empty or meta.match_id in uncalibrated:
+            raise RuntimeError("no detections at all")
+        state = gt_to_state(make_labels(seq=meta.match_id, n_frames=3))
+        state.tracks["team"] = (state.tracks["team"].astype(str)
+                                .map(lambda t: _SWAP.get(t, t)).astype("category"))
+        return state, {"frames_processed": n, "frames_calibrated": n, "calib_success_rate": 1.0}
+    monkeypatch.setattr(runner, "run_frames", run_frames)
+    return seen
+
+
+def pipeline_task(clips, **kw):
+    return {"id": "gp", "kind": "gsr_pipeline", "split": "valid", "clips": clips, **kw}
+
+
+def pipeline_dir(paths, run_id):
+    return (paths.run_dir(run_id) / "work" / "gp" / "trackers" / "SoccerNetGS-valid"
+            / "footlytics")
+
+
+def test_gsr_pipeline_scores_a_clip_and_its_extras(paths, monkeypatch):
+    write_gsr_clip(paths)
+    seen = pipeline_fakes(monkeypatch)
+    calls = []
+    monkeypatch.setattr(runner, "run_gsr", fake_scores(calls))
+    row = runner.run_suite("t", "p1", paths, "sha", "h", suite_spec=spec(
+        pipeline_task(["SNGS-990"])))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "complete", t
+    c, agg = t["clips"]["SNGS-990"], t["aggregate"]
+    assert c["hota_jersey_off"] == agg["hota_jersey_off"] == 99.9
+    assert c["hota_jersey_on"] == agg["hota_jersey_on"] == 99.8
+    assert c["deta_jersey_off"] == 99.9 and c["assa_jersey_off"] == 99.9
+    assert c["team_accuracy"] == 1.0 and agg["team_accuracy"] == 1.0   # the swap is not an error
+    assert c["shape_error_m"] is None and agg["shape_error_m"] is None   # 3 a side < min_players
+    assert c["ball_recall"] == 1.0 and agg["ball_recall"] == 1.0
+    assert c["ball_px_median"] == 0.0
+    assert c["calib_success_rate"] == 1.0 and agg["calib_success_rate"] == 1.0
+    assert c["seconds_per_match_minute"] >= 0 and agg["seconds_per_match_minute"] >= 0
+    assert t["leakage"] == {"status": "unverified"} and t["failed"] == {}
+    assert {x[3] for x in calls} == {False, True} and all(x[2] == ("SNGS-990",) for x in calls)
+    preds = json.loads((pipeline_dir(paths, "p1") / "SNGS-990.json").read_text())["predictions"]
+    assert preds and all(p["attributes"]["jersey"] is None for p in preds)
+    # what reached the pipeline: the clip's frames at 25 fps, no montage, the cached detector,
+    # and the calibration's homographies behind the mapper (identity: feet = box bottom middle)
+    assert seen["vram"] == [runner.PIPELINE_VRAM_MIB] == [14_000]
+    assert seen["calibrated"] == [("SNGS-990", 10, 25.0, False)]
+    assert seen["run"] == [("SNGS-990", 3, 25.0, False, "detector")]
+    assert seen["mapped"]["SNGS-990"].tolist() == [[5.0, 10.0]]
+
+
+def test_gsr_pipeline_isolates_a_clip_with_no_detections(paths, monkeypatch):
+    """A clip whose pipeline produces nothing is still scored (empty predictions: all its GT
+    people are misses), so it cannot shrink the GS-HOTA denominator; the reason is recorded."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    pipeline_fakes(monkeypatch, empty=("SNGS-991",))
+    calls = []
+    monkeypatch.setattr(runner, "run_gsr", fake_scores(calls))
+    row = runner.run_suite("t", "p2", paths, "sha", "h", suite_spec=spec(
+        pipeline_task("all")))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "partial" and row["status"] == "partial"
+    assert t["failed"] == {"SNGS-991": "RuntimeError: no detections at all"}
+    assert t["clips"]["SNGS-991"]["error"] == "RuntimeError: no detections at all"
+    # the empty predictions file reached the scorer, beside the good clip's
+    out = pipeline_dir(paths, "p2")
+    assert json.loads((out / "SNGS-991.json").read_text()) == {"predictions": []}
+    assert all(c[2] == ("SNGS-990", "SNGS-991") for c in calls) and len(calls) == 2
+    assert t["clips"]["SNGS-991"]["hota_jersey_off"] == 99.9       # scored, not skipped
+    # the good clip is scored normally
+    good = t["clips"]["SNGS-990"]
+    assert "error" not in good and good["team_accuracy"] == 1.0 and good["ball_recall"] == 1.0
+    assert json.loads((out / "SNGS-990.json").read_text())["predictions"]
+    # clip means skip the clip that has no value rather than counting a zero for it
+    assert t["aggregate"]["team_accuracy"] == 1.0 and t["aggregate"]["ball_recall"] == 1.0
+
+
+def test_gsr_pipeline_counts_a_clip_calibration_never_found_as_uncalibrated(paths, monkeypatch):
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    pipeline_fakes(monkeypatch, uncalibrated=("SNGS-991",))
+    monkeypatch.setattr(runner, "run_gsr", fake_scores([]))
+    row = runner.run_suite("t", "p3", paths, "sha", "h", suite_spec=spec(pipeline_task("all")))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "partial" and "no detections at all" in t["failed"]["SNGS-991"]
+    assert t["clips"]["SNGS-991"]["calib_success_rate"] == 0.0     # no inflating the mean
+    assert t["aggregate"]["calib_success_rate"] == 0.5
+    assert json.loads((pipeline_dir(paths, "p3") / "SNGS-991.json").read_text()) == \
+        {"predictions": []}
+
+
+def test_gsr_pipeline_a_calibrator_crash_is_scored_like_an_empty_pipeline(paths, monkeypatch):
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    seen = pipeline_fakes(monkeypatch, crash=("SNGS-991",))
+    calls = []
+    monkeypatch.setattr(runner, "run_gsr", fake_scores(calls))
+    row = runner.run_suite("t", "p4", paths, "sha", "h", suite_spec=spec(pipeline_task("all")))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "partial"
+    assert t["failed"] == {"SNGS-991": "RuntimeError: calibrator crashed"}
+    assert calls[0][2] == ("SNGS-990", "SNGS-991")
+    assert json.loads((pipeline_dir(paths, "p4") / "SNGS-991.json").read_text()) == \
+        {"predictions": []}
+    assert [r[0] for r in seen["run"]] == ["SNGS-990"]               # never reached the pipeline
+
+
+def test_gsr_pipeline_leaves_out_a_clip_it_cannot_even_prepare(paths, monkeypatch):
+    """Bad labels or no frames: there is nothing to write a predictions file against, so the
+    clip is in `failed` only and the scorer never sees it."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    write_gsr_clip(paths, seq="SNGS-992", n_images=0)
+    labels_file = paths.gsr_labels / "valid" / "SNGS-991" / "Labels-GameState.json"
+    labels = json.loads(labels_file.read_text())
+    labels["info"]["version"] = "1.2"
+    labels_file.write_text(json.dumps(labels))
+    seen = pipeline_fakes(monkeypatch)
+    calls = []
+    monkeypatch.setattr(runner, "run_gsr", fake_scores(calls))
+    row = runner.run_suite("t", "p5", paths, "sha", "h", suite_spec=spec(pipeline_task("all")))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "partial"
+    assert "1.3" in t["failed"]["SNGS-991"] and "FileNotFoundError" in t["failed"]["SNGS-992"]
+    assert list(t["clips"]) == ["SNGS-990"]
+    assert all(c[2] == ("SNGS-990",) for c in calls) and calls
+    out = pipeline_dir(paths, "p5")
+    assert not (out / "SNGS-991.json").exists() and not (out / "SNGS-992.json").exists()
+    assert [r[0] for r in seen["run"]] == ["SNGS-990"]
+
+
+def test_gsr_pipeline_fails_the_task_when_no_clip_produced_anything(paths, monkeypatch):
+    """Every clip empty is a broken run (wrong weights, dead GPU), not a score of zero."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    pipeline_fakes(monkeypatch, empty=("SNGS-990", "SNGS-991"))
+    calls = []
+    monkeypatch.setattr(runner, "run_gsr", fake_scores(calls))
+    row = runner.run_suite("t", "p6", paths, "sha", "h", suite_spec=spec(pipeline_task("all")))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "failed" and "no clip ran" in t["error"]
+    assert "no detections at all" in t["error"] and calls == []
+
+
+def test_gsr_pipeline_a_clip_whose_metrics_fail_is_still_scored(paths, monkeypatch):
+    """Its predictions file is written before the metrics, so the scorer counts it; the reason
+    is recorded and the clip keeps what the scorer gives."""
+    write_gsr_clip(paths)
+    pipeline_fakes(monkeypatch)
+    calls = []
+    monkeypatch.setattr(runner, "run_gsr", fake_scores(calls))
+    monkeypatch.setattr(runner, "match_people",
+                        lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad frames")))
+    row = runner.run_suite("t", "p7", paths, "sha", "h", suite_spec=spec(
+        pipeline_task(["SNGS-990"])))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "partial" and t["failed"] == {"SNGS-990": "ValueError: bad frames"}
+    assert t["clips"]["SNGS-990"]["hota_jersey_off"] == 99.9 and calls
+
+
+def test_clip_calibration_is_shared_and_fresh_bypasses_it(paths, monkeypatch):
+    write_gsr_clip(paths)
+    fits = []
+
+    class Spy(FakeCal):
+        def fit(self, frames, which=None, **kw):
+            fits.append(list(which))
+            return super().fit(frames, which, **kw)
+    spy = Spy()
+    monkeypatch.setattr(runner, "_calibrator", lambda p: spy)
+    ctx = runner.TaskContext(paths, paths.root / "work", lambda m: None)
+    with zipfile.ZipFile(paths.gsr_zip("valid")) as z:
+        first = runner._clip_calibration(ctx, z, "valid", "SNGS-990", {}, 1, 25.0)
+        res, seconds, stats = first
+        assert len(res) == 3 and seconds >= 0
+        assert stats == {"keyframes": 3, "keyframes_accepted": 3, "solver_errors": 0}
+        assert len(fits) == 1
+        again = runner._clip_calibration(ctx, z, "valid", "SNGS-990", {}, 1, 25.0)
+        assert again is first and len(fits) == 1                    # shared, not recomputed
+        redo = runner._clip_calibration(ctx, z, "valid", "SNGS-990", {}, 1, 25.0, fresh=True)
+        assert redo is not first and len(fits) == 2                 # fresh calibrates again ...
+        assert runner._clip_calibration(ctx, z, "valid", "SNGS-990", {}, 1, 25.0) is first
+        assert len(fits) == 2                                       # ... and leaves the cache alone
+        runner._clip_calibration(ctx, z, "valid", "SNGS-990", {}, 2, 25.0)       # other settings
+        runner._clip_calibration(ctx, z, "valid", "SNGS-990", {"mode": "x"}, 1, 25.0)
+        assert len(fits) == 4
+
+
+def test_clip_calibration_counts_solver_errors_and_names_a_missing_clip(paths, monkeypatch):
+    write_gsr_clip(paths)
+
+    class ErrCal(FakeCal):
+        def fit(self, frames, which=None, **kw):
+            self.last_errors = {0: "ZeroDivisionError: x"}
+            out = super().fit(frames, which, **kw)
+            out[0] = None
+            return out
+    monkeypatch.setattr(runner, "_calibrator", lambda p: ErrCal())
+    ctx = runner.TaskContext(paths, paths.root / "work", lambda m: None)
+    with zipfile.ZipFile(paths.gsr_zip("valid")) as z:
+        _, _, stats = runner._clip_calibration(ctx, z, "valid", "SNGS-990", {}, 1, 25.0)
+        assert stats["solver_errors"] == 1 and stats["keyframes_accepted"] == 2
+        with pytest.raises(FileNotFoundError, match="SNGS-123"):
+            runner._clip_calibration(ctx, z, "valid", "SNGS-123", {}, 1, 25.0)
+
+
+def test_gsr_calibration_and_gsr_pipeline_calibrate_a_clip_once(paths, calib, monkeypatch):
+    write_gsr_clip(paths)
+    fits = []
+
+    class Spy(FakeCal):
+        def fit(self, frames, which=None, **kw):
+            fits.append(list(which))
+            return super().fit(frames, which, **kw)
+    monkeypatch.setattr(runner, "_calibrator", lambda p: Spy())
+    pipeline_fakes(monkeypatch, real_calibration=True)
+    monkeypatch.setattr(runner, "run_gsr", fake_scores([]))
+    row = runner.run_suite("t", "p8", paths, "sha", "h", suite_spec=spec(
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid", "clips": ["SNGS-990"],
+         "every": 1},
+        {**pipeline_task(["SNGS-990"]), "id": "gp", "every": 1}))
+    assert row["tasks"]["gc"]["status"] == "complete", row["tasks"]["gc"]
+    assert row["tasks"]["gp"]["status"] == "complete", row["tasks"]["gp"]
+    assert len(fits) == 1
+    assert row["tasks"]["gp"]["clips"]["SNGS-990"]["calib_success_rate"] == 1.0
+
+
+def test_detector_is_built_once_per_config_from_the_pinned_weights(paths, monkeypatch):
+    from footlytics.perception import detect
+    built = []
+
+    class FakeDetector:
+        def __init__(self, weights, cfg):
+            built.append((weights, cfg))
+    monkeypatch.setattr(detect, "Detector", FakeDetector)
+    monkeypatch.setattr(runner, "_DETECTORS", {})
+    a = runner._detector(paths, {})
+    assert runner._detector(paths, {}) is a and len(built) == 1
+    weights, cfg = built[0]
+    assert weights == paths.detector_weights and cfg.ball_weights == str(paths.ball_weights)
+    assert (cfg.tile, cfg.imgsz, cfg.conf, cfg.device, cfg.half) == (0, 1280, 0.25, "cuda", True)
+    b = runner._detector(paths, {"tile": 1280, "conf": 0.3})
+    assert b is not a and len(built) == 2
+    assert (built[1][1].tile, built[1][1].conf) == (1280, 0.3)
+
+
+def test_noise_of_reports_absolute_differences(paths, monkeypatch):
+    monkeypatch.setitem(runner.KINDS, "n1", lambda task, ctx: {"aggregate": {"m": 1.0, "s": "x"}})
+    monkeypatch.setitem(runner.KINDS, "n2", lambda task, ctx: {"aggregate": {"m": 1.25}})
+    row = runner.run_suite("t", "n1", paths, "sha", "h", suite_spec=spec(
+        {"id": "a", "kind": "n1"},
+        {"id": "b", "kind": "n2", "noise_of": "a"},
+        {"id": "c", "kind": "n2", "noise_of": "not-run"}))
+    assert row["tasks"]["b"]["noise"] == {"m": 0.25}
+    assert "noise" not in row["tasks"]["a"] and "noise" not in row["tasks"]["c"]
+
+
+def test_pipeline_suites_are_valid():
+    for name in ("quick", "nightly", "milestone"):
+        assert {t["kind"] for t in runner.load_suite(name)["tasks"]} <= set(runner.KINDS)
+    quick = {t["id"]: t for t in runner.load_suite("quick")["tasks"]}
+    gp = quick["gsr-pipeline-valid-6"]
+    assert gp["kind"] == "gsr_pipeline" and gp["split"] == "valid"
+    assert gp["clips"] == quick["gsr-calibration-valid-6"]["clips"] == [
+        "SNGS-025", "SNGS-028", "SNGS-050", "SNGS-056", "SNGS-081", "SNGS-086"]
+    first, second = runner.load_suite("nightly")["tasks"]
+    assert first["kind"] == second["kind"] == "gsr_pipeline"
+    assert first["clips"] == second["clips"] == "all" and first["split"] == "valid"
+    assert second["noise_of"] == first["id"] and second["fresh"] is True
+    assert "fresh" not in first and "noise_of" not in first
+    milestone = {t["id"]: t for t in runner.load_suite("milestone")["tasks"]}
+    assert milestone["gsr-pipeline-test"]["kind"] == "gsr_pipeline"
+    assert milestone["gsr-pipeline-test"]["split"] == "test"
+    assert milestone["gsr-baseline-test"]["kind"] == "gsr_rescore"
+    assert milestone["gsr-baseline-test"]["split"] == "test"

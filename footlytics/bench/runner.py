@@ -28,11 +28,14 @@ from ..geometry.calib_nn import DEFAULT_KP_THRESHOLD, DEFAULT_LINE_THRESHOLD, so
 from ..geometry.camera_motion import AnchoredCamera
 from ..geometry.clip_calib import ClipCalibrator, static_overlay_mask
 from ..geometry.sn_camera import scale_camera
+from ..pipeline.radar import PipelineConfig, homography_mapper, run_frames
+from ..state.schema import MatchMeta
 from .adapters.calib import gsr_line_frames, write_camera
-from .adapters.gsr import check_version, gt_to_state, state_to_predictions
+from .adapters.gsr import check_version, gt_to_state, state_to_predictions, team_sides
 from .evaluators import run_gsr, run_sncalib
 from .host import ResourceError, contention, require_disk, require_vram, torch_info
-from .metrics import median_reprojection_px
+from .metrics import (ball_metrics, match_people, median_reprojection_px, seconds_per_match_minute,
+                      shape_error, team_accuracy)
 from .paths import BenchPaths
 
 SUITES_DIR = Path(__file__).parent / "suites"
@@ -160,6 +163,11 @@ def run_suite(suite: str, run_id: str, paths: BenchPaths, git_sha: str, host_lab
             _log(f"task {tid} failed: {res['error']}")
         res["seconds"] = round(time.time() - t0, 1)
         res["check"] = evaluate_check(task.get("check"), res.get("aggregate") or {})
+        ref = task.get("noise_of")
+        if ref in row["tasks"]:        # a repeat of `ref`: how far the same run moved (the noise)
+            a, b = res.get("aggregate") or {}, row["tasks"][ref].get("aggregate") or {}
+            res["noise"] = {k: round(abs(a[k] - b[k]), 4) for k in a
+                            if isinstance(a[k], (int, float)) and isinstance(b.get(k), (int, float))}
         row["tasks"][tid] = res
     row["status"] = run_status(row["tasks"])
     row["finished_at"] = _now()
@@ -420,13 +428,32 @@ def sncalib(task: dict, ctx: TaskContext) -> dict:
     return {"clips": per, "aggregate": agg, "failed": failed, "leakage": leakage}
 
 
-@kind("gsr_calibration")
-def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
-    """GSR clips calibrated frame by frame (keyframes + tracker), scored on the GSR pitch-line
-    labels by the SN-Calibration evaluator."""
-    split, cfg = task["split"], task.get("calibrator", {})
-    every, gate = task.get("every", 25), float(task.get("gate_px", 25.0))
-    require_vram(task.get("vram_mib", VRAM_MIB))
+def _frame_names(z: zipfile.ZipFile, split: str, seq: str, paths: BenchPaths) -> list[str]:
+    """One clip's frame members in the GSR zip, in order (raises if it has none)."""
+    names = sorted(n for n in z.namelist()
+                   if n.startswith(f"{seq}/img1/") and n.endswith(".jpg"))
+    if not names:
+        raise FileNotFoundError(f"no frames for {seq} in {paths.gsr_zip(split)}")
+    return names
+
+
+_CLIP_CALIBRATIONS: dict = {}
+
+
+def _clip_calibration(ctx: TaskContext, z: zipfile.ZipFile, split: str, seq: str, cfg: dict,
+                      every: int, gate: float, fresh: bool = False) -> tuple[list, float, dict]:
+    """One GSR clip calibrated frame by frame: `(FrameCalib per frame, seconds, stats)`.
+
+    The most expensive step of every GSR task (the network on a keyframe in `every`), and
+    deterministic for a given zip, clip and settings, so it is computed once per process and
+    shared by the tasks of a run. `seconds` is what the computation cost when it was done, so a
+    task that hits the cache still reports an honest speed. `fresh` neither reads nor writes the
+    cache: the nightly repeat uses it to measure the run-to-run noise.
+    """
+    key = (str(ctx.paths.gsr_zip(split)), seq, every, gate, tuple(sorted(cfg.items())))
+    if not fresh and key in _CLIP_CALIBRATIONS:
+        return _CLIP_CALIBRATIONS[key]
+    names = _frame_names(z, split, seq, ctx.paths)
     cal = _calibrator(ctx.paths)
     thr = _thresholds(cfg)
     solve_kw = {"voting": False, "mode": cfg.get("mode", "full"),
@@ -440,6 +467,26 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
         solver_errors += len(getattr(cal, "last_errors", {}))
         return fits
 
+    pick = sorted(set(np.linspace(0, len(names) - 1, min(25, len(names))).astype(int).tolist()))
+    t0 = time.perf_counter()
+    mask = static_overlay_mask([_imread(z.read(names[i])) for i in pick])
+    cc = ClipCalibrator(fit_keyframes, every=every, gate_px=gate, tracker_factory=TRACKER)
+    res = cc.run((_imread(z.read(n)) for n in names), mask=mask)
+    seconds = time.perf_counter() - t0
+    entry = (res, seconds, {"keyframes": cc.keyframes, "keyframes_accepted": cc.keyframes_accepted,
+                            "solver_errors": solver_errors})
+    if not fresh:
+        _CLIP_CALIBRATIONS[key] = entry
+    return entry
+
+
+@kind("gsr_calibration")
+def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
+    """GSR clips calibrated frame by frame (keyframes + tracker), scored on the GSR pitch-line
+    labels by the SN-Calibration evaluator."""
+    split, cfg = task["split"], task.get("calibrator", {})
+    every, gate = task.get("every", 25), float(task.get("gate_px", 25.0))
+    require_vram(task.get("vram_mib", VRAM_MIB))
     per, failed = {}, {}
     spent, n_frames = 0.0, 0         # calibration time only: not the evaluator runs
 
@@ -454,20 +501,10 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
         pending: dict = {}
         for seq in _resolve(ctx.paths, split, task.get("clips", "all")):
             try:
-                solver_errors = 0
                 truth = gsr_line_frames(_labels(ctx.paths, split, seq))
-                names = sorted(n for n in z.namelist()
-                               if n.startswith(f"{seq}/img1/") and n.endswith(".jpg"))
-                if not names:
-                    raise FileNotFoundError(f"no frames for {seq} in {ctx.paths.gsr_zip(split)}")
-                pick = sorted(set(np.linspace(0, len(names) - 1, min(25, len(names)))
-                                  .astype(int).tolist()))
-                t_clip = time.perf_counter()
-                mask = static_overlay_mask([_imread(z.read(names[i])) for i in pick])
-                cc = ClipCalibrator(fit_keyframes, every=every, gate_px=gate,
-                                    tracker_factory=TRACKER)
-                res = cc.run((_imread(z.read(n)) for n in names), mask=mask)
-                spent += time.perf_counter() - t_clip
+                res, seconds, stats = _clip_calibration(ctx, z, split, seq, cfg, every, gate,
+                                                        fresh=task.get("fresh", False))
+                spent += seconds
                 n_frames += len(res)
                 gt_d, pred_d = (ctx.work / "clips" / seq / k / split for k in ("gt", "pred"))
                 gt_d.mkdir(parents=True, exist_ok=True)
@@ -486,9 +523,9 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
                 pending[seq] = (pool.submit(evaluate, seq, gt_d, pred_d),
                                 {"labelled": len(truth), "predicted": calibrated,
                                  "calibrated_share": round(calibrated / max(len(truth), 1), 4),
-                                 "keyframes": cc.keyframes,
-                                 "keyframes_accepted": cc.keyframes_accepted,
-                                 "solver_errors": solver_errors})
+                                 "keyframes": stats["keyframes"],
+                                 "keyframes_accepted": stats["keyframes_accepted"],
+                                 "solver_errors": stats["solver_errors"]})
             except Exception as e:  # noqa: BLE001
                 failed[seq] = f"{type(e).__name__}: {e}"
         for seq, (fut, counts) in pending.items():
@@ -518,3 +555,110 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
            "seconds_per_frame": round(spent / max(n_frames, 1), 3)}
     return {"clips": per, "aggregate": agg, "failed": failed,
             "leakage": {"status": "unverified"}}   # SoccerMaster's training games are unpublished
+
+
+# ---------------------------------------------------------------- the whole pipeline
+
+PIPELINE_VRAM_MIB = 14_000
+_DETECTORS: dict = {}
+
+
+def _detector(paths: BenchPaths, det_cfg: dict):
+    """One detector per process and settings (the people model plus the ball model)."""
+    key = tuple(sorted(det_cfg.items()))
+    if key not in _DETECTORS:
+        from ..perception.detect import Detector, DetectorConfig       # Ultralytics is heavy
+
+        _DETECTORS[key] = Detector(paths.detector_weights, DetectorConfig(
+            tile=det_cfg.get("tile", 0), imgsz=det_cfg.get("imgsz", 1280),
+            conf=det_cfg.get("conf", 0.25), device="cuda", half=True,
+            ball_weights=str(paths.ball_weights)))
+    return _DETECTORS[key]
+
+
+@kind("gsr_pipeline")
+def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
+    """The whole pipeline on GSR clips: calibrate, detect, track, assign teams; scored by
+    GS-HOTA (jersey off, primary; on, official) plus our metrics against GT.
+
+    A clip whose pipeline produces nothing (calibration or `run_frames` raises, e.g. "no
+    detections at all" when no frame was calibrated) is still scored, with an empty predictions
+    file: every GT person is a miss. Leaving it out would shrink the GS-HOTA denominator and
+    flatter the score. Only a clip we cannot even prepare (bad labels, no frames) is left out.
+    """
+    split, cfg = task["split"], task.get("calibrator", {})
+    every, gate = task.get("every", 10), float(task.get("gate_px", 25.0))
+    require_vram(task.get("vram_mib", PIPELINE_VRAM_MIB))
+    det = _detector(ctx.paths, task.get("detector", {}))
+    out_dir = ctx.work / "trackers" / f"SoccerNetGS-{split}" / "footlytics"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    per, failed = {}, {}
+    scored, ran = [], []            # `scored` goes to the evaluator; `ran` produced predictions
+    total_s, total_frames = 0.0, 0
+    with zipfile.ZipFile(ctx.paths.gsr_zip(split)) as z:
+        for seq in _resolve(ctx.paths, split, task.get("clips", "all")):
+            try:
+                gt = gt_to_state(_labels(ctx.paths, split, seq))
+                names = _frame_names(z, split, seq, ctx.paths)
+            except Exception as e:  # noqa: BLE001 - no predictions file can be written for it
+                failed[seq] = f"{type(e).__name__}: {e}"
+                continue
+            calib = None
+            try:
+                calib, calib_s, _ = _clip_calibration(ctx, z, split, seq, cfg, every, gate,
+                                                      fresh=task.get("fresh", False))
+                t0 = time.perf_counter()
+                state, report = run_frames(
+                    (_imread(z.read(n)) for n in names), 25.0,
+                    homography_mapper([fc.H_img_to_pitch for fc in calib]), det,
+                    MatchMeta(match_id=seq, fps=25.0, source_type="broadcast"),
+                    PipelineConfig(verbose=False, montage=False))
+                run_s = time.perf_counter() - t0
+                (out_dir / f"{seq}.json").write_text(json.dumps(
+                    state_to_predictions(state, split)))
+            except Exception as e:  # noqa: BLE001 - the pipeline gave nothing: score it as misses
+                (out_dir / f"{seq}.json").write_text(json.dumps({"predictions": []}))
+                scored.append(seq)
+                failed[seq] = f"{type(e).__name__}: {e}"
+                per[seq] = {"error": failed[seq]}
+                if calib:           # calibration that found no frame belongs in the mean
+                    per[seq]["calib_success_rate"] = round(
+                        sum(fc.H_img_to_pitch is not None for fc in calib) / len(calib), 4)
+                ctx.log(f"{seq}: pipeline produced nothing, scored as misses ({failed[seq]})")
+                continue
+            scored.append(seq)
+            ran.append(seq)
+            try:
+                sides = team_sides(state.tracks)
+                frames = sorted(set(gt.tracks["frame_idx"]))
+                m = match_people(gt.tracks, state.tracks, frames)
+                per[seq] = {
+                    "team_accuracy": team_accuracy(gt.tracks, state.tracks, m, sides),
+                    **ball_metrics(gt.tracks, state.tracks, frames),
+                    "shape_error_m": shape_error(gt.tracks, state.tracks, frames,
+                                                 sides)["shape_error_m"],
+                    "calib_success_rate": report.get("calib_success_rate"),
+                    "seconds_per_match_minute": seconds_per_match_minute(
+                        calib_s + run_s, len(names)),
+                }
+                total_s += calib_s + run_s
+                total_frames += len(names)
+                ctx.log(f"{seq}: pipeline done ({len(names)} frames)")
+            except Exception as e:  # noqa: BLE001 - its predictions are written, so it is scored
+                failed[seq] = f"{type(e).__name__}: {e}"
+                per[seq] = {"error": failed[seq]}
+    if not ran:
+        raise RuntimeError(f"no clip ran: {failed}")
+    scores = _score(ctx, split, "footlytics", scored)
+    for seq in scored:
+        per[seq].update(scores["clips"].get(seq, {}))
+
+    def mean(k):
+        v = [c[k] for c in per.values() if c.get(k) is not None]
+        return round(float(np.mean(v)), 4) if v else None
+    agg = {**scores["aggregate"],
+           **{k: mean(k) for k in ("team_accuracy", "ball_recall", "ball_px_median",
+                                   "shape_error_m", "calib_success_rate")},
+           "seconds_per_match_minute": seconds_per_match_minute(total_s, total_frames)}
+    return {"clips": per, "aggregate": agg, "failed": failed,
+            "leakage": {"status": "unverified"}}

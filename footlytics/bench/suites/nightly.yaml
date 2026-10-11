@@ -1,0 +1,16 @@
+# All 58 GSR valid clips, twice: the second run re-calibrates and its `noise` is the
+# run-to-run spread; a change smaller than that is no change (spec: Noise).
+name: nightly
+tasks:
+  - id: gsr-pipeline-valid-all
+    kind: gsr_pipeline
+    split: valid
+    clips: all
+    every: 10
+  - id: gsr-pipeline-valid-all-repeat
+    kind: gsr_pipeline
+    split: valid
+    clips: all
+    every: 10
+    fresh: true
+    noise_of: gsr-pipeline-valid-all

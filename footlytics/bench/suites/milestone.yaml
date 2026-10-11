@@ -8,3 +8,14 @@ tasks:
     # SoccerMaster's training games are not published; until they are, the score is reported
     # with leakage "unverified" and is not quoted externally (spec: Leakage).
     leakage_games: []
+  - id: gsr-pipeline-test
+    kind: gsr_pipeline
+    split: test
+    clips: all
+    every: 10
+  - id: gsr-baseline-test
+    kind: gsr_rescore
+    split: test
+    clips: all
+    predictions: baseline/SoccerNetGS-test.zip
+    tracker: tracklab
