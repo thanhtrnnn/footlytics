@@ -19,6 +19,7 @@ dependencies = [
     "typer>=0.12",
     "scikit-learn>=1.5",
     "lap>=0.5.12",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]

@@ -1,0 +1,15 @@
+# Proves the harness before any number is trusted (spec: "Proving the harness").
+name: harness
+tasks:
+  - id: gsr-gt-roundtrip-valid
+    kind: gsr_gt_roundtrip
+    split: valid
+    clips: all
+    check: {metric: hota_jersey_off, min: 99.0}
+  - id: gsr-baseline-test
+    kind: gsr_rescore
+    split: test
+    clips: all
+    predictions: baseline/SoccerNetGS-test.zip
+    tracker: tracklab
+    check: {metric: hota_jersey_on, expected: 22.26, tolerance: 1.0}
