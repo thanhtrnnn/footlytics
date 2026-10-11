@@ -34,7 +34,8 @@ from .adapters.calib import gsr_line_frames, write_camera
 from .adapters.gsr import check_version, gt_to_state, state_to_predictions, team_sides
 from .evaluators import run_gsr, run_sncalib
 from .host import ResourceError, contention, require_disk, require_vram, torch_info
-from .metrics import (ball_metrics, ball_summary, match_people, median_reprojection_px,
+from .metrics import (MATCH_M, POS_GATE_M, ball_metrics, ball_summary, match_people,
+                      median_reprojection_px, position_metrics, position_summary,
                       seconds_per_match_minute, shape_error, team_accuracy)
 from .paths import BenchPaths
 
@@ -616,6 +617,14 @@ def _detector(paths: BenchPaths, det_cfg: dict):
     return _DETECTORS[key]
 
 
+def _pool(pool: dict, clip: dict) -> dict:
+    """Moves a clip's raw `_` values into the run's `pool` (lists join, counts add) and returns
+    the clip's metrics without them."""
+    for k in [k for k in clip if k.startswith("_")]:
+        pool[k] += clip.pop(k)
+    return clip
+
+
 @kind("gsr_pipeline")
 def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
     """The whole pipeline on GSR clips: calibrate, detect, track, assign teams; scored by
@@ -639,7 +648,8 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
     per, failed = {}, {}
     scored, ran = [], []            # `scored` goes to the evaluator; `ran` produced predictions
     total_s, total_frames = 0.0, 0
-    ball_dists, ball_gt = [], 0       # per-frame ball distances and GT-ball frames, all clips
+    # every clip's raw values: a pooled metric's aggregate comes from these, not clip numbers
+    pool = {"_dists": [], "_gt_frames": 0, "_pos_dists": [], "_gt_people": 0}
     with zipfile.ZipFile(ctx.paths.gsr_zip(split)) as z:
         for seq in _resolve(ctx.paths, split, task.get("clips", "all")):
             try:
@@ -671,14 +681,16 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                 if calib:           # calibration that found no frame belongs in the mean
                     per[seq]["calib_success_rate"] = round(
                         sum(fc.H_img_to_pitch is not None for fc in calib) / len(calib), 4)
-                try:         # its GT-ball frames are all missed: they stay in the recall's total
+                try:     # its GT balls and people are all missed: they stay in the totals
                     gt = gt_to_state(labels)
-                    ball = ball_metrics(gt.tracks, gt.tracks.iloc[:0],
-                                        sorted(set(gt.tracks["frame_idx"])))
-                    ball_gt += ball.pop("_gt_frames")
-                    per[seq].update({k: v for k, v in ball.items() if k != "_dists"})
-                except Exception as ge:  # noqa: BLE001 - no GT state: no frames to charge
-                    per[seq]["ball_error"] = f"{type(ge).__name__}: {ge}"
+                    frames = sorted(set(gt.tracks["frame_idx"]))
+                    none = gt.tracks.iloc[:0]
+                    per[seq].update(_pool(pool, {
+                        **ball_metrics(gt.tracks, none, frames),
+                        **position_metrics(gt.tracks, match_people(gt.tracks, none, frames),
+                                           frames)}))
+                except Exception as ge:  # noqa: BLE001 - no GT state: nothing to charge
+                    per[seq]["gt_error"] = f"{type(ge).__name__}: {ge}"
                 ctx.log(f"{seq}: pipeline produced nothing, scored as misses ({failed[seq]})")
                 continue
             scored.append(seq)
@@ -687,20 +699,18 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                 gt = gt_to_state(labels)      # only our extra metrics need it: the clip is scored
                 sides = team_sides(state.tracks)
                 frames = sorted(set(gt.tracks["frame_idx"]))
-                m = match_people(gt.tracks, state.tracks, frames)
-                ball = ball_metrics(gt.tracks, state.tracks, frames)
-                dists, n_gt = ball.pop("_dists"), ball.pop("_gt_frames")
-                per[seq] = {
+                near = match_people(gt.tracks, state.tracks, frames, max_dist=POS_GATE_M)
+                m = near[near["dist"] <= MATCH_M]
+                per[seq] = _pool(pool, {
                     "team_accuracy": team_accuracy(gt.tracks, state.tracks, m, sides),
-                    **ball,
+                    **ball_metrics(gt.tracks, state.tracks, frames),
+                    **position_metrics(gt.tracks, near, frames),
                     "shape_error_m": shape_error(gt.tracks, state.tracks, frames,
                                                  sides)["shape_error_m"],
                     "calib_success_rate": report.get("calib_success_rate"),
                     "seconds_per_match_minute": seconds_per_match_minute(
                         calib_s + run_s, len(names)),
-                }
-                ball_dists.extend(dists)
-                ball_gt += n_gt
+                })
                 total_s += calib_s + run_s
                 total_frames += len(names)
                 ctx.log(f"{seq}: pipeline done ({len(names)} frames)")
@@ -718,7 +728,8 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
         return round(float(np.mean(v)), 4) if v else None
     agg = {**scores["aggregate"],
            **{k: mean(k) for k in ("team_accuracy", "shape_error_m", "calib_success_rate")},
-           **ball_summary(ball_dists, ball_gt),      # over the pooled frames, not clip numbers
+           **ball_summary(pool["_dists"], pool["_gt_frames"]),
+           **position_summary(pool["_pos_dists"], pool["_gt_people"]),
            "seconds_per_match_minute": seconds_per_match_minute(total_s, total_frames)}
     return {"clips": per, "aggregate": agg, "failed": failed,
             "leakage": {"status": "unverified"}}

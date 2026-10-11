@@ -3,8 +3,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from footlytics.bench.metrics import (ball_metrics, match_people, seconds_per_match_minute,
-                                      shape_error, team_accuracy)
+from footlytics.bench.metrics import (ball_metrics, match_people, position_metrics,
+                                      position_summary, seconds_per_match_minute, shape_error,
+                                      team_accuracy)
 
 
 def tracks(rows):
@@ -30,6 +31,40 @@ def test_match_people_pairs_within_the_distance():
     pred = tracks(people(0, LEFT_X, "away", 1, dx=0.5) + people(0, RIGHT_X, "home", 101, dx=9))
     m = match_people(gt, pred, [0], max_dist=2.0)
     assert len(m) == 6 and (m["dist"] <= 2.0).all()
+
+
+def test_the_gate_drops_pairs_but_never_changes_them():
+    """The assignment ignores the gate, so the 2 m pairs are exactly the 5 m pairs within 2 m:
+    team accuracy reads them off the one 5 m match."""
+    gt = tracks(gt_frame(0))
+    pred = tracks(people(0, LEFT_X, "home", 1, dx=3.0) + people(0, RIGHT_X, "away", 101, dx=0.5))
+    near = match_people(gt, pred, [0], max_dist=5.0)
+    close = match_people(gt, pred, [0], max_dist=2.0)
+    assert sorted(near["dist"]) == [0.5] * 6 + [3.0] * 6 and len(close) == 6
+    pd.testing.assert_frame_equal(near[near["dist"] <= 2.0].reset_index(drop=True), close)
+
+
+def test_position_summary_median_p90_and_recall_over_gt_people():
+    assert position_summary([0.5, 1.0, 1.5, 3.0, 4.5], 6) == {
+        "pos_err_median_m": 1.5, "pos_err_p90_m": 3.9, "recall_2m": 0.5}
+    assert position_summary([], 4) == {
+        "pos_err_median_m": None, "pos_err_p90_m": None, "recall_2m": 0.0}
+    assert position_summary([], 0) == {
+        "pos_err_median_m": None, "pos_err_p90_m": None, "recall_2m": None}
+
+
+def test_position_metrics_charge_every_located_gt_player_in_the_scored_frames():
+    """Frame 1 predicts no left player: its six are misses. A referee, a player with no pitch
+    position and a frame outside the scored ones are not GT people."""
+    nan = np.nan
+    gt = tracks(gt_frame(0) + gt_frame(1) + gt_frame(2)
+                + [(0, 50, "referee", "official", 0.0, 30.0, 0, 0, 10, 20, False),
+                   (1, 51, "player", "home", nan, nan, 0, 0, 10, 20, False)])
+    pred = tracks(people(0, LEFT_X, "home", 1, dx=3.0) + people(0, RIGHT_X, "away", 101, dx=0.5)
+                  + people(1, RIGHT_X, "away", 101, dx=0.5))
+    p = position_metrics(gt, match_people(gt, pred, [0, 1], max_dist=5.0), [0, 1])
+    assert p["_gt_people"] == 24 and sorted(p["_pos_dists"]) == [0.5] * 12 + [3.0] * 6
+    assert (p["pos_err_median_m"], p["pos_err_p90_m"], p["recall_2m"]) == (0.5, 3.0, 0.5)
 
 
 def test_team_accuracy_ignores_a_label_swap_but_not_a_wrong_side():

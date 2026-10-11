@@ -50,20 +50,28 @@ def median_reprojection_px(gt_lines: dict, cam: dict, width: int = 960,
 _PLAYING = ("player", "goalkeeper")
 _GT_SIDE = {"home": "left", "away": "right"}       # gt_to_state: left -> HOME, right -> AWAY
 _SHAPE = ("centroid_x", "centroid_y", "width", "depth", "compactness")
+#: A predicted person within MATCH_M metres of a GT one is that person. Position error looks out
+#: to POS_GATE_M, so a player we place 3 m off still has an error rather than none.
+MATCH_M, POS_GATE_M = 2.0, 5.0
 
 
-def _playing(t: pd.DataFrame) -> pd.DataFrame:
-    p = t[t["role"].astype(str).isin(_PLAYING)]
+def _on_pitch(t: pd.DataFrame, roles=_PLAYING) -> pd.DataFrame:
+    p = t[t["role"].astype(str).isin(roles)]
     return p[np.isfinite(p["x"].astype(float)) & np.isfinite(p["y"].astype(float))]
 
 
-def match_people(gt: pd.DataFrame, pred: pd.DataFrame, frames,
-                 max_dist: float = 2.0) -> pd.DataFrame:
-    """Per frame, the Hungarian match of GT and predicted players (and keepers) on pitch
-    distance, keeping pairs within `max_dist` metres."""
+def share(ok: int, n: int) -> float | None:
+    return round(ok / n, 4) if n else None
+
+
+def match_people(gt: pd.DataFrame, pred: pd.DataFrame, frames, max_dist: float = MATCH_M,
+                 roles=_PLAYING) -> pd.DataFrame:
+    """Per frame, the Hungarian match of GT and predicted people of `roles` (players and
+    keepers by default) on pitch distance, keeping pairs within `max_dist` metres. The
+    assignment ignores `max_dist`: a tighter gate only drops pairs."""
     from scipy.optimize import linear_sum_assignment
 
-    g, p = _playing(gt), _playing(pred)
+    g, p = _on_pitch(gt, roles), _on_pitch(pred, roles)
     gb, pb = dict(tuple(g.groupby("frame_idx"))), dict(tuple(p.groupby("frame_idx")))
     rows = []
     for f in frames:
@@ -90,7 +98,31 @@ def team_accuracy(gt: pd.DataFrame, pred: pd.DataFrame, matches: pd.DataFrame,
             continue
         n += 1
         ok += pred_sides.get(str(pred.at[pi, "team"])) == side
-    return round(ok / n, 4) if n else None
+    return share(ok, n)
+
+
+def position_summary(dists, gt_people: int) -> dict:
+    """The position numbers from matched distances (m, players and keepers within
+    `POS_GATE_M`) over `gt_people` located GT players and keepers. Both may be pooled across
+    clips: a clip has no number of its own that averages correctly.
+
+    - `pos_err_median_m`, `pos_err_p90_m`: how far a matched player sits from the truth.
+    - `recall_2m`: share of GT people with a predicted one within `MATCH_M` (detection and
+      mapping together, before teams).
+    """
+    found = sum(d <= MATCH_M for d in dists)
+    return {"pos_err_median_m": round(float(np.median(dists)), 3) if len(dists) else None,
+            "pos_err_p90_m": round(float(np.percentile(dists, 90)), 3) if len(dists) else None,
+            "recall_2m": share(found, gt_people)}
+
+
+def position_metrics(gt: pd.DataFrame, matches: pd.DataFrame, frames) -> dict:
+    """`position_summary` of one clip from its `POS_GATE_M` match over `frames`. `_pos_dists`
+    and `_gt_people` are the raw values to pool across clips; they are not metrics to store."""
+    g = _on_pitch(gt)
+    n = int(g["frame_idx"].isin(list(frames)).sum())
+    d = matches["dist"].astype(float).tolist()
+    return {**position_summary(d, n), "_pos_dists": d, "_gt_people": n}
 
 
 def _ball_centres(t: pd.DataFrame) -> dict:
@@ -148,7 +180,7 @@ def shape_error(gt: pd.DataFrame, pred: pd.DataFrame, frames, pred_sides: dict,
                 min_players: int = 6) -> dict:
     """Mean absolute error (m) of each side's shape (centroid, width, depth, compactness),
     per frame where both GT and prediction see at least `min_players` of that side."""
-    g, p = _playing(gt), _playing(pred)
+    g, p = _on_pitch(gt), _on_pitch(pred)
     g = g.assign(side=g["team"].astype(str).map(_GT_SIDE))
     p = p.assign(side=p["team"].astype(str).map(pred_sides))
     errs = {k: [] for k in _SHAPE}
