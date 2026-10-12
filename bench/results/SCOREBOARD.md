@@ -38,3 +38,10 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 | 2026-10-12 05:17 | d2500aa | complete | iec4090_2 | score 56.70 | hota_jersey_off 42.38 | score 54.43 |
 | 2026-10-11 19:10 | e5bea5b | complete | iec4090_2 | score 56.70 | hota_jersey_off 42.38 | score 54.43 |
 | 2026-10-11 17:12 | 6fea8be | complete | iec4090_2 | score 56.75 |  | score 54.43 |
+
+## vleague
+
+| finished (UTC) | commit | status | host | vleague-dev | vleague-frozen |
+|---|---|---|---|---|---|
+| 2026-10-12 22:52 | fccd3d4 | complete | iec4090 | failed 0.00 | failed 0.00 |
+| 2026-10-12 19:51 | fccd3d4 | failed | iec4090 | error | error |

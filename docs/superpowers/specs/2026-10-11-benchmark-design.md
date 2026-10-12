@@ -118,6 +118,23 @@ get no camera (too few visible keypoints for the solver), which caps the score; 
 completeness is the obvious lever. Clip scores vary widely by clip (44 to 86 on the quick set,
 72.5 on the two tuning clips).
 
+V.League mini-GT, measured on iec4090 (2026-10-13, run `20261012-224247-vleague-fccd3d4`, suite
+`vleague` = quick's `vleague-dev` + milestone's `vleague-frozen`; same calibrator and clip
+settings as above). Errors are in model metres (105 x 68 pitch model). One annotation pass, so
+inter-annotator error is not measured. Internal footage, `leakage: unverified`:
+
+| Split | Frames | Under 1 m | Median error | Uncalibrated | Jitter between keyframes | Jitter at keyframe switch (mean / median window) |
+|---|---|---|---|---|---|---|
+| dev | 24 | 83 % | 0.63 m | 0 | 0.03 m | 0.20 / 0.16 m |
+| frozen | 21 | **71 %** | 0.68 m | 1 | 0.05 m | 1.22 / 0.20 m |
+
+When a frame calibrates, it is mostly within a metre. The misses are gross failures, not drift:
+three frames are off by more than 10 m (frozen `cong-an-tp-ho-chi-minh-ha-noi/0192612` 42 m,
+dev `ninh-binh-pvf-cand/0216012` 13.6 m and `shb-da-nang-hai-phong/0192012` 11.7 m). The one
+42 m window alone lifts the frozen mean switch jitter from about 0.2 m to 1.2 m. Between
+keyframes the tracker holds to a few centimetres. Catching gross solves before they are bridged
+is the lever here, ahead of solver precision.
+
 Full pipeline, measured on this harness (2026-10-12; SoccerMaster x6 person detector + roboflow
 ball model, calibration solved every 10th frame and bridged by the camera tracker, no shirt-number
 reader). Rows carry `leakage: unverified` (SoccerMaster's detector) and are internal:
