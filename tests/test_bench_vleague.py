@@ -1292,3 +1292,71 @@ def test_vleague_passes_the_same_fit_settings_as_gsr_calibration(vl, monkeypatch
     vl.run(calibrator=calibrator)
     assert seen["gsr"] and seen["vleague"]
     assert seen["vleague"][0] == seen["gsr"][0]
+
+
+# ---- human rejects (close-ups the green-share test lets through) -----------------------
+
+def test_choose_frames_replaces_a_rejected_pick_with_the_next_free_candidate():
+    n, fps = 60_000, 50
+    cands = list(range(vleague.WINDOW, n - vleague.WINDOW, 30 * fps))
+    base = vleague.choose_frames(n, fps, lambda i: True)
+    bad = base[3]
+    nxt = next(c for c in cands if c > bad and c not in base)
+    got = vleague.choose_frames(n, fps, lambda i: True, rejected={bad})
+    assert got == sorted([p for p in base if p != bad] + [nxt])
+    got2 = vleague.choose_frames(n, fps, lambda i: True, rejected={bad, nxt})
+    nxt2 = next(c for c in cands if c > nxt and c not in base)
+    assert got2 == sorted([p for p in base if p != bad] + [nxt2])
+
+
+def test_choose_frames_falls_back_to_an_earlier_candidate_at_the_end():
+    # candidates 12, 62, 112, 162; picks 12, 112, 162; 162 rejected and nothing after it
+    got = vleague.choose_frames(200, 10, lambda i: True, k=3, step_s=5.0, rejected={162})
+    assert got == [12, 62, 112]
+
+
+def test_sample_match_with_rejects_replaces_frames_records_them_and_drops_their_windows(
+        tmp_path, monkeypatch):
+    video = tmp_path / "v.avi"
+    _write_video(video, n=200)
+    monkeypatch.setattr(vleague, "make_is_pitch", lambda cap: (lambda i: True))
+    data = tmp_path / "data"
+    first = vleague.sample_match(video, "m", data, k=3, step_s=5.0)
+    assert sorted(first["frames"]) == ["0000012", "0000112", "0000162"]
+    again = vleague.sample_match(video, "m", data, k=3, step_s=5.0, existing=first,
+                                 reject=[112])
+    assert again["frames"] == {"0000012": {"split": "dev", "relabel": False},
+                               "0000062": {"split": "frozen", "relabel": True},
+                               "0000162": {"split": "dev", "relabel": False}}
+    assert again["rejected"] == [112] and again["sha256"] == first["sha256"]
+    assert (data / "m" / "0000062" / "+00.jpg").exists()
+    assert not (data / "m" / "0000112").exists()
+
+
+def test_sample_match_reuses_an_entry_whose_rejects_are_already_recorded(tmp_path, monkeypatch):
+    video = tmp_path / "v.avi"
+    _write_video(video, n=200)
+    monkeypatch.setattr(vleague, "make_is_pitch", lambda cap: (lambda i: True))
+    first = vleague.sample_match(video, "m", tmp_path / "d", k=3, step_s=5.0, reject=[112])
+    monkeypatch.setattr(vleague, "make_is_pitch", lambda cap: _no_hash)
+    assert vleague.sample_match(video, "m", tmp_path / "d", k=3, step_s=5.0, existing=first,
+                                reject=[112]) == first
+    assert vleague.sample_match(video, "m", tmp_path / "d", k=3, step_s=5.0,
+                                existing=first) == first
+
+
+def test_cli_reject_goes_to_its_match_and_unknown_matches_are_refused(tmp_path, monkeypatch):
+    video = tmp_path / "NINH BÌNH - PVF-CAND - LPBANK V.LEAGUE 1 - 2025-26.avi"
+    _write_video(video, n=60)
+    seen = {}
+
+    def fake(v, mid, data, existing=None, reject=()):
+        seen[mid] = sorted(reject)
+        return {"video": v.name, "sha256": "0" * 64, "fps": 10.0, "frames": {}}
+    monkeypatch.setattr(vleague, "sample_match", fake)
+    r = _cli([video, "--data", tmp_path / "d", "--manifest", tmp_path / "m.json",
+              "--reject", "ninh-binh-pvf-cand/0000012", "--reject", "ninh-binh-pvf-cand/0000040"])
+    assert r.exit_code == 0, r.output
+    assert seen == {"ninh-binh-pvf-cand": [12, 40]}
+    r = _cli([video, "--manifest", tmp_path / "m2.json", "--reject", "other-match/0000012"])
+    assert r.exit_code != 0 and "other-match" in r.output

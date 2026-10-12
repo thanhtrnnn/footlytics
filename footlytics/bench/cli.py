@@ -209,7 +209,10 @@ def vleague_sample(videos: list[Path] = typer.Argument(..., help="V.League match
                    data: Path = typer.Option(Path("data/vleague"),
                                              help="where the window JPEGs go (not in git)"),
                    manifest: Path = typer.Option(Path("bench/vleague/manifest.json"),
-                                                 help="frame indices, splits, video sha256")) -> None:
+                                                 help="frame indices, splits, video sha256"),
+                   reject: list[str] = typer.Option(
+                       [], help="<match>/<idx> a person flagged as unlabelable (a close-up); "
+                                "replaced by the next pitch frame, before labelling only")) -> None:
     """Pick 15 pitch frames per match, write their +-12 frame windows and the manifest."""
     from . import vleague
 
@@ -222,11 +225,19 @@ def vleague_sample(videos: list[Path] = typer.Argument(..., help="V.League match
         if mid in ids:
             raise typer.BadParameter(f"match id {mid!r} comes from both {ids[mid]} and {v}")
         ids[mid] = v
+    rejects: dict[str, list[int]] = {}
+    for r in reject:
+        mid, _, idx = r.rpartition("/")
+        if mid not in ids or not idx.isdigit():
+            raise typer.BadParameter(f"--reject {r!r}: expected <match>/<idx> for one of "
+                                     f"{', '.join(ids)}")
+        rejects.setdefault(mid, []).append(int(idx))
     entries = vleague.read_manifest(manifest)
     for mid, v in ids.items():
         typer.echo(f"{mid}: sampling {v.name}")
         try:
-            entries[mid] = vleague.sample_match(v, mid, data, existing=entries.get(mid))
+            entries[mid] = vleague.sample_match(v, mid, data, existing=entries.get(mid),
+                                                reject=rejects.get(mid, ()))
         except ValueError as e:
             typer.echo(str(e), err=True)
             raise typer.Exit(1)

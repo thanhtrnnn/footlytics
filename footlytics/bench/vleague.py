@@ -40,13 +40,32 @@ def pitch_share(frame_bgr: np.ndarray) -> float:
 
 
 def choose_frames(n_frames: int, fps: float, is_pitch: Callable[[int], bool],
-                  k: int = PER_MATCH, step_s: float = 30.0) -> list[int]:
+                  k: int = PER_MATCH, step_s: float = 30.0,
+                  rejected: frozenset[int] | set[int] = frozenset()) -> list[int]:
+    """k pitch frames spread evenly over the match.
+
+    A `rejected` pick (a close-up a person flagged) is replaced by the nearest free candidate,
+    later first, so the other picks never move.
+    """
     step = max(1, round(step_s * fps))
     cands = [i for i in range(WINDOW, n_frames - WINDOW, step) if is_pitch(i)]
     if len(cands) <= k:
-        return cands
+        return [c for c in cands if c not in rejected]
     pick = np.linspace(0, len(cands) - 1, k).round().astype(int)
-    return [cands[i] for i in sorted(set(pick.tolist()))]
+    picked = [cands[i] for i in sorted(set(pick.tolist()))]
+    taken = set(picked)
+    out = []
+    for p in picked:
+        if p not in rejected:
+            out.append(p)
+            continue
+        j = cands.index(p)
+        alt = next((c for c in cands[j + 1:] + cands[:j][::-1]
+                    if c not in rejected and c not in taken), None)
+        if alt is not None:
+            taken.add(alt)
+            out.append(alt)
+    return sorted(out)
 
 
 def assign_splits(keys: list[str]) -> dict[str, dict]:
@@ -110,39 +129,54 @@ def _sha256(path: Path) -> str:
 
 
 def sample_match(video, match_id: str, data_dir, k: int | None = None, step_s: float = 30.0,
-                 existing: dict | None = None) -> dict:
+                 existing: dict | None = None, reject=()) -> dict:
     """Pick the frames, write their jitter windows under data_dir/<match_id>, return the entry.
 
     With `existing` (the match's manifest entry) the frame set is reused, never re-chosen, so a
-    different OpenCV/ffmpeg build cannot reshuffle dev/frozen. A changed video raises.
+    different OpenCV/ffmpeg build cannot reshuffle dev/frozen. A changed video raises. New
+    `reject` indices (frames a person flagged as unlabelable) re-choose with every reject so
+    far, recorded in the entry's "rejected"; do this only before labelling starts.
     """
+    import shutil
+
     import cv2
 
     k = PER_MATCH if k is None else k
     video = Path(video)
+    rejected = {int(i) for i in reject}
+    sha = None
     if existing is not None:
         sha = _sha256(video)
         if sha != existing["sha256"]:
             raise ValueError(f"{video.name}: video changed (sha256 {sha[:12]} != manifest "
                              f"{existing['sha256'][:12]}); refusing to resample")
-        extract_windows(video, [int(i) for i in existing["frames"]], Path(data_dir) / match_id)
-        return existing
+        known = set(existing.get("rejected", []))
+        if rejected <= known:
+            extract_windows(video, [int(i) for i in existing["frames"]], Path(data_dir) / match_id)
+            return existing
+        rejected |= known
     cap = cv2.VideoCapture(str(video))
     try:
         n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = float(cap.get(cv2.CAP_PROP_FPS))
         if not cap.isOpened() or n <= 2 * WINDOW or fps <= 0:
             raise ValueError(f"{video.name}: cannot open as a video (frames={n}, fps={fps})")
-        frames = choose_frames(n, fps, make_is_pitch(cap), k=k, step_s=step_s)
+        frames = choose_frames(n, fps, make_is_pitch(cap), k=k, step_s=step_s, rejected=rejected)
     finally:
         cap.release()
     if len(frames) < k:
         raise ValueError(f"{video.name}: only {len(frames)} of {k} frames passed the pitch test")
-    sha = _sha256(video)
-    extract_windows(video, frames, Path(data_dir) / match_id)
+    sha = sha or _sha256(video)
+    out = Path(data_dir) / match_id
+    for i in rejected - set(frames):
+        shutil.rmtree(out / f"{i:07d}", ignore_errors=True)
+    extract_windows(video, frames, out)
     splits = assign_splits([f"{match_id}/{i:07d}" for i in frames])
-    return {"video": video.name, "sha256": sha, "fps": fps,
-            "frames": {f"{i:07d}": splits[f"{match_id}/{i:07d}"] for i in frames}}
+    entry = {"video": video.name, "sha256": sha, "fps": fps,
+             "frames": {f"{i:07d}": splits[f"{match_id}/{i:07d}"] for i in frames}}
+    if rejected:
+        entry["rejected"] = sorted(rejected)
+    return entry
 
 
 def read_manifest(path) -> dict[str, dict]:
