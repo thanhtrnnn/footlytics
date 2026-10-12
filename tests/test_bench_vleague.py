@@ -1254,3 +1254,36 @@ def test_ship_data_skips_temp_files(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_remote", R)
     assert CliRunner().invoke(cli.bench_app, ["ship-data", "vleague", "--remote", "h"]).exit_code == 0
     assert got == [["m1/0000100/+00.jpg"]]
+
+
+# ------------------------------------------------------------------ fix round 2
+
+@pytest.mark.parametrize("calibrator", [{}, {"kp_threshold": 0.3, "mode": "fast", "ransac": 4,
+                                              "refine_lines": False}])
+def test_vleague_passes_the_same_fit_settings_as_gsr_calibration(vl, monkeypatch, calibrator):
+    from tests.test_bench_runner import write_gsr_clip
+
+    seen = {"gsr": [], "vleague": []}
+
+    class Rec(_VCal):
+        def __init__(self, which):
+            self.which = which
+
+        def fit(self, frames, which=None, **kw):
+            seen[self.which].append(kw)
+            return super().fit(frames, which, **kw)
+    write_gsr_clip(vl.paths)
+    monkeypatch.setattr(runner, "_calibrator", lambda p: Rec("gsr"))
+
+    class _Eval:
+        score = jac = precision = recall = 0.0
+        completeness = 0.0
+    monkeypatch.setattr(runner, "run_sncalib", lambda *a, **k: _Eval())
+    row = runner.run_suite("t", "g", vl.paths, "sha", "h", suite_spec={"name": "t", "tasks": [
+        {"id": "gc", "kind": "gsr_calibration", "split": "valid", "clips": ["SNGS-990"],
+         "every": 1, "calibrator": calibrator}]})
+    assert row["tasks"]["gc"]["status"] in ("complete", "partial"), row["tasks"]["gc"]
+    monkeypatch.setattr(runner, "_calibrator", lambda p: Rec("vleague"))
+    vl.run(calibrator=calibrator)
+    assert seen["gsr"] and seen["vleague"]
+    assert seen["vleague"][0] == seen["gsr"][0]
