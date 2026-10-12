@@ -647,3 +647,147 @@ def test_requests_with_a_foreign_host_header_are_403(served):
         assert _raw_post(served, raw, host=host)[0] == 200, host
         req = urllib.request.Request(served.base + "/labels", headers={"Host": host})
         assert urllib.request.urlopen(req).status == 200
+
+
+# ------------------------------------------------------------------ metrics
+
+from footlytics.geometry.homography import apply_homography  # noqa: E402
+from footlytics.geometry.pitch import DEFAULT_PITCH  # noqa: E402
+from footlytics.geometry.sn_camera import ground_homography, make_camera  # noqa: E402
+
+LANDMARKS = DEFAULT_PITCH.landmarks()
+BROADCAST = make_camera(0, 80, 0, 1500, (0, 55, -15), 1920, 1080)
+H_TRUE = np.linalg.inv(ground_homography(BROADCAST))
+H_TRUE = H_TRUE / H_TRUE[2, 2]
+
+
+def visible_points(cam=BROADCAST) -> dict[str, tuple[float, float]]:
+    names = sorted(LANDMARKS)
+    uv = apply_homography(ground_homography(cam), np.array([LANDMARKS[n] for n in names]))
+    return {n: (float(u), float(v)) for n, (u, v) in zip(names, uv)
+            if 0 <= u <= 1920 and 0 <= v <= 1080}
+
+
+def test_landmark_errors_zero_with_the_true_homography():
+    pts = visible_points()
+    assert len(pts) >= 8
+    errs = vleague.landmark_errors(H_TRUE, pts, LANDMARKS)
+    assert set(errs) == set(pts)
+    assert max(errs.values()) < 1e-6
+    assert vleague.frame_error(H_TRUE, pts, LANDMARKS) < 1e-6
+
+
+def test_landmark_errors_equal_the_shift_when_h_is_offset_by_one_metre():
+    pts = visible_points()
+    shift = np.array([[1, 0, 1.0], [0, 1, 0], [0, 0, 1]])
+    errs = vleague.landmark_errors(shift @ H_TRUE, pts, LANDMARKS)
+    assert all(abs(e - 1.0) < 1e-6 for e in errs.values())
+    assert abs(vleague.frame_error(shift @ H_TRUE, pts, LANDMARKS) - 1.0) < 1e-6
+
+
+def test_frame_error_is_the_median_not_the_mean():
+    pts = visible_points()
+    names = sorted(pts)
+    bad = dict(pts)
+    bad[names[0]] = (pts[names[0]][0] + 400, pts[names[0]][1])     # one wild click
+    assert vleague.frame_error(H_TRUE, bad, LANDMARKS) < 1e-6
+    assert vleague.landmark_errors(H_TRUE, bad, LANDMARKS)[names[0]] > 1.0
+
+
+def test_frame_error_is_none_when_uncalibrated_or_unlabelled():
+    assert vleague.frame_error(None, visible_points(), LANDMARKS) is None
+    assert vleague.frame_error(H_TRUE, {}, LANDMARKS) is None
+
+
+def noise_texture(seed=0, size=(1080, 1920)) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    img = rng.integers(0, 256, size, dtype=np.uint8)
+    return cv2.GaussianBlur(img, (0, 0), 2.0)
+
+
+def shift_h(dx: float) -> np.ndarray:
+    return np.array([[1, 0, dx], [0, 1, 0], [0, 0, 1.0]])
+
+
+def pan_set(n=6, px=3):
+    """Frame t is the texture moved right by px*t, so H_t = H_0 o shift(-px*t)."""
+    base = noise_texture()
+    grays = [np.roll(base, px * t, axis=1) for t in range(n)]
+    Hs = [H_TRUE @ shift_h(-px * t) for t in range(n)]
+    grid = np.array([[u, v] for u in range(400, 1500, 150) for v in range(300, 900, 150)], float)
+    return Hs, grays, apply_homography(H_TRUE, grid), ["bridged"] * n
+
+
+def test_image_motion_recovers_a_pure_pan():
+    _, grays, _, _ = pan_set()
+    M = vleague.image_motion(grays[0], grays[1])
+    assert M is not None
+    assert np.allclose(apply_homography(M, np.array([[960.0, 540.0]])), [[963.0, 540.0]], atol=0.2)
+
+
+def test_image_motion_is_none_across_a_cut_or_without_texture():
+    base = noise_texture(0)
+    assert vleague.image_motion(base, noise_texture(1)) is None
+    flat = np.full_like(base, 90)
+    assert vleague.image_motion(flat, flat) is None
+
+
+def test_jitter_of_a_pure_pan_is_below_five_centimetres():
+    Hs, grays, P, sources = pan_set()
+    out = vleague.jitter_m(Hs, grays, P, sources)
+    assert out["pairs_switch"] == 0 and out["pairs_between"] == 5 and out["pairs_skipped"] == 0
+    assert out["switch_m"] is None
+    assert out["between_m"] < 0.05
+
+
+def test_jitter_lands_a_perturbed_h_in_the_switch_bucket_only():
+    Hs, grays, P, sources = pan_set()
+    Hs[3] = shift_h(0.5) @ Hs[3]                       # 0.5 m in x, in pitch metres
+    sources[3] = "keyframe"
+    out = vleague.jitter_m(Hs, grays, P, sources)
+    assert out["pairs_switch"] == 2 and out["pairs_between"] == 3 and out["pairs_skipped"] == 0
+    assert out["switch_m"] > 0.1
+    assert out["between_m"] < 0.05
+
+
+def test_jitter_counts_a_cut_in_pairs_skipped_not_in_the_mean():
+    Hs, grays, P, sources = pan_set()
+    grays[3] = noise_texture(7)                        # the picture cuts to something else
+    out = vleague.jitter_m(Hs, grays, P, sources)
+    assert out["pairs_skipped"] == 2                   # (2,3) and (3,4)
+    assert out["pairs_between"] == 3
+    assert out["between_m"] < 0.05
+
+
+def test_jitter_skips_pairs_with_an_uncalibrated_frame_and_gives_none_for_empty_buckets():
+    Hs, grays, P, sources = pan_set(n=3)
+    Hs[1] = None
+    out = vleague.jitter_m(Hs, grays, P, sources)
+    assert out == {"switch_m": None, "between_m": None, "pairs_switch": 0, "pairs_between": 0,
+                   "pairs_skipped": 2}
+
+
+def labels_from(points, dx=0.0):
+    return {n: (u + dx, v) for n, (u, v) in points.items()}
+
+
+def test_labelling_error_is_zero_for_identical_labels():
+    pts = visible_points()
+    assert vleague.labelling_error_m(pts, dict(pts), LANDMARKS, (1920, 1080)) < 1e-6
+
+
+def test_labelling_error_of_a_two_pixel_shift_is_small_but_positive():
+    pts = visible_points()
+    err = vleague.labelling_error_m(pts, labels_from(pts, 2.0), LANDMARKS, (1920, 1080))
+    assert 0 < err < 0.5
+
+
+def test_labelling_error_needs_four_shared_landmarks():
+    pts = visible_points()
+    names = sorted(pts)
+    a = {n: pts[n] for n in names[:6]}
+    b = {n: pts[n] for n in names[3:9]}                # shares only 3
+    assert len(set(a) & set(b)) == 3
+    assert vleague.labelling_error_m(a, b, LANDMARKS, (1920, 1080)) is None
+    b4 = {n: pts[n] for n in names[2:8]}                # shares 4
+    assert vleague.labelling_error_m(a, b4, LANDMARKS, (1920, 1080)) is not None

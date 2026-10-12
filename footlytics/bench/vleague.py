@@ -258,3 +258,123 @@ def save_label(path, key: str, landmark: str, uv) -> dict:
         doc["frames"].pop(key, None)
     _write_atomic(path, doc)
     return doc
+
+
+# ------------------------------------------------------------------- metrics
+# Every H below maps image pixels (1920x1080) to pitch metres, the calibrator's
+# `H_img_to_pitch`. Errors are in model metres (the 105 x 68 pitch model).
+
+MOTION_SCALE = 0.5
+MOTION_MIN_INLIERS = 30
+MOTION_MIN_INLIER_RATIO = 0.5
+
+
+def landmark_errors(H_img_to_pitch, points: dict, landmarks: dict) -> dict[str, float]:
+    """Distance in metres, per labelled landmark, from its pixel mapped through H to its true spot."""
+    from ..geometry.homography import apply_homography
+
+    unknown = set(points) - set(landmarks)
+    if unknown:
+        raise KeyError(f"unknown landmark name(s): {sorted(unknown)}")
+    names = sorted(points)
+    if not names:
+        return {}
+    got = apply_homography(H_img_to_pitch, np.array([points[n] for n in names], float))
+    true = np.array([landmarks[n] for n in names], float)
+    return {n: float(d) for n, d in zip(names, np.linalg.norm(got - true, axis=1))}
+
+
+def frame_error(H_img_to_pitch, points: dict, landmarks: dict) -> float | None:
+    """Median landmark error of a frame; None when uncalibrated or nothing is labelled."""
+    if H_img_to_pitch is None or not points:
+        return None
+    return float(np.median(list(landmark_errors(H_img_to_pitch, points, landmarks).values())))
+
+
+def image_motion(prev_gray: np.ndarray, gray: np.ndarray) -> np.ndarray | None:
+    """Homography taking pixels of `prev_gray` to pixels of `gray`, by KLT and RANSAC.
+
+    Tracked at half resolution and rescaled to the full-resolution pixel grid. None when fewer
+    than 30 inliers survive or fewer than half of the tracks are inliers (a cut, or too little
+    texture).
+    """
+    import cv2
+
+    s = MOTION_SCALE
+    a = cv2.resize(prev_gray, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+    b = cv2.resize(gray, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+    p0 = cv2.goodFeaturesToTrack(a, maxCorners=600, qualityLevel=0.01, minDistance=8)
+    if p0 is None or len(p0) < MOTION_MIN_INLIERS:
+        return None
+    p1, ok, _ = cv2.calcOpticalFlowPyrLK(a, b, p0, None)
+    if p1 is None:
+        return None
+    ok = ok.ravel() == 1
+    if ok.sum() < MOTION_MIN_INLIERS:
+        return None
+    M, inl = cv2.findHomography(p0[ok], p1[ok], cv2.RANSAC, 2.0)
+    if M is None or inl is None:
+        return None
+    n_in = int(inl.sum())
+    if n_in < MOTION_MIN_INLIERS or n_in < MOTION_MIN_INLIER_RATIO * int(ok.sum()):
+        return None
+    S = np.diag([s, s, 1.0])
+    M = np.linalg.inv(S) @ M @ S
+    return M / M[2, 2]
+
+
+def jitter_m(Hs: list, grays: list, pitch_pts: np.ndarray, sources: list[str]) -> dict:
+    """Frame-to-frame jitter in metres of consecutive calibrations, against the image motion.
+
+    For each pair with both H and a motion estimate M: x_t = inv(H_t) P, x_{t+1} = M x_t,
+    P' = H_{t+1} x_{t+1}; the pair's jitter is mean |P' - P| over the points. A pair is a
+    *switch* when either frame's source is "keyframe" (a fresh solve), otherwise *between*
+    keyframes (both calibrations come from the camera tracker, so near zero by construction).
+    Pairs with a missing H, no motion estimate (a cut, low texture) or a non-finite result are
+    counted in `pairs_skipped`. An empty bucket's mean is None.
+    """
+    from ..geometry.homography import apply_homography
+
+    if not (len(Hs) == len(grays) == len(sources)):
+        raise ValueError("Hs, grays and sources must be the same length")
+    P = np.asarray(pitch_pts, float).reshape(-1, 2)
+    buckets: dict[str, list[float]] = {"switch": [], "between": []}
+    skipped = 0
+    for t in range(len(Hs) - 1):
+        if Hs[t] is None or Hs[t + 1] is None:
+            skipped += 1
+            continue
+        M = image_motion(grays[t], grays[t + 1])
+        if M is None:
+            skipped += 1
+            continue
+        x_t = apply_homography(np.linalg.inv(Hs[t]), P)
+        P2 = apply_homography(Hs[t + 1], apply_homography(M, x_t))
+        d = float(np.mean(np.linalg.norm(P2 - P, axis=1)))
+        if not math.isfinite(d):
+            skipped += 1
+            continue
+        kind = "switch" if "keyframe" in (sources[t], sources[t + 1]) else "between"
+        buckets[kind].append(d)
+    return {"switch_m": float(np.mean(buckets["switch"])) if buckets["switch"] else None,
+            "between_m": float(np.mean(buckets["between"])) if buckets["between"] else None,
+            "pairs_switch": len(buckets["switch"]), "pairs_between": len(buckets["between"]),
+            "pairs_skipped": skipped}
+
+
+def labelling_error_m(a: dict, b: dict, landmarks: dict, image_size) -> float | None:
+    """Disagreement of two labellings of one frame, in model metres.
+
+    Fits a homography to A on the landmarks both labelled (at least 4; None otherwise), maps A's
+    and B's pixels through it, and returns the median distance between the two sets.
+    """
+    from ..geometry.homography import Calibration, apply_homography
+
+    shared = sorted(set(a) & set(b))
+    if len(shared) < 4:
+        return None
+    cal = Calibration.from_correspondences({n: tuple(a[n]) for n in shared}, landmarks,
+                                           tuple(image_size))
+    pa = apply_homography(cal.H, np.array([a[n] for n in shared], float))
+    pb = apply_homography(cal.H, np.array([b[n] for n in shared], float))
+    return float(np.median(np.linalg.norm(pa - pb, axis=1)))
