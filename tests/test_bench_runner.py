@@ -1272,3 +1272,19 @@ def test_gsr_calibration_loads_the_calibrator_once_up_front_and_fails_loudly(
     t = row["tasks"]["gc"]
     assert t["status"] == "failed" and t["error"] == "RuntimeError: weights missing"
     assert len(loads) == 1 and calib == []                       # nothing reached the evaluator
+
+
+def test_gsr_pipeline_stops_when_the_shared_disk_drops_below_the_floor_mid_task(paths, monkeypatch):
+    from footlytics.bench import host
+    write_gsr_clip(paths, "SNGS-990")
+    write_gsr_clip(paths, "SNGS-991")
+    seen = pipeline_fakes(monkeypatch)
+    monkeypatch.setattr(runner, "run_gsr", fake_scores([]))
+    free = iter([10_000_000_000, 10_000_000_000, 1_000_000_000])   # preflight, clip 1, clip 2
+    monkeypatch.setattr(host, "free_disk_bytes", lambda p: next(free))
+    row = runner.run_suite("t", "p-disk", paths, "sha", "h", suite_spec=spec(
+        pipeline_task(["SNGS-990", "SNGS-991"])))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "failed" and "GB free" in t["error"]
+    assert [r[0] for r in seen["run"]] == ["SNGS-990"]
+    assert row["status"] == "failed"

@@ -46,6 +46,9 @@ SUITES_DIR = Path(__file__).parent / "suites"
 DONE = ("complete", "partial", "failed")
 #: Room a run needs for its predictions and evaluator output (the disk is shared).
 RUN_DISK_BYTES = 2_000_000_000
+#: Checked again before every GSR clip: other users fill the shared disk during a long run, and
+#: a run that dies on a full disk writes no row at all. The task fails cleanly instead.
+CLIP_DISK_BYTES = 200_000_000
 EVALUATORS = ("sn-trackeval", "sn-calibration")
 #: The official calibration evaluator does not rescale a predicted camera: it reads the image
 #: size off the camera's principal point and scores the GT at 960x540, so every camera is
@@ -544,6 +547,7 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
             zipfile.ZipFile(ctx.paths.gsr_zip(split)) as z:
         pending: dict = {}
         for seq in _resolve(ctx.paths, split, task.get("clips", "all")):
+            require_disk(ctx.paths.root, CLIP_DISK_BYTES)
             try:
                 truth = gsr_line_frames(_labels(ctx.paths, split, seq))
                 res, seconds, stats = _clip_calibration(ctx, z, split, seq, cfg, every, gate,
@@ -656,6 +660,7 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
             "_roles": Counter(), "_keeper_ok": 0, "_keeper_n": 0}
     with zipfile.ZipFile(ctx.paths.gsr_zip(split)) as z:
         for seq in _resolve(ctx.paths, split, task.get("clips", "all")):
+            require_disk(ctx.paths.root, CLIP_DISK_BYTES)
             try:
                 labels = _labels(ctx.paths, split, seq)
                 names = _frame_names(z, split, seq, ctx.paths)
