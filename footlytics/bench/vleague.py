@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -89,7 +90,11 @@ def extract_windows(video, frames: list[int], out_dir, size=SIZE) -> None:
                 if path.exists():
                     continue
                 img = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
-                cv2.imwrite(str(path), img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+                tmp = path.with_name(f".tmp-{path.name}")
+                if not cv2.imwrite(str(tmp), img, [cv2.IMWRITE_JPEG_QUALITY, 92]):
+                    tmp.unlink(missing_ok=True)
+                    raise RuntimeError(f"cannot write {path}")
+                os.replace(tmp, path)
     finally:
         cap.release()
 
@@ -102,22 +107,46 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def sample_match(video, match_id: str, data_dir, k: int = PER_MATCH, step_s: float = 30.0) -> dict:
-    """Pick the frames, write their jitter windows under data_dir/<match_id>, return the entry."""
+def sample_match(video, match_id: str, data_dir, k: int | None = None, step_s: float = 30.0,
+                 existing: dict | None = None) -> dict:
+    """Pick the frames, write their jitter windows under data_dir/<match_id>, return the entry.
+
+    With `existing` (the match's manifest entry) the frame set is reused, never re-chosen, so a
+    different OpenCV/ffmpeg build cannot reshuffle dev/frozen. A changed video raises.
+    """
     import cv2
 
+    k = PER_MATCH if k is None else k
     video = Path(video)
+    if existing is not None:
+        sha = _sha256(video)
+        if sha != existing["sha256"]:
+            raise ValueError(f"{video.name}: video changed (sha256 {sha[:12]} != manifest "
+                             f"{existing['sha256'][:12]}); refusing to resample")
+        extract_windows(video, [int(i) for i in existing["frames"]], Path(data_dir) / match_id)
+        return existing
     cap = cv2.VideoCapture(str(video))
     try:
         n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = float(cap.get(cv2.CAP_PROP_FPS))
+        if not cap.isOpened() or n <= 2 * WINDOW or fps <= 0:
+            raise ValueError(f"{video.name}: cannot open as a video (frames={n}, fps={fps})")
         frames = choose_frames(n, fps, make_is_pitch(cap), k=k, step_s=step_s)
     finally:
         cap.release()
+    if len(frames) < k:
+        raise ValueError(f"{video.name}: only {len(frames)} of {k} frames passed the pitch test")
+    sha = _sha256(video)
     extract_windows(video, frames, Path(data_dir) / match_id)
     splits = assign_splits([f"{match_id}/{i:07d}" for i in frames])
-    return {"video": video.name, "sha256": _sha256(video), "fps": fps,
+    return {"video": video.name, "sha256": sha, "fps": fps,
             "frames": {f"{i:07d}": splits[f"{match_id}/{i:07d}"] for i in frames}}
+
+
+def read_manifest(path) -> dict[str, dict]:
+    """The matches in an existing manifest file ({} when there is none)."""
+    path = Path(path)
+    return json.loads(path.read_text())["matches"] if path.exists() else {}
 
 
 def write_manifest(entries: dict[str, dict], path) -> None:

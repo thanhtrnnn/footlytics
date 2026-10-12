@@ -194,13 +194,23 @@ def vleague_sample(videos: list[Path] = typer.Argument(..., help="V.League match
     """Pick 15 pitch frames per match, write their +-12 frame windows and the manifest."""
     from . import vleague
 
-    entries = {}
+    missing = [str(v) for v in videos if not v.exists()]
+    if missing:
+        raise typer.BadParameter(f"no such video: {', '.join(missing)}")
+    ids: dict[str, Path] = {}
     for v in videos:
-        if not v.exists():
-            raise typer.BadParameter(f"no such video: {v}")
         mid = vleague.match_id_from_name(v.name)
+        if mid in ids:
+            raise typer.BadParameter(f"match id {mid!r} comes from both {ids[mid]} and {v}")
+        ids[mid] = v
+    entries = vleague.read_manifest(manifest)
+    for mid, v in ids.items():
         typer.echo(f"{mid}: sampling {v.name}")
-        entries[mid] = vleague.sample_match(v, mid, data)
+        try:
+            entries[mid] = vleague.sample_match(v, mid, data, existing=entries.get(mid))
+        except ValueError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(1)
         typer.echo(f"{mid}: {len(entries[mid]['frames'])} frames")
-    vleague.write_manifest(entries, manifest)
+        vleague.write_manifest(entries, manifest)
     typer.echo(f"manifest: {manifest}")
