@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -409,20 +410,34 @@ def jitter_m(Hs: list, grays: list, pitch_pts: np.ndarray, sources: list[str]) -
             "pairs_skipped": skipped}
 
 
-MIN_ANISOTROPY = 0.03        # sigma2 / sigma1 of a point cloud below this is "collinear"
-MIN_EXTENT = 0.005           # sigma1 below this share of the scale is "all one point"
+MIN_TRIPLE_AREA = 0.01       # smallest normalised triangle area of a 4-subset in general position
+MIN_EXTENT = 0.01            # a 4-subset's largest pairwise distance, as a share of the scale
 
 
-def _well_spread(pts: np.ndarray, scale: float) -> bool:
-    """False when the points are duplicated or (near) collinear.
+def _general_position(pts: np.ndarray, scale: float) -> bool:
+    """True when no three of the 4 points are (near) collinear and they are not all close together.
 
-    sigma2 / sigma1 of the centred cloud: 0 on a line, 1 on an isotropic cloud. Checked against
-    real configurations: the four corners of a penalty box give 0.41 on the pitch and 0.07-0.32
-    in broadcast pixels, a halfway-line set gives 0.
+    Each triple's area is divided by the squared extent (largest pairwise distance of the 4
+    points) so it is scale free: 0 for three collinear points, 0.433 for an equilateral
+    triangle spanning the extent. Calibrated on exact broadcast projections: a penalty box gives
+    0.175 on the pitch and 0.046-0.049 in pixels; three halfway-line points plus any other
+    point give exactly 0, and 3 px of click noise across a 340 px line gives about 0.0005.
     """
-    c = pts - pts.mean(axis=0)
-    s = np.linalg.svd(c, compute_uv=False)
-    return bool(s[0] / scale >= MIN_EXTENT and s[1] / s[0] >= MIN_ANISOTROPY)
+    ext = max(float(np.linalg.norm(pts[i] - pts[j])) for i, j in itertools.combinations(range(4), 2))
+    if ext < MIN_EXTENT * scale:
+        return False
+    for i, j, k in itertools.combinations(range(4), 3):
+        d1, d2 = pts[j] - pts[i], pts[k] - pts[i]
+        if abs(d1[0] * d2[1] - d1[1] * d2[0]) / 2 / ext**2 < MIN_TRIPLE_AREA:
+            return False
+    return True
+
+
+def _has_general_position_subset(pix: np.ndarray, pitch: np.ndarray, pix_scale: float,
+                                 pitch_scale: float) -> bool:
+    return any(_general_position(pix[list(c)], pix_scale)
+               and _general_position(pitch[list(c)], pitch_scale)
+               for c in itertools.combinations(range(len(pix)), 4))
 
 
 def labelling_error_m(a: dict, b: dict, landmarks: dict, image_size) -> float | None:
@@ -430,9 +445,9 @@ def labelling_error_m(a: dict, b: dict, landmarks: dict, image_size) -> float | 
 
     Fits a homography to A on the landmarks both labelled (at least 4 with finite pixels), maps
     A's and B's pixels through it, and returns the median distance between the two sets. None
-    when fewer than 4 landmarks are shared, when the shared points are duplicated or
-    (near) collinear in pixels or on the pitch (the fit would be arbitrary), or when no finite
-    distance remains.
+    when fewer than 4 landmarks are shared, when no 4 of them are in general position (no three
+    near-collinear) both in pixels and on the pitch (the fit would be arbitrary, as with the
+    halfway line plus one point), or when no finite distance remains.
     """
     from ..geometry.homography import Calibration, apply_homography
 
@@ -445,8 +460,8 @@ def labelling_error_m(a: dict, b: dict, landmarks: dict, image_size) -> float | 
     pb = np.array([b[n] for n in shared], float)
     pitch = np.array([landmarks[n] for n in shared], float)
     all_pitch = np.array(list(landmarks.values()), float)
-    if not (_well_spread(pa, math.hypot(*image_size))
-            and _well_spread(pitch, float(np.linalg.norm(np.ptp(all_pitch, axis=0))))):
+    if not _has_general_position_subset(pa, pitch, math.hypot(*image_size),
+                                        float(np.linalg.norm(np.ptp(all_pitch, axis=0)))):
         return None
     try:
         cal = Calibration.from_correspondences({n: tuple(a[n]) for n in shared}, landmarks,

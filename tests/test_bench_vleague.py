@@ -785,14 +785,17 @@ def test_labelling_error_of_a_two_pixel_shift_is_near_the_measured_value():
 
 def test_labelling_error_needs_four_shared_landmarks():
     pts = visible_points()
-    names = sorted(pts)
-    a = {n: pts[n] for n in names[:6]}
-    b = {n: pts[n] for n in names[3:9]}                # shares only 3
-    assert len(set(a) & set(b)) == 3
-    assert vleague.labelling_error_m(a, b, LANDMARKS, (1920, 1080)) is None
-    b4 = {n: pts[n] for n in names[2:8]}                # shares 4, identical pixels
-    assert len(set(a) & set(b4)) == 4
-    assert vleague.labelling_error_m(a, b4, LANDMARKS, (1920, 1080)) == pytest.approx(0, abs=1e-6)
+    spread = ["corner_LT", "corner_RT", "centre_spot", "pen_arc_LT"]    # in general position
+    a = {n: pts[n] for n in [*spread, "halfway_T", "centre_circle_T"]}
+    three = {n: pts[n] for n in [*spread[:3], "pen_area_LT_front", "pen_area_RT_front"]}
+    assert len(set(a) & set(three)) == 3
+    assert vleague.labelling_error_m(a, three, LANDMARKS, (1920, 1080)) is None
+    four = {n: pts[n] for n in spread}                      # shares exactly the 4 spread points
+    assert len(set(a) & set(four)) == 4
+    assert vleague.labelling_error_m(a, four, LANDMARKS, (1920, 1080)) == pytest.approx(0, abs=1e-6)
+    shifted = {n: (u + 2.0, v) for n, (u, v) in four.items()}
+    err = vleague.labelling_error_m(a, shifted, LANDMARKS, (1920, 1080))
+    assert err is not None and 0 < err < 1.0
 
 
 WIDE = make_camera(0, 70, 0, 900, (0, 70, -25), 1920, 1080)
@@ -881,3 +884,40 @@ def test_jitter_does_not_cap_a_finite_but_badly_solved_keyframe():
     out = vleague.jitter_m(Hs, grays, P, sources)
     assert out["pairs_switch"] == 2 and out["pairs_skipped"] == 0
     assert out["switch_m"] > 1.0 and out["switch_m"] == pytest.approx(5.0, abs=0.1)
+
+
+def test_labelling_error_is_none_for_three_or_four_halfway_points_plus_one_off_line():
+    pts = visible_points(WIDE)
+    for line in (HALFWAY[:3], HALFWAY[:4], HALFWAY):
+        for off in ("corner_LT", "pen_area_LT_front"):
+            a = {n: pts[n] for n in [*line, off]}
+            assert len(a) == len(line) + 1
+            assert vleague.labelling_error_m(a, labels_from(a, 2.0), LANDMARKS, (1920, 1080)) is None
+
+
+def test_labelling_error_is_finite_once_the_same_set_gains_spread_points():
+    pts = visible_points(WIDE)
+    names = [*HALFWAY[:4], "corner_LT", "corner_RT", "pen_area_LT_front"]
+    a = {n: pts[n] for n in names}
+    err = vleague.labelling_error_m(a, labels_from(a, 2.0), LANDMARKS, (1920, 1080))
+    assert err is not None and np.isfinite(err) and 0 < err < 0.5
+
+
+def test_labelling_error_of_a_penalty_box_is_still_about_its_measured_value():
+    pts = visible_points(WIDE)
+    a = {n: pts[n] for n in PEN_BOX}
+    err = vleague.labelling_error_m(a, labels_from(a, 2.0), LANDMARKS, (1920, 1080))
+    assert err == pytest.approx(0.165, abs=0.02)
+
+
+def test_labelling_error_is_none_for_nearly_collinear_clicks_on_a_line():
+    pts = visible_points(WIDE)
+    names = [*HALFWAY[:3], "corner_LT"]
+    a = {n: (u + (3.0 if i == 1 else 0.0), v) for i, (n, (u, v)) in
+         enumerate((n, pts[n]) for n in names)}            # 3 px click noise across the line
+    assert vleague.labelling_error_m(a, dict(a), LANDMARKS, (1920, 1080)) is None
+
+
+def test_labelling_error_is_none_when_pixels_are_collinear_though_the_pitch_points_are_not():
+    a = {n: (400.0 + 300 * i, 500.0 + 0.5 * i) for i, n in enumerate(PEN_BOX)}   # 1.5 px sag
+    assert vleague.labelling_error_m(a, dict(a), LANDMARKS, (1920, 1080)) is None
