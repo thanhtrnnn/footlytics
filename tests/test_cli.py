@@ -16,7 +16,7 @@ def test_help_lists_commands():
 
     r = CliRunner().invoke(app, ["--help"])
     assert r.exit_code == 0
-    for cmd in ("run", "calib-assist", "drift-check"):
+    for cmd in ("run", "calib-assist", "drift-check", "bench"):
         assert cmd in r.output
 
 

@@ -1,0 +1,27 @@
+# Engineering compass: run after any change. Plan 3 adds the GSR pipeline tasks.
+name: quick
+tasks:
+  - id: sncalib-valid-60
+    kind: sncalib
+    split: valid
+    # one frame per game (55) plus 5, seed 2026: see the plan's "Pins"
+    frames: ["00007", "00091", "00155", "00250", "00260", "00322", "00357", "00417", "00486",
+             "00532", "00598", "00621", "00680", "00753", "00783", "00841", "00882", "00966",
+             "00972", "01027", "01111", "01247", "01261", "01366", "01384", "01491", "01533",
+             "01581", "01609", "01622", "01655", "01716", "01728", "01797", "01808", "01831",
+             "01885", "01924", "01987", "01999", "02075", "02080", "02130", "02176", "02205",
+             "02270", "02333", "02378", "02415", "02531", "02578", "02650", "02706", "02766",
+             "02799", "02887", "02941", "03046", "03062", "03194"]
+  # the pipeline before the calibration task: its calibration time is then measured with no
+  # evaluator subprocess beside it, and the calibration task reads the shared cache
+  - id: gsr-pipeline-valid-6
+    kind: gsr_pipeline
+    split: valid
+    clips: [SNGS-025, SNGS-028, SNGS-050, SNGS-056, SNGS-081, SNGS-086]
+    every: 10
+  - id: gsr-calibration-valid-6
+    kind: gsr_calibration
+    split: valid
+    clips: [SNGS-025, SNGS-028, SNGS-050, SNGS-056, SNGS-081, SNGS-086]
+    every: 10     # tuned on SNGS-021/033: every 10 scored 72.5, every 25 scored 65.1
+    gate_px: 25

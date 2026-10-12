@@ -16,14 +16,14 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Iterable, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 
 from ..analytics.ball import interpolate_ball
 from ..analytics.kinematics import add_kinematics
-from ..geometry.homography import Calibration
+from ..geometry.homography import Calibration, apply_homography
 from ..geometry.pitch import Pitch
 from ..perception.detect import Detector, DetectorConfig
 from ..perception.teams import split_officials, TeamClassifier, kit_descriptor
@@ -32,6 +32,27 @@ from ..perception.identity import (apply_to_state, assign_teams_with_roster,
 from ..perception.track import PitchTracker, TrackerConfig
 from ..geometry.camera_motion import AnchoredCamera, MovingCalibration
 from ..state.schema import MatchMeta, MatchState, Role, Team, TeamInfo
+
+
+#: (source frame index, BGR frame, detections [N, >=6]) -> feet in pitch metres [N, 2], or
+#: None when this frame cannot be related to the pitch: its detections are dropped and it
+#: counts as uncalibrated. Called once per processed frame, also when N == 0, so a camera
+#: tracker behind it sees every frame.
+FeetMapper = Callable[[int, np.ndarray, np.ndarray], Optional[np.ndarray]]
+
+
+def homography_mapper(Hs: Sequence[Optional[np.ndarray]]) -> FeetMapper:
+    """Per-frame image -> pitch homographies (e.g. from `ClipCalibrator`)."""
+    def mapper(idx: int, frame_bgr, dets: np.ndarray) -> Optional[np.ndarray]:
+        H = Hs[idx] if 0 <= idx < len(Hs) else None
+        if H is None:
+            return None
+        if not len(dets):
+            return np.empty((0, 2))
+        b = np.asarray(dets[:, :4], float)
+        feet = np.column_stack([b[:, 0] + b[:, 2] / 2, b[:, 1] + b[:, 3]])
+        return apply_homography(H, feet)
+    return mapper
 
 
 @dataclass
@@ -74,6 +95,9 @@ class PipelineConfig:
     #: two sightings either side. 0 disables. The tracker already coasts the ball
     #: for a few frames, so this only reaches the gaps where the track died.
     ball_max_gap: int = 5
+    #: Keep up to 600 frames for the team montage (`report['_montage']`). Off for batch
+    #: runs: at 1080p that is 3.7 GB of RAM.
+    montage: bool = True
     verbose: bool = True
 
 
@@ -187,39 +211,26 @@ def _log(on: bool, *a):
         print(*a, flush=True)
 
 
-def run(
-    video_path: str | Path,
-    calibration: Calibration,
+def run_frames(
+    frames: Iterable[np.ndarray],
+    fps: float,
+    mapper: FeetMapper,
     detector: Detector,
     meta: MatchMeta,
     cfg: PipelineConfig | None = None,
     tracker_cfg: TrackerConfig | None = None,
-    camera: AnchoredCamera | None = None,
+    source: str = "frames",
 ) -> tuple[MatchState, dict]:
-    """Process a clip into a MatchState. Returns (state, report).
+    """Process BGR frames into a MatchState. Returns (state, report).
 
-    `camera`: pass an AnchoredCamera (anchored on the frame the calibration was clicked on)
-    when the camera pans, zooms or cuts. Each frame is related to the anchor before mapping;
-    frames that cannot be related (a bench close-up) are skipped and counted in the report.
-    With `camera=None` the behaviour is the fixed-camera path, unchanged.
+    `mapper(src_idx, frame_bgr, dets)` places each frame's detections on the pitch (see
+    `FeetMapper`): a fixed calibration, a camera tracker, or per-frame homographies
+    (`homography_mapper`). `fps` is the source frame rate; `cfg.stride` thins it.
     """
-    import cv2
-
     cfg = cfg or PipelineConfig()
     pitch = Pitch(meta.pitch_length, meta.pitch_width)
-
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise FileNotFoundError(f"cannot open video: {video_path}")
-    n_total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    src_fps = cap.get(cv2.CAP_PROP_FPS) or meta.fps
-    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)); H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    if (W, H) != tuple(calibration.image_size):
-        raise ValueError(
-            f"calibration was made for {calibration.image_size} but this video is "
-            f"{(W, H)}. A homography is resolution-specific -- recalibrate, or "
-            f"scale the clicked points."
-        )
+    src_fps = fps
+    n_total = len(frames) if hasattr(frames, "__len__") else None
 
     # The effective frame rate after striding is what the tracker and every
     # speed downstream must use. Getting this wrong silently scales every
@@ -227,12 +238,9 @@ def run(
     eff_fps = src_fps / cfg.stride
     meta.fps = eff_fps
     tracker = PitchTracker(tracker_cfg or TrackerConfig(fps=eff_fps))
-    moving = MovingCalibration(calibration) if camera is not None else None
     n_uncalibrated = 0
 
-    _log(cfg.verbose, f"[pipeline] {video_path}")
-    _log(cfg.verbose, f"[pipeline] {W}x{H}, {n_total} frames @ {src_fps:.2f} fps, "
-                      f"stride {cfg.stride} -> effective {eff_fps:.2f} fps")
+    _log(cfg.verbose, f"[pipeline] {source}")
 
     rows: list[dict] = []
     desc_rows: list[np.ndarray] = []
@@ -248,10 +256,13 @@ def run(
                             cfg.ball_reacquire_s, still_s=cfg.ball_still_s)
     t0 = time.time()
 
-    while True:
-        ok, frame_bgr = cap.read()
-        if not ok:
-            break
+    for frame_bgr in frames:
+        if src_idx == 0:
+            h, w = frame_bgr.shape[:2]
+            _log(cfg.verbose, f"[pipeline] {w}x{h}, "
+                              + (f"{n_total} frames @ " if n_total is not None else "")
+                              + f"{src_fps:.2f} fps, stride {cfg.stride} -> "
+                                f"effective {eff_fps:.2f} fps")
         if src_idx % cfg.stride != 0:
             src_idx += 1
             continue
@@ -262,21 +273,14 @@ def run(
         dets = detector.detect(frame)
         n_det_total += len(dets)
 
-        H_a_t = None
-        if camera is not None:
-            mask = np.full(frame_bgr.shape[:2], 255, np.uint8)
-            for b in dets[:, :4]:
-                x, y, w, h = (int(v) for v in b)
-                cv2.rectangle(mask, (x - 6, y - 6), (x + w + 6, y + h + 6), 0, -1)
-            H_a_t = camera.update(frame_bgr, mask=mask)
-            if H_a_t is None:
-                n_uncalibrated += 1
-                dets = dets[:0]                              # skip the frame, tracks coast
+        xy_all = mapper(src_idx, frame_bgr, dets)
+        if xy_all is None:
+            n_uncalibrated += 1
+            dets = dets[:0]                                  # skip the frame, tracks coast
 
         if len(dets):
             roles = [detector.role_of(c) for c in dets[:, 5]]
-            xy = (moving.feet_to_pitch(dets[:, :4], H_a_t) if moving is not None
-                  else calibration.feet_to_pitch(dets[:, :4]))
+            xy = xy_all                                      # same length and order as dets
 
             keep = on_pitch(xy, roles, pitch, cfg.pitch_margin_m, cfg.ball_margin_m)
             n_off_pitch += int((~keep).sum())
@@ -323,7 +327,7 @@ def run(
                         desc_rows.append(embeddings[di])
                         desc_track.append(tid)
                         desc_role.append(roles[di])
-                        if len(montage_frames) < 600:
+                        if cfg.montage and len(montage_frames) < 600:
                             montage_frames.append(frame)
                             montage_boxes.append(dets[di, :4])
 
@@ -334,7 +338,6 @@ def run(
         src_idx += 1
         out_idx += 1
 
-    cap.release()
     elapsed = time.time() - t0
 
     if not rows:
@@ -352,12 +355,10 @@ def run(
         "ball_frames_unreachable": ball_sel.n_unreachable,
         "ball_still_released": ball_sel.n_released,
         "tracks_created": tracker._next_id - 1,
+        "frames_uncalibrated": n_uncalibrated,
+        "frames_calibrated": out_idx - n_uncalibrated,
+        "calib_success_rate": (out_idx - n_uncalibrated) / max(out_idx, 1),
     }
-    if camera is not None:
-        report["frames_uncalibrated"] = n_uncalibrated
-        report["frames_calibrated"] = out_idx - n_uncalibrated
-        report["calib_success_rate"] = (out_idx - n_uncalibrated) / max(out_idx, 1)
-        report["reanchors"] = camera.n_reanchors
 
     # ---- role, once per track ---------------------------------------------
     role_vote = (df.groupby(["track_id", "role"], observed=True).size()
@@ -382,8 +383,9 @@ def run(
         scores = clf.track_scores(T, D)
         report["team_diagnosis"] = diag
         report["_team_clf"] = clf
-        report["_montage"] = (montage_frames, montage_boxes,
-                              T[:len(montage_frames)], D[:len(montage_frames)])
+        if cfg.montage:
+            report["_montage"] = (montage_frames, montage_boxes,
+                                  T[:len(montage_frames)], D[:len(montage_frames)])
         _log(cfg.verbose, f"[pipeline] teams: {diag['summary']}")
 
     track_emb: dict[int, np.ndarray] = {}
@@ -464,4 +466,72 @@ def run(
                       f"{report['median_players_per_frame']:.1f} (expect ~22 full-pitch)")
     for p in report["validation"]:
         _log(cfg.verbose, f"[pipeline] WARNING: {p}")
+    return state, report
+
+
+def run(
+    video_path: str | Path,
+    calibration: Calibration,
+    detector: Detector,
+    meta: MatchMeta,
+    cfg: PipelineConfig | None = None,
+    tracker_cfg: TrackerConfig | None = None,
+    camera: AnchoredCamera | None = None,
+) -> tuple[MatchState, dict]:
+    """Process a clip into a MatchState. Returns (state, report).
+
+    `camera`: pass an AnchoredCamera (anchored on the frame the calibration was clicked on)
+    when the camera pans, zooms or cuts. Each frame is related to the anchor before mapping;
+    frames that cannot be related (a bench close-up) are skipped and counted in the report.
+    With `camera=None` the behaviour is the fixed-camera path, unchanged.
+    """
+    import cv2
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise FileNotFoundError(f"cannot open video: {video_path}")
+    src_fps = cap.get(cv2.CAP_PROP_FPS) or meta.fps
+    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)); H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if (W, H) != tuple(calibration.image_size):
+        cap.release()
+        raise ValueError(
+            f"calibration was made for {calibration.image_size} but this video is "
+            f"{(W, H)}. A homography is resolution-specific -- recalibrate, or "
+            f"scale the clicked points."
+        )
+
+    if camera is not None:
+        moving = MovingCalibration(calibration)
+
+        def mapper(idx: int, frame_bgr: np.ndarray, dets: np.ndarray) -> Optional[np.ndarray]:
+            mask = np.full(frame_bgr.shape[:2], 255, np.uint8)
+            for b in dets[:, :4]:
+                x, y, w, h = (int(v) for v in b)
+                cv2.rectangle(mask, (x - 6, y - 6), (x + w + 6, y + h + 6), 0, -1)
+            H_a_t = camera.update(frame_bgr, mask=mask)
+            if H_a_t is None:
+                return None
+            return (moving.feet_to_pitch(dets[:, :4], H_a_t) if len(dets) else np.empty((0, 2)))
+    else:
+        def mapper(idx: int, frame_bgr: np.ndarray, dets: np.ndarray) -> Optional[np.ndarray]:
+            return calibration.feet_to_pitch(dets[:, :4]) if len(dets) else np.empty((0, 2))
+
+    def read_frames():
+        try:
+            while True:
+                ok, frame_bgr = cap.read()
+                if not ok:
+                    break
+                yield frame_bgr
+        finally:
+            cap.release()
+
+    frames = read_frames()
+    try:
+        state, report = run_frames(frames, src_fps, mapper, detector, meta, cfg, tracker_cfg,
+                                   source=str(video_path))
+    finally:
+        frames.close()                                       # release the capture on early exit too
+    if camera is not None:
+        report["reanchors"] = camera.n_reanchors
     return state, report

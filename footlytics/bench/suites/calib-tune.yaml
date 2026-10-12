@@ -1,0 +1,28 @@
+# Settings search on valid frames and clips the quick suite does not use (never test).
+name: calib-tune
+tasks:
+  - id: tune-pnl-thresholds
+    kind: sncalib
+    split: valid
+    frames: {every: 16, offset: 12, exclude: ["00972"]}
+    calibrator: {kp_threshold: 0.3434, line_threshold: 0.7867, refine_lines: false}
+  - id: tune-pnl-thresholds-refine
+    kind: sncalib
+    split: valid
+    frames: {every: 16, offset: 12, exclude: ["00972"]}
+    calibrator: {kp_threshold: 0.3434, line_threshold: 0.7867, refine_lines: true}
+  - id: tune-low-thresholds-refine
+    kind: sncalib
+    split: valid
+    frames: {every: 16, offset: 12, exclude: ["00972"]}
+    calibrator: {kp_threshold: 0.1, line_threshold: 0.1, refine_lines: true}
+  - id: tune-clip-every-10
+    kind: gsr_calibration
+    split: valid
+    clips: [SNGS-021, SNGS-033]
+    every: 10
+  - id: tune-clip-every-25
+    kind: gsr_calibration
+    split: valid
+    clips: [SNGS-021, SNGS-033]
+    every: 25
