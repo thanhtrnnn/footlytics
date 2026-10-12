@@ -270,7 +270,10 @@ MOTION_MIN_INLIER_RATIO = 0.5
 
 
 def landmark_errors(H_img_to_pitch, points: dict, landmarks: dict) -> dict[str, float]:
-    """Distance in metres, per labelled landmark, from its pixel mapped through H to its true spot."""
+    """Distance in metres, per labelled landmark, from its pixel mapped through H to its true spot.
+
+    Landmarks whose error is not finite (a NaN pixel, a point on the horizon) are left out.
+    """
     from ..geometry.homography import apply_homography
 
     unknown = set(points) - set(landmarks)
@@ -281,14 +284,17 @@ def landmark_errors(H_img_to_pitch, points: dict, landmarks: dict) -> dict[str, 
         return {}
     got = apply_homography(H_img_to_pitch, np.array([points[n] for n in names], float))
     true = np.array([landmarks[n] for n in names], float)
-    return {n: float(d) for n, d in zip(names, np.linalg.norm(got - true, axis=1))}
+    with np.errstate(invalid="ignore", over="ignore"):
+        d = np.linalg.norm(got - true, axis=1)
+    return {n: float(e) for n, e in zip(names, d) if np.isfinite(e)}
 
 
 def frame_error(H_img_to_pitch, points: dict, landmarks: dict) -> float | None:
-    """Median landmark error of a frame; None when uncalibrated or nothing is labelled."""
+    """Median landmark error of a frame; None when uncalibrated or no finite error remains."""
     if H_img_to_pitch is None or not points:
         return None
-    return float(np.median(list(landmark_errors(H_img_to_pitch, points, landmarks).values())))
+    errs = landmark_errors(H_img_to_pitch, points, landmarks)
+    return float(np.median(list(errs.values()))) if errs else None
 
 
 def image_motion(prev_gray: np.ndarray, gray: np.ndarray) -> np.ndarray | None:
@@ -323,6 +329,36 @@ def image_motion(prev_gray: np.ndarray, gray: np.ndarray) -> np.ndarray | None:
     return M / M[2, 2]
 
 
+def _oriented(H, size) -> np.ndarray | None:
+    """H with its projective sign fixed so that the image centre has a positive w; None when H is
+    non-finite, singular, or has the centre on its horizon. (H and -H are the same mapping, but
+    only one sign makes "w > 0" mean "in front of the camera".)"""
+    H = np.asarray(H, float)
+    if H.shape != (3, 3) or not np.isfinite(H).all():
+        return None
+    try:
+        np.linalg.inv(H)
+    except np.linalg.LinAlgError:
+        return None
+    w = float(H[2] @ np.array([size[0] / 2, size[1] / 2, 1.0]))
+    if not math.isfinite(w) or abs(w) < 1e-12:
+        return None
+    return H if w > 0 else -H
+
+
+W_MIN_SHARE = 1e-3
+
+
+def _project(H, pts) -> np.ndarray | None:
+    """Points through H, or None when any lands behind the camera (w <= 0) or within 0.1 % of the
+    median depth of the horizon (w near 0), or the result is not finite."""
+    hom = np.hstack([pts, np.ones((len(pts), 1))]) @ H.T
+    w = hom[:, 2]
+    if not np.isfinite(hom).all() or w.min() <= 0 or w.min() < W_MIN_SHARE * np.median(w):
+        return None
+    return hom[:, :2] / w[:, None]
+
+
 def jitter_m(Hs: list, grays: list, pitch_pts: np.ndarray, sources: list[str]) -> dict:
     """Frame-to-frame jitter in metres of consecutive calibrations, against the image motion.
 
@@ -330,11 +366,13 @@ def jitter_m(Hs: list, grays: list, pitch_pts: np.ndarray, sources: list[str]) -
     P' = H_{t+1} x_{t+1}; the pair's jitter is mean |P' - P| over the points. A pair is a
     *switch* when either frame's source is "keyframe" (a fresh solve), otherwise *between*
     keyframes (both calibrations come from the camera tracker, so near zero by construction).
-    Pairs with a missing H, no motion estimate (a cut, low texture) or a non-finite result are
-    counted in `pairs_skipped`. An empty bucket's mean is None.
-    """
-    from ..geometry.homography import apply_homography
 
+    A pair is skipped (counted in `pairs_skipped`) only when it is numerically degenerate: an H
+    is missing, singular or non-finite, there is no motion estimate (a cut, low texture), a pitch
+    point falls behind the camera or on the horizon, or a value is not finite. Large distances are
+    never capped: a badly solved but finite keyframe must show up as large jitter. An empty
+    bucket's mean is None.
+    """
     if not (len(Hs) == len(grays) == len(sources)):
         raise ValueError("Hs, grays and sources must be the same length")
     P = np.asarray(pitch_pts, float).reshape(-1, 2)
@@ -344,12 +382,21 @@ def jitter_m(Hs: list, grays: list, pitch_pts: np.ndarray, sources: list[str]) -
         if Hs[t] is None or Hs[t + 1] is None:
             skipped += 1
             continue
+        h, w = grays[t].shape[:2]
+        H0, H1 = _oriented(Hs[t], (w, h)), _oriented(Hs[t + 1], (w, h))
+        if H0 is None or H1 is None:
+            skipped += 1
+            continue
         M = image_motion(grays[t], grays[t + 1])
         if M is None:
             skipped += 1
             continue
-        x_t = apply_homography(np.linalg.inv(Hs[t]), P)
-        P2 = apply_homography(Hs[t + 1], apply_homography(M, x_t))
+        x_t = _project(np.linalg.inv(H0), P)
+        x_next = None if x_t is None else _project(M, x_t)
+        P2 = None if x_next is None else _project(H1, x_next)
+        if P2 is None:
+            skipped += 1
+            continue
         d = float(np.mean(np.linalg.norm(P2 - P, axis=1)))
         if not math.isfinite(d):
             skipped += 1
@@ -362,19 +409,51 @@ def jitter_m(Hs: list, grays: list, pitch_pts: np.ndarray, sources: list[str]) -
             "pairs_skipped": skipped}
 
 
-def labelling_error_m(a: dict, b: dict, landmarks: dict, image_size) -> float | None:
-    """Disagreement of two labellings of one frame, in model metres.
+MIN_ANISOTROPY = 0.03        # sigma2 / sigma1 of a point cloud below this is "collinear"
+MIN_EXTENT = 0.005           # sigma1 below this share of the scale is "all one point"
 
-    Fits a homography to A on the landmarks both labelled (at least 4; None otherwise), maps A's
-    and B's pixels through it, and returns the median distance between the two sets.
+
+def _well_spread(pts: np.ndarray, scale: float) -> bool:
+    """False when the points are duplicated or (near) collinear.
+
+    sigma2 / sigma1 of the centred cloud: 0 on a line, 1 on an isotropic cloud. Checked against
+    real configurations: the four corners of a penalty box give 0.41 on the pitch and 0.07-0.32
+    in broadcast pixels, a halfway-line set gives 0.
+    """
+    c = pts - pts.mean(axis=0)
+    s = np.linalg.svd(c, compute_uv=False)
+    return bool(s[0] / scale >= MIN_EXTENT and s[1] / s[0] >= MIN_ANISOTROPY)
+
+
+def labelling_error_m(a: dict, b: dict, landmarks: dict, image_size) -> float | None:
+    """Disagreement of two labellings of one frame, in model metres (not symmetric in a and b).
+
+    Fits a homography to A on the landmarks both labelled (at least 4 with finite pixels), maps
+    A's and B's pixels through it, and returns the median distance between the two sets. None
+    when fewer than 4 landmarks are shared, when the shared points are duplicated or
+    (near) collinear in pixels or on the pitch (the fit would be arbitrary), or when no finite
+    distance remains.
     """
     from ..geometry.homography import Calibration, apply_homography
 
-    shared = sorted(set(a) & set(b))
+    shared = [n for n in sorted(set(a) & set(b))
+              if np.isfinite(np.asarray(a[n], float)).all()
+              and np.isfinite(np.asarray(b[n], float)).all()]
     if len(shared) < 4:
         return None
-    cal = Calibration.from_correspondences({n: tuple(a[n]) for n in shared}, landmarks,
-                                           tuple(image_size))
-    pa = apply_homography(cal.H, np.array([a[n] for n in shared], float))
-    pb = apply_homography(cal.H, np.array([b[n] for n in shared], float))
-    return float(np.median(np.linalg.norm(pa - pb, axis=1)))
+    pa = np.array([a[n] for n in shared], float)
+    pb = np.array([b[n] for n in shared], float)
+    pitch = np.array([landmarks[n] for n in shared], float)
+    all_pitch = np.array(list(landmarks.values()), float)
+    if not (_well_spread(pa, math.hypot(*image_size))
+            and _well_spread(pitch, float(np.linalg.norm(np.ptp(all_pitch, axis=0))))):
+        return None
+    try:
+        cal = Calibration.from_correspondences({n: tuple(a[n]) for n in shared}, landmarks,
+                                               tuple(image_size))
+    except np.linalg.LinAlgError:
+        return None
+    with np.errstate(invalid="ignore", over="ignore"):
+        d = np.linalg.norm(apply_homography(cal.H, pa) - apply_homography(cal.H, pb), axis=1)
+    d = d[np.isfinite(d)]
+    return float(np.median(d)) if len(d) else None

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from footlytics.bench import vleague
 
@@ -776,10 +777,10 @@ def test_labelling_error_is_zero_for_identical_labels():
     assert vleague.labelling_error_m(pts, dict(pts), LANDMARKS, (1920, 1080)) < 1e-6
 
 
-def test_labelling_error_of_a_two_pixel_shift_is_small_but_positive():
+def test_labelling_error_of_a_two_pixel_shift_is_near_the_measured_value():
     pts = visible_points()
     err = vleague.labelling_error_m(pts, labels_from(pts, 2.0), LANDMARKS, (1920, 1080))
-    assert 0 < err < 0.5
+    assert 0.05 < err < 0.2                            # measured 0.095 m
 
 
 def test_labelling_error_needs_four_shared_landmarks():
@@ -789,5 +790,94 @@ def test_labelling_error_needs_four_shared_landmarks():
     b = {n: pts[n] for n in names[3:9]}                # shares only 3
     assert len(set(a) & set(b)) == 3
     assert vleague.labelling_error_m(a, b, LANDMARKS, (1920, 1080)) is None
-    b4 = {n: pts[n] for n in names[2:8]}                # shares 4
-    assert vleague.labelling_error_m(a, b4, LANDMARKS, (1920, 1080)) is not None
+    b4 = {n: pts[n] for n in names[2:8]}                # shares 4, identical pixels
+    assert len(set(a) & set(b4)) == 4
+    assert vleague.labelling_error_m(a, b4, LANDMARKS, (1920, 1080)) == pytest.approx(0, abs=1e-6)
+
+
+WIDE = make_camera(0, 70, 0, 900, (0, 70, -25), 1920, 1080)
+HALFWAY = ["halfway_T", "halfway_B", "centre_spot", "centre_circle_T", "centre_circle_B"]
+PEN_BOX = ["pen_area_LT_goalline", "pen_area_LB_goalline", "pen_area_LT_front", "pen_area_LB_front"]
+
+
+def test_labelling_error_is_none_for_collinear_halfway_line_landmarks():
+    pts = visible_points(WIDE)
+    a = {n: pts[n] for n in HALFWAY}
+    assert len(a) == 5                                 # all five exactly projected, all in frame
+    assert vleague.labelling_error_m(a, labels_from(a, 2.0), LANDMARKS, (1920, 1080)) is None
+    four = {n: a[n] for n in HALFWAY[:4]}
+    assert vleague.labelling_error_m(four, dict(four), LANDMARKS, (1920, 1080)) is None
+
+
+def test_labelling_error_accepts_the_four_corners_of_a_penalty_box():
+    pts = visible_points(WIDE)
+    a = {n: pts[n] for n in PEN_BOX}
+    assert len(a) == 4
+    err = vleague.labelling_error_m(a, labels_from(a, 2.0), LANDMARKS, (1920, 1080))
+    assert err is not None and 0 < err < 1.0
+    assert vleague.labelling_error_m(a, dict(a), LANDMARKS, (1920, 1080)) == pytest.approx(0, abs=1e-6)
+
+
+def test_labelling_error_is_none_for_duplicated_points():
+    a = {n: (500.0, 400.0) for n in PEN_BOX}
+    assert vleague.labelling_error_m(a, dict(a), LANDMARKS, (1920, 1080)) is None
+
+
+def test_labelling_error_drops_a_nan_pixel_and_is_none_when_too_few_remain():
+    pts = visible_points()
+    bad = dict(pts)
+    bad[sorted(pts)[0]] = (float("nan"), 100.0)
+    ten = vleague.labelling_error_m(pts, bad, LANDMARKS, (1920, 1080))
+    assert ten == pytest.approx(0, abs=1e-6)           # the NaN point is dropped, rest agree
+    four = {n: pts[n] for n in sorted(pts)[:4]}
+    four_bad = dict(four)
+    four_bad[sorted(four)[0]] = (float("nan"), float("nan"))
+    assert vleague.labelling_error_m(four, four_bad, LANDMARKS, (1920, 1080)) is None
+
+
+def test_landmark_errors_never_return_non_finite_values():
+    pts = visible_points()
+    name = sorted(pts)[0]
+    bad = dict(pts)
+    bad[name] = (float("nan"), 5.0)
+    errs = vleague.landmark_errors(H_TRUE, bad, LANDMARKS)
+    assert name not in errs and len(errs) == len(pts) - 1
+    assert all(np.isfinite(e) for e in errs.values())
+    assert vleague.frame_error(H_TRUE, {name: (float("nan"), 5.0)}, LANDMARKS) is None
+    horizon = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 0.0]])
+    assert vleague.landmark_errors(horizon, pts, LANDMARKS) == {}
+    assert vleague.frame_error(horizon, pts, LANDMARKS) is None
+
+
+def test_jitter_skips_a_singular_h_without_raising():
+    Hs, grays, P, sources = pan_set(n=4)
+    Hs[2] = np.array([[1.0, 2, 3], [2, 4, 6], [1, 2, 3]])      # rank 1
+    out = vleague.jitter_m(Hs, grays, P, sources)
+    assert out["pairs_skipped"] == 2 and out["pairs_between"] == 1
+    Hs[2] = np.zeros((3, 3))
+    assert vleague.jitter_m(Hs, grays, P, sources)["pairs_skipped"] == 2
+    Hs[2] = np.full((3, 3), np.nan)
+    assert vleague.jitter_m(Hs, grays, P, sources)["pairs_skipped"] == 2
+
+
+def test_jitter_skips_pitch_points_behind_the_camera_or_on_the_horizon():
+    Hs, grays, P, sources = pan_set(n=2)
+    assert vleague.jitter_m(Hs, grays, P, sources)["pairs_between"] == 1
+    flipped = [-h for h in Hs]                           # same mapping, opposite projective sign
+    assert vleague.jitter_m(flipped, grays, P, sources)["pairs_between"] == 1
+    behind = np.vstack([P, [[0.0, 100.0]]])              # behind the camera at y = 55
+    out = vleague.jitter_m(Hs, grays, behind, sources)
+    assert out["pairs_skipped"] == 1 and out["between_m"] is None
+    r = np.linalg.inv(Hs[0])[2]                          # pitch points with zero image depth
+    on_plane = np.vstack([P, [[0.0, -r[2] / r[1]]]])
+    out = vleague.jitter_m(Hs, grays, on_plane, sources)
+    assert out["pairs_skipped"] == 1 and out["between_m"] is None
+
+
+def test_jitter_does_not_cap_a_finite_but_badly_solved_keyframe():
+    Hs, grays, P, sources = pan_set()
+    Hs[3] = shift_h(5.0) @ Hs[3]                         # a keyframe 5 m off
+    sources[3] = "keyframe"
+    out = vleague.jitter_m(Hs, grays, P, sources)
+    assert out["pairs_switch"] == 2 and out["pairs_skipped"] == 0
+    assert out["switch_m"] > 1.0 and out["switch_m"] == pytest.approx(5.0, abs=0.1)
