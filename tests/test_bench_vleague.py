@@ -1,5 +1,6 @@
 """V.League mini-GT: frame sampling, splits and the manifest."""
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -260,3 +261,279 @@ def test_rerun_with_a_changed_video_raises(tmp_path, monkeypatch):
     _write_video(video, n=201)
     with pytest.raises(ValueError, match="video changed"):
         vleague.sample_match(video, "m", tmp_path / "d", k=3, step_s=5.0, existing=first)
+
+
+# --- labelling server and label I/O ---------------------------------------------------
+
+import threading
+import urllib.error
+import urllib.request
+
+FAKE_JPEG = b"\xff\xd8\xff\xe0fake-centre-frame\xff\xd9"
+KEY_A, KEY_B = "a/0000012", "a/0000112"
+
+
+def _fake_manifest(tmp_path):
+    data = tmp_path / "data"
+    for idx in ("0000012", "0000112"):
+        d = data / "a" / idx
+        d.mkdir(parents=True)
+        (d / "+00.jpg").write_bytes(FAKE_JPEG + idx.encode())
+    (tmp_path / "secret.jpg").write_bytes(b"do not serve")
+    entry = {"video": "a.mp4", "sha256": "0" * 64, "fps": 25.0,
+             "frames": {"0000012": {"split": "dev", "relabel": False},
+                        "0000112": {"split": "frozen", "relabel": True}}}
+    mpath = tmp_path / "manifest.json"
+    vleague.write_manifest({"a": entry}, mpath)
+    return mpath, data
+
+
+class Served:
+    def __init__(self, tmp_path, relabel_only=False, labels="labels.json"):
+        from footlytics.bench import vleague_label
+
+        self.manifest, self.data = _fake_manifest(tmp_path) if not (
+            tmp_path / "manifest.json").exists() else (tmp_path / "manifest.json", tmp_path / "data")
+        self.labels = tmp_path / labels
+        self.server = vleague_label.make_server(self.manifest, self.data, self.labels, "A", 1,
+                                                relabel_only)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def get(self, path):
+        try:
+            with urllib.request.urlopen(self.base + path) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    def post(self, body):
+        req = urllib.request.Request(self.base + "/label", data=json.dumps(body).encode(),
+                                     method="POST", headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+
+
+@pytest.fixture
+def served(tmp_path):
+    s = Served(tmp_path)
+    yield s
+    s.close()
+
+
+def test_server_binds_to_loopback_only(served):
+    assert served.server.server_address[0] == "127.0.0.1"
+
+
+def test_post_a_point_is_on_disk_and_null_deletes_it(served):
+    status, body = served.post({"frame": KEY_A, "landmark": "pen_area_LT_front",
+                                "uv": [812.5, 403.0]})
+    assert status == 200 and body["points"] == {"pen_area_LT_front": [812.5, 403.0]}
+    on_disk = json.loads(served.labels.read_text())
+    assert on_disk == {"version": 1, "annotator": "A", "session": 1, "image_size": [1920, 1080],
+                       "frames": {KEY_A: {"pen_area_LT_front": [812.5, 403.0]}}}
+    status, body = served.post({"frame": KEY_A, "landmark": "pen_area_LT_front", "uv": None})
+    assert status == 200 and body["points"] == {}
+    assert "pen_area_LT_front" not in json.loads(served.labels.read_text())["frames"].get(KEY_A, {})
+
+
+def test_post_moves_a_point_and_keeps_the_others(served):
+    served.post({"frame": KEY_A, "landmark": "corner_LT", "uv": [10, 20]})
+    served.post({"frame": KEY_A, "landmark": "centre_spot", "uv": [960, 540]})
+    served.post({"frame": KEY_B, "landmark": "corner_LT", "uv": [1, 2]})
+    served.post({"frame": KEY_A, "landmark": "corner_LT", "uv": [30.5, 40.25]})
+    frames = json.loads(served.labels.read_text())["frames"]
+    assert frames == {KEY_A: {"corner_LT": [30.5, 40.25], "centre_spot": [960, 540]},
+                      KEY_B: {"corner_LT": [1, 2]}}
+
+
+def test_post_unknown_landmark_is_400_naming_it_and_file_unchanged(served):
+    served.post({"frame": KEY_A, "landmark": "corner_LT", "uv": [10, 20]})
+    before = served.labels.read_bytes()
+    status, body = served.post({"frame": KEY_A, "landmark": "mid_field_banana", "uv": [5, 5]})
+    assert status == 400 and "mid_field_banana" in body
+    assert served.labels.read_bytes() == before
+
+
+@pytest.mark.parametrize("uv", [[1920.5, 10], [10, 1081], [-0.5, 10], [10, -1], [1, 2, 3],
+                                ["1", 2], [float("nan"), 3], [True, 3], "12", {"u": 1}])
+def test_post_a_point_outside_the_image_or_malformed_is_400(served, uv):
+    before = served.labels.read_bytes()
+    status, _ = served.post({"frame": KEY_A, "landmark": "corner_LT", "uv": uv})
+    assert status == 400
+    assert served.labels.read_bytes() == before
+
+
+def test_post_frame_not_in_the_manifest_or_bad_json_is_400(served):
+    before = served.labels.read_bytes()
+    assert served.post({"frame": "a/0000013", "landmark": "corner_LT", "uv": [1, 1]})[0] == 400
+    assert served.post({"landmark": "corner_LT", "uv": [1, 1]})[0] == 400
+    req = urllib.request.Request(served.base + "/label", data=b"{not json", method="POST")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req)
+    assert e.value.code == 400
+    assert served.labels.read_bytes() == before
+
+
+def test_frames_are_served_only_for_manifest_keys(served):
+    assert served.get("/frames/a/0000012.jpg") == (200, FAKE_JPEG + b"0000012")
+    assert served.get("/frames/a/0000112.jpg") == (200, FAKE_JPEG + b"0000112")
+    assert served.get("/frames/a/0000013.jpg")[0] == 404
+    assert served.get("/frames/b/0000012.jpg")[0] == 404
+    assert served.get("/frames/../../etc/passwd")[0] == 404
+    assert served.get("/frames/a/../../secret.jpg")[0] == 404
+    assert served.get("/frames/%2e%2e/secret.jpg")[0] == 404
+    assert served.get("/frames/a/0000012/+01.jpg")[0] == 404
+    assert served.get("/nothing")[0] == 404
+
+
+def test_frames_list_has_split_relabel_and_point_counts(served):
+    served.post({"frame": KEY_B, "landmark": "corner_LT", "uv": [1, 2]})
+    served.post({"frame": KEY_B, "landmark": "corner_RT", "uv": [3, 4]})
+    status, body = served.get("/frames-list")
+    assert status == 200
+    assert json.loads(body) == [
+        {"key": KEY_A, "split": "dev", "relabel": False, "points": 0},
+        {"key": KEY_B, "split": "frozen", "relabel": True, "points": 2}]
+
+
+def test_relabel_only_lists_only_flagged_frames(tmp_path):
+    s = Served(tmp_path, relabel_only=True)
+    try:
+        assert [f["key"] for f in json.loads(s.get("/frames-list")[1])] == [KEY_B]
+    finally:
+        s.close()
+
+
+def test_get_labels_returns_the_file(served):
+    served.post({"frame": KEY_A, "landmark": "centre_spot", "uv": [960, 540]})
+    status, body = served.get("/labels")
+    assert status == 200 and json.loads(body) == json.loads(served.labels.read_text())
+
+
+def test_restart_on_the_same_label_file_keeps_every_point(tmp_path):
+    s = Served(tmp_path)
+    s.post({"frame": KEY_A, "landmark": "centre_spot", "uv": [960, 540]})
+    s.post({"frame": KEY_B, "landmark": "goalpost_RB", "uv": [100.5, 900]})
+    s.close()
+    s2 = Served(tmp_path)
+    try:
+        assert json.loads(s2.get("/labels")[1])["frames"] == {
+            KEY_A: {"centre_spot": [960, 540]}, KEY_B: {"goalpost_RB": [100.5, 900]}}
+        assert json.loads(s2.get("/frames-list")[1])[1]["points"] == 1
+    finally:
+        s2.close()
+
+
+def test_page_has_the_stable_ids_guide_line_and_injected_data(served):
+    from footlytics.geometry.annotate import HELP, SUGGESTED
+    from footlytics.geometry.pitch import DEFAULT_PITCH
+
+    status, body = served.get("/")
+    page = body.decode()
+    assert status == 200
+    for ident in ("canvas", "frames", "landmarks", "pitch", "status"):
+        assert f'id="{ident}"' in page
+    assert "Click the centre of the line intersection. Goal posts: the base of the post on " \
+           "the goal line. Label every clearly visible landmark, at least 3." in page
+    assert "/*DATA*/null" not in page
+    start = page.index("const DATA = ") + len("const DATA = ")
+    data = json.JSONDecoder().raw_decode(page[start:])[0]
+    lm = DEFAULT_PITCH.landmarks()
+    assert data["names"][:len(SUGGESTED)] == SUGGESTED
+    assert sorted(data["names"]) == sorted(lm) and len(data["names"]) == 35
+    assert data["help"] == HELP and data["pitch"]["corner_LT"] == [-52.5, -34.0]
+    assert data["size"] == [1920, 1080] and data["annotator"] == "A" and data["session"] == 1
+
+
+def test_template_ships_next_to_the_server_module():
+    from footlytics.bench import vleague_label
+
+    assert (Path(vleague_label.__file__).with_name("vleague_label.html")).is_file()
+
+
+def test_load_labels_accepts_what_the_server_wrote(served):
+    served.post({"frame": KEY_A, "landmark": "pen_area_LT_front", "uv": [812.5, 403.0]})
+    manifest = json.loads(served.manifest.read_text())
+    got = vleague.load_labels(served.labels, manifest)
+    assert got["frames"] == {KEY_A: {"pen_area_LT_front": [812.5, 403.0]}}
+    assert got["annotator"] == "A" and got["session"] == 1
+
+
+def _labels_doc(frames, **over):
+    doc = {"version": 1, "annotator": "A", "session": 1, "image_size": [1920, 1080],
+           "frames": frames}
+    return {**doc, **over}
+
+
+def _load(tmp_path, doc):
+    mpath, _ = _fake_manifest(tmp_path) if not (tmp_path / "manifest.json").exists() else (
+        tmp_path / "manifest.json", None)
+    p = tmp_path / "l.json"
+    p.write_text(json.dumps(doc))
+    return vleague.load_labels(p, json.loads(mpath.read_text()))
+
+
+def test_load_labels_rejections(tmp_path):
+    with pytest.raises(ValueError, match="no_such_point"):
+        _load(tmp_path, _labels_doc({KEY_A: {"no_such_point": [1, 1]}}))
+    with pytest.raises(ValueError, match="1921"):
+        _load(tmp_path, _labels_doc({KEY_A: {"corner_LT": [1921, 1]}}))
+    with pytest.raises(ValueError, match="a/0000099"):
+        _load(tmp_path, _labels_doc({"a/0000099": {"corner_LT": [1, 1]}}))
+    with pytest.raises(ValueError, match="version"):
+        _load(tmp_path, _labels_doc({}, version=2))
+    with pytest.raises(ValueError, match="image_size"):
+        _load(tmp_path, _labels_doc({}, image_size=[1280, 720]))
+    assert _load(tmp_path, _labels_doc({}))["frames"] == {}
+
+
+def test_save_label_validates_and_leaves_no_temp_files(tmp_path):
+    p = tmp_path / "l.json"
+    p.write_text(json.dumps(_labels_doc({})))
+    out = vleague.save_label(p, KEY_A, "corner_LT", [5, 6])
+    assert out["frames"] == {KEY_A: {"corner_LT": [5, 6]}}
+    with pytest.raises(ValueError, match="bogus"):
+        vleague.save_label(p, KEY_A, "bogus", [5, 6])
+    with pytest.raises(ValueError, match="outside"):
+        vleague.save_label(p, KEY_A, "corner_LT", [5, 2000])
+    assert json.loads(p.read_text())["frames"] == {KEY_A: {"corner_LT": [5, 6]}}
+    assert sorted(x.name for x in tmp_path.iterdir()) == ["l.json"]
+
+
+def test_make_server_refuses_a_label_file_of_another_annotator(tmp_path):
+    from footlytics.bench import vleague_label
+
+    mpath, data = _fake_manifest(tmp_path)
+    (tmp_path / "l.json").write_text(json.dumps(_labels_doc({}, annotator="B")))
+    with pytest.raises(ValueError, match="annotator"):
+        vleague_label.make_server(mpath, data, tmp_path / "l.json", "A", 1, False)
+
+
+def test_cli_vleague_label_creates_the_file_and_prints_the_url(tmp_path, monkeypatch):
+    from http.server import ThreadingHTTPServer
+    from typer.testing import CliRunner
+
+    from footlytics.bench import cli
+
+    mpath, data = _fake_manifest(tmp_path)
+
+    def interrupt(self, *a, **k):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(ThreadingHTTPServer, "serve_forever", interrupt)
+    labels = tmp_path / "sub" / "labels-A-s1.json"
+    r = CliRunner().invoke(cli.bench_app, [
+        "vleague-label", "--manifest", str(mpath), "--data", str(data), "--labels", str(labels),
+        "--annotator", "A", "--session", "1", "--relabel-only", "--port", "0"])
+    assert r.exit_code == 0, r.output
+    assert "http://127.0.0.1:" in r.output
+    assert json.loads(labels.read_text()) == _labels_doc({})

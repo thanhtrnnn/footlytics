@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import unicodedata
@@ -154,3 +155,85 @@ def write_manifest(entries: dict[str, dict], path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     doc = {"version": 1, "size": list(SIZE), "window": WINDOW, "matches": entries}
     path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+
+
+# --- labels ----------------------------------------------------------------------------
+
+LABELS_VERSION = 1
+
+
+def frame_key(match_id: str, idx: int) -> str:
+    return f"{match_id}/{idx:07d}"
+
+
+def manifest_frames(manifest: dict) -> dict[str, dict]:
+    """{frame_key: {"split", "relabel"}} over every match of a manifest document."""
+    return {frame_key(mid, int(i)): meta
+            for mid, m in manifest["matches"].items() for i, meta in m["frames"].items()}
+
+
+def _landmark_names() -> set[str]:
+    from ..geometry.pitch import DEFAULT_PITCH
+
+    return set(DEFAULT_PITCH.landmarks())
+
+
+def _check_point(name: str, uv, valid_names: set[str]) -> None:
+    if name not in valid_names:
+        raise ValueError(f"unknown landmark {name!r}")
+    ok = (isinstance(uv, (list, tuple)) and len(uv) == 2
+          and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in uv)
+          and all(math.isfinite(c) for c in uv))
+    if not ok:
+        raise ValueError(f"{name}: a point is [u, v] numbers, got {uv!r}")
+    if not (0 <= uv[0] <= SIZE[0] and 0 <= uv[1] <= SIZE[1]):
+        raise ValueError(f"{name}: {list(uv)} is outside the {SIZE[0]}x{SIZE[1]} image")
+
+
+def new_labels(annotator: str, session: int) -> dict:
+    return {"version": LABELS_VERSION, "annotator": annotator, "session": session,
+            "image_size": list(SIZE), "frames": {}}
+
+
+def _validate_labels(doc: dict, manifest: dict | None) -> None:
+    if doc.get("version") != LABELS_VERSION:
+        raise ValueError(f"labels version {doc.get('version')!r}, expected {LABELS_VERSION}")
+    if doc.get("image_size") != list(SIZE):
+        raise ValueError(f"labels image_size {doc.get('image_size')!r}, expected {list(SIZE)}")
+    names = _landmark_names()
+    known = manifest_frames(manifest) if manifest is not None else None
+    for key, points in doc["frames"].items():
+        if known is not None and key not in known:
+            raise ValueError(f"frame {key!r} is not in the manifest")
+        for name, uv in points.items():
+            _check_point(name, uv, names)
+
+
+def load_labels(path, manifest: dict) -> dict:
+    """Read and validate a label file against a manifest document."""
+    doc = json.loads(Path(path).read_text())
+    _validate_labels(doc, manifest)
+    return doc
+
+
+def _write_atomic(path: Path, doc: dict) -> None:
+    tmp = path.with_name(f".tmp-{path.name}")
+    tmp.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
+def save_label(path, key: str, landmark: str, uv) -> dict:
+    """Set (uv a point) or remove (uv None) one landmark of one frame; rewrite the file atomically."""
+    path = Path(path)
+    if uv is not None:
+        _check_point(landmark, uv, _landmark_names())
+    elif landmark not in _landmark_names():
+        raise ValueError(f"unknown landmark {landmark!r}")
+    doc = json.loads(path.read_text())
+    points = doc["frames"].setdefault(key, {})
+    if uv is None:
+        points.pop(landmark, None)
+    else:
+        points[landmark] = list(uv)
+    _write_atomic(path, doc)
+    return doc

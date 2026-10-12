@@ -214,3 +214,31 @@ def vleague_sample(videos: list[Path] = typer.Argument(..., help="V.League match
         typer.echo(f"{mid}: {len(entries[mid]['frames'])} frames")
         vleague.write_manifest(entries, manifest)
     typer.echo(f"manifest: {manifest}")
+
+
+@bench_app.command("vleague-label")
+def vleague_label_cmd(
+        manifest: Path = typer.Option(Path("bench/vleague/manifest.json"), help="sampling manifest"),
+        data: Path = typer.Option(Path("data/vleague"), help="the window JPEGs (not in git)"),
+        labels: Path = typer.Option(..., help="label file; created if missing"),
+        annotator: str = typer.Option(..., help="who is labelling, e.g. A"),
+        session: int = typer.Option(..., help="labelling session number"),
+        relabel_only: bool = typer.Option(False, help="show only the frames to be labelled twice"),
+        port: int = typer.Option(8765)) -> None:
+    """Serve the labelling page on 127.0.0.1; every click autosaves to the label file."""
+    from .vleague_label import make_server
+
+    if not manifest.exists():
+        raise typer.BadParameter(f"no manifest at {manifest}; run `bench vleague-sample` first")
+    try:
+        server = make_server(manifest, data, labels, annotator, session, relabel_only, port)
+    except (ValueError, OSError) as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    typer.echo(f"http://127.0.0.1:{server.server_address[1]}/")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
