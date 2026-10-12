@@ -120,7 +120,7 @@
 "use strict";
 const DATA = /*DATA*/null;
 const W = DATA.size[0], H = DATA.size[1];
-const MAX_ZOOM = 8, LOUPE = 4, LOUPE_PX = 160, HIT_PX = 10, MIN_POINTS = 3, CHECK_MIN = 4;
+const MAX_ZOOM = 8, LOUPE = 4, LOUPE_PX = 160, HIT_PX = 10, MIN_POINTS = 3, CHECK_MIN = 3, ENOUGH = 4;
 const DRAG_PX = 4;                 // screen px a press must travel before it drags
 const ZOOM_PER_PX = Math.log(1.2) / 100;   // one 100 px mouse notch = 1.2x
 const MAX_WHEEL_PX = 120;          // clamp so one flick cannot jump the zoom
@@ -203,7 +203,7 @@ function checkFrame(pts) {
     for (const a of t) { count[a]++; for (const b of t) if (a !== b) together[a][b] = (together[a][b] || 0) + 1; }
   }
   const top = Math.max(...Object.values(count));
-  if (top === 0) return res;
+  if (top === 0) { res.status = names.length < ENOUGH ? "few" : "ok"; return res; }
   res.status = "flip";
   res.suspects = names.filter((n) => count[n] === top);
   for (const n of res.suspects) {
@@ -218,7 +218,7 @@ function renderCheck() {
     el.textContent = c.suspects.map((n) => n + " looks misplaced: its position contradicts " + c.partners[n].join(" and ")).join("; ")
       + " (left/right or far/near swapped?)";
   } else if (c.status === "few") {
-    el.textContent = "Label at least " + CHECK_MIN + " points on this frame (" + c.n + " so far).";
+    el.textContent = "Label at least " + ENOUGH + " points on this frame (" + c.n + " so far).";
   } else {
     el.textContent = c.status === "ok" ? "Labels look consistent." : "";
   }

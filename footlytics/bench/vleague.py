@@ -338,11 +338,12 @@ def orientation_suspects(points: dict, landmarks: dict) -> list[str]:
     For every triple, the sign of the 2D cross product in image pixels must equal the sign in
     pitch metres (pitch y grows toward the near touchline, image v grows downward, so a
     correct labelling preserves orientation). Points in the most disagreeing triples are
-    returned, sorted; ties return all of them. Fewer than 4 points, or no bad triple: [].
+    returned, sorted; ties return all of them (three points: all three). Fewer than 3
+    points, or no bad triple: [].
     Near-collinear triples carry no sign information and are skipped.
     """
     names = sorted(n for n in points if n in landmarks)
-    if len(names) < 4:
+    if len(names) < 3:
         return []
     counts = {n: 0 for n in names}
     for tri in _bad_triples(names, points, landmarks):

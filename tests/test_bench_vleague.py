@@ -1,4 +1,5 @@
 """V.League mini-GT: frame sampling, splits and the manifest."""
+import itertools
 import json
 from pathlib import Path
 
@@ -1385,10 +1386,16 @@ def test_orientation_suspects_single_mislabel_is_the_culprit():
     assert vleague.orientation_suspects(pts, LANDMARKS) == ["pen_area_RT_front"]
 
 
-def test_orientation_suspects_needs_four_points():
+def test_orientation_suspects_needs_three_points_and_flags_a_flipped_triangle():
     pts = visible_points()
     names = ["pen_area_LT_front", "pen_area_RT_front"]
     two = {names[0]: pts[names[1]], names[1]: pts[names[0]]}
     assert vleague.orientation_suspects(two, LANDMARKS) == []
-    three = {n: pts[n] for n in sorted(pts)[:3]}
+    trio = next(t for t in itertools.combinations(sorted(pts), 3)
+                if vleague._bad_triples(list(t), {n: pts[n] for n in t},
+                                        {n: (-LANDMARKS[n][0], LANDMARKS[n][1]) for n in t}))
+    three = {n: pts[n] for n in trio}
     assert vleague.orientation_suspects(three, LANDMARKS) == []
+    a, b, c = trio
+    swapped = {a: pts[b], b: pts[a], c: pts[c]}
+    assert vleague.orientation_suspects(swapped, LANDMARKS) == sorted(trio)
