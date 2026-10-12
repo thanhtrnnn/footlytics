@@ -20,7 +20,15 @@
     flex: none; display: flex; align-items: center; gap: 16px; padding: 8px 12px;
     background: #2a2410; border-bottom: 1px solid #5c4a10;
   }
-  #guide { flex: 1; font-size: 14px; font-weight: 600; color: var(--accent); }
+  #guidebox { flex: 1; min-width: 0; }
+  #guide { font-size: 14px; font-weight: 600; color: var(--accent); }
+  #check { margin-top: 2px; font-size: 13px; font-weight: 600; min-height: 1.45em; color: var(--dim); }
+  #check[data-check="flip"] { color: var(--bad); }
+  #check[data-check="few"] { color: var(--accent); }
+  #check[data-check="ok"] { color: var(--ok); }
+  #frames .warn { grid-row: 1 / span 2; grid-column: 3; align-self: center; font-weight: 700; }
+  #frames .warn[data-check="flip"] { color: var(--bad); }
+  #frames .warn[data-check="few"] { color: var(--accent); }
   #who { color: var(--dim); white-space: nowrap; }
   #status {
     min-width: 92px; text-align: center; padding: 4px 12px; border-radius: 10px;
@@ -40,7 +48,7 @@
   ul { list-style: none; margin: 0; padding: 0; }
   #frames li {
     padding: 6px 10px; cursor: pointer; border-left: 3px solid transparent;
-    display: grid; grid-template-columns: 1fr auto; gap: 0 8px; border-bottom: 1px solid #232932;
+    display: grid; grid-template-columns: 1fr auto auto; gap: 0 8px; border-bottom: 1px solid #232932;
   }
   #frames li:hover { background: #222833; }
   #frames li[data-current="true"] { background: #26303f; border-left-color: var(--accent); }
@@ -81,6 +89,7 @@
   #pitch .marker { fill: #0c0f12; stroke: var(--pt-dim); stroke-width: .35; cursor: pointer; }
   #pitch .marker.placed { fill: var(--pt); stroke: #fff; }
   #pitch .marker.selected { fill: var(--accent); stroke: #fff; stroke-width: .5; }
+  #pitch .marker.suspect { fill: var(--bad); stroke: #fff; }
   #pitch .ring { fill: none; stroke: var(--accent); stroke-width: .35; pointer-events: none; }
   #pitch #pitch-label { fill: var(--accent); font-size: 3.2px; font-weight: 700; pointer-events: none; paint-order: stroke; stroke: #0c0f12; stroke-width: .7px; }
   #keys { padding: 4px 10px 8px; color: var(--dim); font-size: 12px; }
@@ -89,7 +98,7 @@
 </head>
 <body>
 <header>
-  <div id="guide">Click the centre of the line intersection. Goal posts: the base of the post on the goal line. Label every clearly visible landmark, at least 3.</div>
+  <div id="guidebox"><div id="guide">Click the centre of the line intersection. Goal posts: the base of the post on the goal line. Label every clearly visible landmark, at least 3.</div><div id="check" data-check="empty"></div></div>
   <div id="who"></div>
   <div id="status" data-state="saved" title="Every change is saved to the label file at once">saved</div>
 </header>
@@ -111,7 +120,7 @@
 "use strict";
 const DATA = /*DATA*/null;
 const W = DATA.size[0], H = DATA.size[1];
-const MAX_ZOOM = 8, LOUPE = 4, LOUPE_PX = 160, HIT_PX = 10, MIN_POINTS = 3;
+const MAX_ZOOM = 8, LOUPE = 4, LOUPE_PX = 160, HIT_PX = 10, MIN_POINTS = 3, CHECK_MIN = 4;
 const DRAG_PX = 4;                 // screen px a press must travel before it drags
 const ZOOM_PER_PX = Math.log(1.2) / 100;   // one 100 px mouse notch = 1.2x
 const MAX_WHEEL_PX = 120;          // clamp so one flick cannot jump the zoom
@@ -170,6 +179,51 @@ function resize() {
 }
 new ResizeObserver(resize).observe(canvas);
 
+// ---- consistency check -----------------------------------------------------------------
+// Pitch y grows toward the near touchline and image v grows downward, so every triple of
+// labelled points must have the same cross-product sign in pixels and in metres.
+// Mirror of vleague.orientation_suspects (keep the two in step).
+function crossOf(a, b, c) {
+  const x1 = b[0] - a[0], y1 = b[1] - a[1], x2 = c[0] - a[0], y2 = c[1] - a[1];
+  return [x1 * y2 - y1 * x2, Math.hypot(x1, y1) * Math.hypot(x2, y2)];
+}
+function checkFrame(pts) {
+  const names = Object.keys(pts || {}).filter((n) => DATA.pitch[n]).sort();
+  const res = { n: names.length, suspects: [], partners: {}, status: names.length ? "few" : "empty" };
+  if (names.length < CHECK_MIN) return res;
+  res.status = "ok";
+  const count = {}, together = {};
+  names.forEach((n) => { count[n] = 0; together[n] = {}; });
+  for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) for (let k = j + 1; k < names.length; k++) {
+    const t = [names[i], names[j], names[k]];
+    const [cp, np] = crossOf(pts[t[0]], pts[t[1]], pts[t[2]]);
+    const [cm, nm] = crossOf(P(t[0]), P(t[1]), P(t[2]));
+    if (np === 0 || nm === 0 || Math.abs(cp) < 0.02 * np || Math.abs(cm) < 0.02 * nm) continue;
+    if ((cp > 0) === (cm > 0)) continue;
+    for (const a of t) { count[a]++; for (const b of t) if (a !== b) together[a][b] = (together[a][b] || 0) + 1; }
+  }
+  const top = Math.max(...Object.values(count));
+  if (top === 0) return res;
+  res.status = "flip";
+  res.suspects = names.filter((n) => count[n] === top);
+  for (const n of res.suspects) {
+    res.partners[n] = Object.entries(together[n]).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 2).map((e) => e[0]).sort();
+  }
+  return res;
+}
+function renderCheck() {
+  const el = $("check"), c = checkFrame(points());
+  el.dataset.check = c.status;
+  if (c.status === "flip") {
+    el.textContent = c.suspects.map((n) => n + " looks misplaced: its position contradicts " + c.partners[n].join(" and ")).join("; ")
+      + " (left/right or far/near swapped?)";
+  } else if (c.status === "few") {
+    el.textContent = "Label at least " + CHECK_MIN + " points on this frame (" + c.n + " so far).";
+  } else {
+    el.textContent = c.status === "ok" ? "Labels look consistent." : "";
+  }
+}
+
 // ---- drawing ---------------------------------------------------------------------------
 const points = () => (state.cur >= 0 && state.labels[state.frames[state.cur].key]) || {};
 let drawQueued = false;
@@ -179,10 +233,10 @@ function draw() {
   requestAnimationFrame(() => { drawQueued = false; paint(); });
 }
 
-function drawMarker(c, x, y, name, selected, big) {
+function drawMarker(c, x, y, name, selected, big, bad) {
   const r = selected ? (big ? 7 : 6) : (big ? 5 : 4);
   c.lineWidth = 1.5;
-  c.strokeStyle = selected ? "#ffd43b" : "#3bc9db";
+  c.strokeStyle = bad ? "#ff4040" : selected ? "#ffd43b" : "#3bc9db";
   c.beginPath(); c.arc(x, y, r, 0, 2 * Math.PI); c.stroke();
   c.beginPath();
   c.moveTo(x - r - 4, y); c.lineTo(x + r + 4, y); c.moveTo(x, y - r - 4); c.lineTo(x, y + r + 4);
@@ -190,7 +244,7 @@ function drawMarker(c, x, y, name, selected, big) {
   if (name) {
     c.font = "11px ui-monospace, Menlo, monospace";
     c.lineWidth = 3; c.strokeStyle = "rgba(0,0,0,.8)"; c.strokeText(name, x + r + 6, y - r);
-    c.fillStyle = selected ? "#ffd43b" : "#cfeef3"; c.fillText(name, x + r + 6, y - r);
+    c.fillStyle = bad ? "#ff6b6b" : selected ? "#ffd43b" : "#cfeef3"; c.fillText(name, x + r + 6, y - r);
   }
 }
 
@@ -204,10 +258,10 @@ function paint() {
   } else {
     ctx.fillStyle = "#8b96a3"; ctx.font = "14px system-ui"; ctx.fillText("loading frame...", 16, 28);
   }
-  const pts = points();
+  const pts = points(), sus = new Set(checkFrame(pts).suspects);
   for (const [name, uv] of Object.entries(pts)) {
     const [x, y] = toScreen(uv[0], uv[1]);
-    drawMarker(ctx, x, y, name, name === state.selected, false);
+    drawMarker(ctx, x, y, name, name === state.selected, false, sus.has(name));
   }
   paintLoupe();
 }
@@ -222,11 +276,11 @@ function paintLoupe() {
   lctx.fillStyle = "#000"; lctx.fillRect(0, 0, LOUPE_PX, LOUPE_PX);
   lctx.imageSmoothingEnabled = true;
   lctx.drawImage(state.img, iu - span / 2, iv - span / 2, span, span, 0, 0, LOUPE_PX, LOUPE_PX);
-  const k = LOUPE_PX / span;
+  const k = LOUPE_PX / span, sus = new Set(checkFrame(points()).suspects);
   for (const [name, uv] of Object.entries(points())) {
     const x = (uv[0] - (iu - span / 2)) * k, y = (uv[1] - (iv - span / 2)) * k;
     if (x > -20 && y > -20 && x < LOUPE_PX + 20 && y < LOUPE_PX + 20)
-      drawMarker(lctx, x, y, null, name === state.selected, true);
+      drawMarker(lctx, x, y, null, name === state.selected, true, sus.has(name));
   }
   lctx.strokeStyle = "rgba(255,212,59,.9)"; lctx.lineWidth = 1;
   const c = LOUPE_PX / 2;
@@ -296,7 +350,7 @@ function commit(name) {
 function refreshAfterChange() {
   const f = state.frames[state.cur];
   f.points = Object.keys(state.labels[f.key] || {}).length;
-  renderFrames(); renderLandmarks(); renderPitch(); draw();
+  renderFrames(); renderLandmarks(); renderPitch(); renderCheck(); draw();
 }
 
 // ---- pointer interaction ---------------------------------------------------------------
@@ -421,7 +475,14 @@ function renderFrames() {
     meta.textContent = f.split + (f.relabel ? " " : "");
     if (f.relabel) { const b = document.createElement("span"); b.className = "badge"; b.textContent = "relabel"; meta.appendChild(b); }
     const count = document.createElement("span"); count.className = "count"; count.textContent = f.points + " pts";
+    const ck = checkFrame(state.labels[f.key]).status;
+    li.dataset.check = ck;
     li.append(key, meta, count);
+    if (ck === "flip" || ck === "few") {
+      const w = document.createElement("span"); w.className = "warn"; w.dataset.check = ck; w.textContent = "⚠";
+      w.title = ck === "flip" ? "A landmark looks swapped (left/right or far/near)" : "Fewer than " + CHECK_MIN + " points";
+      li.appendChild(w);
+    }
     li.addEventListener("click", () => selectFrame(i));
     ul.appendChild(li);
   });
@@ -444,7 +505,7 @@ function selectFrame(i) {
     renderStatus(); console.error("cannot load frame", f.key);
   };
   img.src = "/frames/" + f.key + ".jpg";
-  resetView(); renderFrames(); renderLandmarks(); renderPitch();
+  resetView(); renderFrames(); renderLandmarks(); renderPitch(); renderCheck();
   document.querySelector('#frames li[data-current="true"]')?.scrollIntoView({ block: "nearest" });
 }
 
@@ -518,11 +579,12 @@ function buildPitch() {
   svg("text", { id: "pitch-label", x: 0, y: 0 });
 }
 function renderPitch() {
-  const pts = points();
+  const pts = points(), sus = new Set(checkFrame(pts).suspects);
   for (const c of $("pitch").querySelectorAll(".marker")) {
     const n = c.getAttribute("data-name"), sel = n === state.selected;
     c.classList.toggle("selected", sel);
     c.classList.toggle("placed", !!pts[n]);
+    c.classList.toggle("suspect", sus.has(n));
     c.setAttribute("r", sel ? 1.8 : 1.1);
     if (sel) {
       const [x, y] = P(n), ring = $("pitch-ring"), label = $("pitch-label");
@@ -547,7 +609,7 @@ async function start() {
   } catch (e) {
     console.error(e); state.loadError = "load failed"; renderStatus(); return;
   }
-  renderFrames(); renderLandmarks(); renderPitch();
+  renderFrames(); renderLandmarks(); renderPitch(); renderCheck();
   const want = decodeURIComponent(location.hash.slice(1));
   const i = Math.max(0, state.frames.findIndex((f) => f.key === want));
   selectFrame(i);

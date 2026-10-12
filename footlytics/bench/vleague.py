@@ -332,6 +332,42 @@ def frame_error(H_img_to_pitch, points: dict, landmarks: dict) -> float | None:
     return float(np.median(list(errs.values()))) if errs else None
 
 
+def orientation_suspects(points: dict, landmarks: dict) -> list[str]:
+    """Labelled points whose position contradicts the others (left/right or far/near swapped).
+
+    For every triple, the sign of the 2D cross product in image pixels must equal the sign in
+    pitch metres (pitch y grows toward the near touchline, image v grows downward, so a
+    correct labelling preserves orientation). Points in the most disagreeing triples are
+    returned, sorted; ties return all of them. Fewer than 4 points, or no bad triple: [].
+    Near-collinear triples carry no sign information and are skipped.
+    """
+    names = sorted(n for n in points if n in landmarks)
+    if len(names) < 4:
+        return []
+    counts = {n: 0 for n in names}
+    for tri in _bad_triples(names, points, landmarks):
+        for n in tri:
+            counts[n] += 1
+    top = max(counts.values())
+    return [n for n in names if top and counts[n] == top]
+
+
+def _bad_triples(names, points, landmarks) -> list[tuple[str, str, str]]:
+    def cross(a, b, c):
+        d1, d2 = (b[0] - a[0], b[1] - a[1]), (c[0] - a[0], c[1] - a[1])
+        return d1[0] * d2[1] - d1[1] * d2[0], math.hypot(*d1) * math.hypot(*d2)
+
+    bad = []
+    for t in itertools.combinations(names, 3):
+        cp, npx = cross(*(points[n] for n in t))
+        cm, nm = cross(*(landmarks[n] for n in t))
+        if npx == 0 or nm == 0 or abs(cp) < 0.02 * npx or abs(cm) < 0.02 * nm:
+            continue
+        if (cp > 0) != (cm > 0):
+            bad.append(t)
+    return bad
+
+
 def image_motion(prev_gray: np.ndarray, gray: np.ndarray) -> np.ndarray | None:
     """Homography taking pixels of `prev_gray` to pixels of `gray`, by KLT and RANSAC.
 

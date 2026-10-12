@@ -443,7 +443,7 @@ def test_page_has_the_stable_ids_guide_line_and_injected_data(served):
     status, body = served.get("/")
     page = body.decode()
     assert status == 200
-    for ident in ("canvas", "frames", "landmarks", "pitch", "status"):
+    for ident in ("canvas", "frames", "landmarks", "pitch", "status", "check"):
         assert f'id="{ident}"' in page
     assert "Click the centre of the line intersection. Goal posts: the base of the post on " \
            "the goal line. Label every clearly visible landmark, at least 3." in page
@@ -1360,3 +1360,35 @@ def test_cli_reject_goes_to_its_match_and_unknown_matches_are_refused(tmp_path, 
     assert seen == {"ninh-binh-pvf-cand": [12, 40]}
     r = _cli([video, "--manifest", tmp_path / "m2.json", "--reject", "other-match/0000012"])
     assert r.exit_code != 0 and "other-match" in r.output
+
+
+# ---- orientation_suspects: left/right and far/near swaps ---------------------------------
+
+def test_orientation_suspects_empty_for_a_true_camera():
+    pts = visible_points()
+    assert len(pts) >= 8
+    assert vleague.orientation_suspects(pts, LANDMARKS) == []
+
+
+def test_orientation_suspects_names_a_swapped_lr_pair():
+    pts = visible_points()
+    a, b = "pen_area_LT_front", "pen_area_RT_front"
+    assert a in pts and b in pts
+    pts[a], pts[b] = pts[b], pts[a]
+    assert vleague.orientation_suspects(pts, LANDMARKS) == sorted([a, b])
+
+
+def test_orientation_suspects_single_mislabel_is_the_culprit():
+    pts = visible_points()
+    pts["pen_area_RT_front"] = pts["corner_LT"]   # clicked on the far-left corner instead
+    pts = {n: p for n, p in pts.items() if n != "corner_LT"}
+    assert vleague.orientation_suspects(pts, LANDMARKS) == ["pen_area_RT_front"]
+
+
+def test_orientation_suspects_needs_four_points():
+    pts = visible_points()
+    names = ["pen_area_LT_front", "pen_area_RT_front"]
+    two = {names[0]: pts[names[1]], names[1]: pts[names[0]]}
+    assert vleague.orientation_suspects(two, LANDMARKS) == []
+    three = {n: pts[n] for n in sorted(pts)[:3]}
+    assert vleague.orientation_suspects(three, LANDMARKS) == []
