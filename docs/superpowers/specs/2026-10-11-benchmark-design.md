@@ -158,8 +158,9 @@ Where the team errors come from, measured on the 58 valid clips (first nightly p
   score on the non-overlapping subset alongside. Its training games are not published, so until
   they are, calibration rows carry `leakage: unverified` and their numbers are internal only.
   The SN-Calibration task scores the non-overlapping subset as soon as a list is given.
-- **V.League labels:** scored on held-out landmarks; about 10 frames labelled twice (two people
-  or two sessions) to measure labelling error; the held-out half is frozen once labelled.
+- **V.League labels:** scored on held-out landmarks; the user chose a single annotation pass, so
+  inter-annotator error is not measured and is omitted from results. The held-out half is frozen
+  after label review.
 - **Noise:** the nightly suite runs the same commit twice; a change smaller than that spread is
   reported as no change.
 - **Footage:** SoccerNet frames are copyrighted broadcast; used for internal scoring only.

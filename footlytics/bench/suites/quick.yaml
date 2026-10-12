@@ -29,6 +29,5 @@ tasks:
     kind: vleague
     split: dev
     labels: [bench/vleague/labels/labels-A-s1.json]
-    relabels: [bench/vleague/labels/labels-A-s2.json]
     every: 10
     gate_px: 25

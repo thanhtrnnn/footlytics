@@ -3,8 +3,8 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Score our calibration on our own target footage. The spec's V.League mini-GT is 3
-matches × 15 frames, half of the frames held out and frozen once labelled, and about 10 frames
-labelled twice. It reports:
+matches × 15 frames, half of the frames held out and frozen once labelled. The user chose one
+annotation pass, so inter-annotator error is not measured. It reports:
 - landmark error in metres;
 - the share of frames whose error is under 1 m;
 - frame-to-frame jitter in metres.
@@ -33,8 +33,8 @@ labelled twice. It reports:
   on landmarks the solver did not use, % frames under 1 m, frame-to-frame jitter (m)". Our
   calibrator is automatic and never sees the labels, so every labelled landmark is one "the
   solver did not use".
-- **Labels:** "scored on held-out landmarks; about 10 frames labelled twice (two people or two
-  sessions) to measure labelling error; the held-out half is frozen once labelled".
+- **Labels:** scored on held-out landmarks with one annotation pass; inter-annotator error is
+  unavailable. The held-out half is frozen after label review.
 - **Footage:** FPT Play broadcasts, internal use only. Videos and frames stay out of git (`/data/`
   is gitignored). Only labels and the manifest (frame indices, video sha256) are committed.
 - **Frozen frames:** they are scored only by the milestone suite and never used for tuning.
@@ -281,7 +281,8 @@ tests/test_bench_vleague.py
     - `uncalibrated` (count);
     - `jitter_switch_m` and `jitter_between_m` (pair-weighted means over all windows);
     - `jitter_pairs_skipped`;
-    - `labelling_error_m` (median over relabelled frames, only when relabels are given);
+    - `labelling_error_m` (median over relabelled frames, only when relabels are given; omitted
+      for this single-annotation run).
     - `frames`.
   - `Remote.ship_data(name, archive)`: the same atomic tar-replace as `ship_dir`, but into
     `data/<name>`. The name goes through `_safe`.
@@ -332,15 +333,14 @@ tests/test_bench_vleague.py
   then open the printed localhost address. Label every clearly visible landmark (at least 3 per
   frame), clicking the centre of each line intersection; zoom in for far-side points. Everything
   saves as you go; stop with Ctrl-C and resume any time.
-- [ ] **Step 3 (user, a different day or a second person):** label session 2 on the about 11
-  flagged frames with `--relabel-only --labels bench/vleague/labels/labels-A-s2.json --session 2`
-  (or a second person as annotator B). Frames with fewer than 4 landmarks shared between the two
-  sessions are skipped by the labelling-error metric, and the skip count is reported.
-- [ ] **Step 4 (agent):** run `load_labels` on both files, commit them, and pin
-  `frozen_digest(session-1 labels)` in `milestone.yaml`'s `frozen_sha256`. From then on the
-  frozen frames' labels never change; dev labels may still be corrected.
+- [x] **Step 3 (user):** second annotation pass explicitly skipped. No `labels-A-s2.json` is used;
+  inter-annotator error is omitted from the benchmark results.
+- [x] **Step 4 (agent):** resolve every live label warning, run `load_labels` on session 1, commit
+  `labels-A-s1.json`, and pin `frozen_digest(session-1 labels)` in `milestone.yaml`'s
+  `frozen_sha256`. From then on the frozen frames' labels never change; dev labels may still be
+  corrected.
 - [ ] **Step 5 (agent):** check with football-e0 that the GPU is free. Then run
   `uv run footlytics bench ship-data vleague --remote iec4090_2`, the `quick` suite (vleague-dev),
   then the `milestone` suite (vleague-frozen). Record the numbers under the spec's reference
-  points, labelled "model metres": median landmark error, share under 1 m, jitter at keyframe
-  switches and between keyframes, and labelling error. Commit.
+  points, labelled "model metres": median landmark error, share under 1 m, and jitter at keyframe
+  switches and between keyframes. State that inter-annotator error was not measured. Commit.
