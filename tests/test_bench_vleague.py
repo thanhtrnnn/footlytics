@@ -1131,3 +1131,126 @@ def test_cli_ship_data_tars_only_the_windows(tmp_path, monkeypatch):
     r = CliRunner().invoke(cli.bench_app, ["ship-data", "vleague", "--remote", "h"])
     assert r.exit_code == 0, r.output
     assert got == [("vleague", ["m1/0000100/+00.jpg"])]
+
+
+# ------------------------------------------------------------------ fix round 1
+
+def test_a_failed_frame_stays_in_the_denominator(vl, monkeypatch):
+    calls = []
+
+    class Boom(_VCal):
+        def fit(self, frames, which=None, **kw):
+            calls.append(1)
+            if len(calls) == 2:
+                raise RuntimeError("CUDA out of memory")
+            return super().fit(frames, which, **kw)
+    monkeypatch.setattr(runner, "_calibrator", lambda p: Boom())
+    t = vl.run()
+    a = t["aggregate"]
+    assert t["status"] == "partial" and list(t["failed"]) == ["m1/0000200"]
+    assert a["frames"] == 2 and a["failed"] == 1 and a["share_under_1m"] == 0.5
+    assert a["uncalibrated"] == 0
+
+
+def test_the_fit_gets_the_tuned_gsr_calibration_settings(vl, monkeypatch):
+    seen = []
+
+    class Rec(_VCal):
+        def fit(self, frames, which=None, **kw):
+            seen.append(kw)
+            return super().fit(frames, which, **kw)
+    monkeypatch.setattr(runner, "_calibrator", lambda p: Rec())
+    vl.run()
+    assert seen[0] == {"kp_threshold": runner.DEFAULT_KP_THRESHOLD,
+                       "line_threshold": runner.DEFAULT_LINE_THRESHOLD,
+                       "voting": False, "mode": "full", "ransac": 10.0, "refine_lines": True}
+    seen.clear()
+    vl.run(calibrator={"kp_threshold": 0.3, "mode": "fast", "ransac": 4, "refine_lines": False})
+    assert seen[0]["kp_threshold"] == 0.3 and seen[0]["mode"] == "fast"
+    assert seen[0]["ransac"] == 4.0 and seen[0]["refine_lines"] is False
+
+
+def _shift(i: float) -> np.ndarray:
+    H = H_TRUE.copy()
+    H[0, 2] += i          # a distinct H per window index: x shifted by i metres
+    return H
+
+
+def test_error_is_scored_at_list_index_window_and_last_errors_are_counted(vl, monkeypatch):
+    class PerIndex(_VCal):
+        def fit(self, frames, which=None, **kw):
+            self.last_errors = {0: "ZeroDivisionError: x"}
+            return {i: CameraFit(BROADCAST, 1.0, _shift(0.0 if i == vleague.WINDOW else 5.0))
+                    for i in which}
+
+    class Walk:                      # every frame is "bridged" from a keyframe by an identity
+        def __init__(self, frame, mask=None):
+            pass
+
+        def update(self, frame, mask=None):
+            return np.eye(3)
+    monkeypatch.setattr(runner, "_calibrator", lambda p: PerIndex())
+    monkeypatch.setattr(runner, "TRACKER", Walk)
+    t = vl.run(every=1)             # every window index is a keyframe with its own H
+    f = t["per_frame"]["m1/0000100"]
+    assert f["error_m"] == pytest.approx(0, abs=1e-6) and f["source"] == "keyframe"
+    assert t["aggregate"]["solver_errors"] == 2          # one fit call per frame, one error each
+    vl.cal.none = False
+
+    class Off(PerIndex):
+        def fit(self, frames, which=None, **kw):
+            return {i: CameraFit(BROADCAST, 1.0, _shift(0.0 if i == 0 else 5.0)) for i in which}
+    monkeypatch.setattr(runner, "_calibrator", lambda p: Off())
+    assert vl.run(every=1)["per_frame"]["m1/0000100"]["error_m"] > 1.0     # index 0 is wrong, so offset 0 is not read from it
+
+
+def test_jitter_is_measured_on_a_textured_window(vl, monkeypatch):
+    d = vl.paths.data / "vleague" / "m1" / "0000100"
+    tex = noise_texture()
+    small = cv2.resize(tex, (1920, 1080))
+    for off in range(-12, 13):
+        cv2.imwrite(str(d / f"{off:+03d}.jpg"), small)
+    t = vl.run(every=1)
+    j = t["per_frame"]["m1/0000100"]["jitter"]
+    assert j["pairs_switch"] == 24 and j["pairs_between"] == 0 and j["pairs_skipped"] == 0
+    assert j["switch_m"] == pytest.approx(0, abs=0.05)
+    assert t["aggregate"]["jitter_switch_m"] is not None
+
+
+def test_frozen_digest_ignores_int_vs_float_spelling(vl):
+    doc = json.loads((vl.repo / "bench/vleague/labels/a.json").read_text())
+    d = vleague.frozen_digest(doc, vl.manifest)
+    for pts in doc["frames"].values():
+        for n, (u, v) in pts.items():
+            pts[n] = [float(u), float(v)]
+    assert vleague.frozen_digest(doc, vl.manifest) == d
+    doc["frames"]["m1/0000300"]["corner_LT"] = [960, 100]
+    d1 = vleague.frozen_digest(doc, vl.manifest)
+    doc["frames"]["m1/0000300"]["corner_LT"] = [960.0, 100.0]
+    assert vleague.frozen_digest(doc, vl.manifest) == d1
+
+
+def test_ship_data_skips_temp_files(tmp_path, monkeypatch):
+    import io
+    import tarfile
+
+    from typer.testing import CliRunner
+
+    from footlytics.bench import cli
+    d = tmp_path / "data" / "vleague" / "m1" / "0000100"
+    d.mkdir(parents=True)
+    (d / "+00.jpg").write_bytes(b"j")
+    (d / ".tmp-+01.jpg").write_bytes(b"half")
+    got = []
+
+    class R:
+        def __init__(self, host):
+            pass
+
+        def ship_data(self, name, archive):
+            got.append(sorted(tarfile.open(fileobj=io.BytesIO(archive)).getnames()))
+            return "/x"
+    monkeypatch.setattr(cli, "REPO", tmp_path)
+    monkeypatch.setattr(cli, "_remote", R)
+    assert CliRunner().invoke(cli.bench_app, ["ship-data", "vleague", "--remote", "h"]).exit_code == 0
+    assert got == [["m1/0000100/+00.jpg"]]

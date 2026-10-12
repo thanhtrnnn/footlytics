@@ -155,6 +155,8 @@ def ship_data(name: str = typer.Argument(..., help="a folder of data/ in the rep
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as t:
         for p in sorted(src.rglob("*.jpg")):
+            if p.name.startswith("."):     # .tmp-* leftovers of an interrupted extract
+                continue
             t.add(str(p), arcname=str(p.relative_to(src)), recursive=False)
     _guard(lambda: typer.echo(_remote(remote).ship_data(name, buf.getvalue())))
 

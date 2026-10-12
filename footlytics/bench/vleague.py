@@ -489,7 +489,8 @@ def frozen_digest(labels: dict, manifest: dict) -> str:
     Dev frames can still be corrected after the freeze; any change to a frozen frame changes this.
     """
     frames = manifest_frames(manifest)
-    mine = {k: v for k, v in labels["frames"].items() if frames[k]["split"] == "frozen"}
+    mine = {k: {n: [round(float(c), 2) for c in uv] for n, uv in pts.items()}
+            for k, pts in labels["frames"].items() if frames[k]["split"] == "frozen"}
     blob = json.dumps(mine, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode()).hexdigest()
 
@@ -500,6 +501,14 @@ def _pair_weighted(items: list[tuple[float | None, int]]) -> float | None:
     if pairs == 0:
         return None
     return float(sum(m * n for m, n in items if m is not None) / pairs)
+
+
+def _solve_kw(cfg: dict) -> dict:
+    """The solver settings gsr_calibration tuned (runner._clip_calibration: `solve_kw`, which is
+    inline there, so mirrored here; keep the two in step)."""
+    return {"voting": False, "mode": cfg.get("mode", "full"),
+            "ransac": float(cfg.get("ransac", 10.0)),
+            "refine_lines": cfg.get("refine_lines", True)}
 
 
 def _window_paths(data: Path, key: str) -> list[Path]:
@@ -549,11 +558,13 @@ def vleague_task(task: dict, ctx) -> dict:
     runner.require_vram(task.get("vram_mib", runner.VRAM_MIB))
     cal = runner._calibrator(ctx.paths)
     landmarks = DEFAULT_PITCH.landmarks()
+    cfg = task.get("calibrator", {})
+    fit_kw = {**runner._thresholds(cfg), **_solve_kw(cfg)}
     solver_errors = 0
 
     def fit(chunk, which):
         nonlocal solver_errors
-        fits = cal.fit([f[:, :, ::-1] for f in chunk], which=which)
+        fits = cal.fit([f[:, :, ::-1] for f in chunk], which=which, **fit_kw)
         solver_errors += len(getattr(cal, "last_errors", {}))
         return fits
 
@@ -581,6 +592,7 @@ def vleague_task(task: dict, ctx) -> dict:
             failed[key] = f"{type(e).__name__}: {e}"
     if not per:
         raise RuntimeError(f"no frame scored: {failed}")
+    total = len(per) + len(failed)         # a frame that raised is still a labelled frame
     errs = [f["error_m"] for f in per.values() if f["error_m"] is not None]
     lab, lab_none = [], 0
     for key in sorted(k for k, m in meta.items() if m["relabel"]):
@@ -593,9 +605,9 @@ def vleague_task(task: dict, ctx) -> dict:
             lab_none += 1
         else:
             lab.append(e)
-    agg = {"frames": len(per), "uncalibrated": len(per) - len(errs),
+    agg = {"frames": total, "failed": len(failed), "uncalibrated": len(per) - len(errs),
            "median_error_m": float(np.median(errs)) if errs else None,
-           "share_under_1m": sum(e < 1.0 for e in errs) / len(per),
+           "share_under_1m": sum(e < 1.0 for e in errs) / total,
            "jitter_switch_m": _pair_weighted([(f["jitter"]["switch_m"], f["jitter"]["pairs_switch"])
                                               for f in per.values()]),
            "jitter_between_m": _pair_weighted([(f["jitter"]["between_m"],
