@@ -161,6 +161,16 @@ Where the team errors come from, measured on the 58 valid clips (first nightly p
 - **V.League labels:** scored on held-out landmarks; the user chose a single annotation pass, so
   inter-annotator error is not measured and is omitted from results. The held-out half is frozen
   after label review.
+- **V.League frames:** 15 per match, spread evenly over the match from pitch-coloured candidates
+  every 30 s. Grass also fills close-ups, so the green test alone let 14 of 45 unlabelable shots
+  through; 17 close-ups were rejected by hand (`vleague-sample --reject`, recorded in the
+  manifest), never by a model, which would bias the set toward frames the calibrator already
+  handles. The scored frame is the window centre; keyframes fall every 10 frames from the window
+  start, so the centre is calibrated by the camera tracker between keyframes. The error therefore
+  measures the whole calibration path, not a single solve; `per_frame.source` records which.
+- **V.League label checks:** labels are checked without the model before freezing. Every triangle
+  of labelled points must turn the same way in the image as on the pitch, which catches
+  left/right and far/near swaps; the labelling page flags these live.
 - **Noise:** the nightly suite runs the same commit twice; a change smaller than that spread is
   reported as no change.
 - **Footage:** SoccerNet frames are copyrighted broadcast; used for internal scoring only.
