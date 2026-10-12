@@ -4,6 +4,7 @@
 set -euo pipefail
 ROOT="$1"; SRC="$2"
 TORCH_PIN="2.7.1+cu128"
+TORCHVISION_PIN="0.22.1"
 TRACKEVAL_SHA=9c25232f6f2b56c9f203f1eb55784ff1e97df683
 CALIB_SHA=ab38f461bec729fead86b6986839de1bb826f16d
 export UV_CACHE_DIR="$ROOT/cache/uv" PIP_CACHE_DIR="$ROOT/cache/pip" HF_HOME="$ROOT/cache/hf" \
@@ -19,6 +20,9 @@ mkdir -p "$ROOT"/{bin,cache,data,runs,src,ext}
 # only brings the dependencies.
 [ -x "$ROOT/venv/bin/python" ] || "$ROOT/bin/uv" venv -q --seed --system-site-packages \
   --python /usr/bin/python3 "$ROOT/venv"
+# A host without a system torch (iec4090) gets the same pinned wheels inside the venv.
+"$ROOT/venv/bin/python" -c "import torch" 2>/dev/null || "$ROOT/venv/bin/pip" install -q "torch==${TORCH_PIN%+*}" "torchvision==$TORCHVISION_PIN" --index-url https://download.pytorch.org/whl/cu128
+
 "$ROOT/venv/bin/pip" install -q "$SRC[dev,calib]"
 "$ROOT/venv/bin/python" - "$TORCH_PIN" <<'PY'
 import sys, torch

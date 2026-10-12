@@ -1399,3 +1399,14 @@ def test_orientation_suspects_needs_three_points_and_flags_a_flipped_triangle():
     a, b, c = trio
     swapped = {a: pts[b], b: pts[a], c: pts[c]}
     assert vleague.orientation_suspects(swapped, LANDMARKS) == sorted(trio)
+
+def test_vleague_suite_carries_the_quick_and_milestone_tasks_unchanged():
+    # Lets a host without the GSR / SN-Calibration data (iec4090) score V.League alone; the
+    # tasks must stay identical to the ones the main suites run.
+    from footlytics.bench.runner import load_suite
+    by_id = {t["id"]: t for s in ("quick", "milestone") for t in load_suite(s)["tasks"]}
+    suite = load_suite("vleague")
+    assert suite["name"] == "vleague"
+    assert [t["id"] for t in suite["tasks"]] == ["vleague-dev", "vleague-frozen"]
+    for t in suite["tasks"]:
+        assert t == by_id[t["id"]]
