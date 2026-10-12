@@ -343,7 +343,7 @@ def test_post_a_point_is_on_disk_and_null_deletes_it(served):
                        "frames": {KEY_A: {"pen_area_LT_front": [812.5, 403.0]}}}
     status, body = served.post({"frame": KEY_A, "landmark": "pen_area_LT_front", "uv": None})
     assert status == 200 and body["points"] == {}
-    assert "pen_area_LT_front" not in json.loads(served.labels.read_text())["frames"].get(KEY_A, {})
+    assert json.loads(served.labels.read_text())["frames"] == {}
 
 
 def test_post_moves_a_point_and_keeps_the_others(served):
@@ -377,7 +377,8 @@ def test_post_frame_not_in_the_manifest_or_bad_json_is_400(served):
     before = served.labels.read_bytes()
     assert served.post({"frame": "a/0000013", "landmark": "corner_LT", "uv": [1, 1]})[0] == 400
     assert served.post({"landmark": "corner_LT", "uv": [1, 1]})[0] == 400
-    req = urllib.request.Request(served.base + "/label", data=b"{not json", method="POST")
+    req = urllib.request.Request(served.base + "/label", data=b"{not json", method="POST",
+                                 headers={"Content-Type": "application/json"})
     with pytest.raises(urllib.error.HTTPError) as e:
         urllib.request.urlopen(req)
     assert e.value.code == 400
@@ -537,3 +538,112 @@ def test_cli_vleague_label_creates_the_file_and_prints_the_url(tmp_path, monkeyp
     assert r.exit_code == 0, r.output
     assert "http://127.0.0.1:" in r.output
     assert json.loads(labels.read_text()) == _labels_doc({})
+
+
+# --- fix round 1: pruning, huge numbers, failing writes, concurrency, request hardening -----
+
+def test_deleting_the_last_point_removes_the_frame_entry_and_never_creates_one(served):
+    served.post({"frame": KEY_A, "landmark": "corner_LT", "uv": [10, 20]})
+    served.post({"frame": KEY_A, "landmark": "centre_spot", "uv": [30, 40]})
+    served.post({"frame": KEY_A, "landmark": "corner_LT", "uv": None})
+    assert json.loads(served.labels.read_text())["frames"] == {KEY_A: {"centre_spot": [30, 40]}}
+    served.post({"frame": KEY_A, "landmark": "centre_spot", "uv": None})
+    assert json.loads(served.labels.read_text())["frames"] == {}
+    status, body = served.post({"frame": KEY_B, "landmark": "corner_LT", "uv": None})
+    assert status == 200 and body["points"] == {}
+    assert json.loads(served.labels.read_text())["frames"] == {}
+
+
+def _raw_post(served, raw: bytes, ctype="application/json", host=None):
+    headers = {"Content-Type": ctype} if ctype else {}
+    if host:
+        headers["Host"] = host
+    req = urllib.request.Request(served.base + "/label", data=raw, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, r.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+
+
+def test_huge_or_non_finite_numbers_are_400_not_a_dropped_connection(served):
+    before = served.labels.read_bytes()
+    body = ('{"frame": "%s", "landmark": "corner_LT", "uv": [1%s, 1]}' % (KEY_A, "0" * 3000))
+    assert _raw_post(served, body.encode())[0] == 400
+    for uv in ("[1e400, 1]", "[-1e400, 1]", "[NaN, 1]", "[Infinity, 1]", "[20000, 1]", "[1, -10001]"):
+        raw = ('{"frame": "%s", "landmark": "corner_LT", "uv": %s}' % (KEY_A, uv)).encode()
+        assert _raw_post(served, raw)[0] == 400, uv
+    assert served.labels.read_bytes() == before
+
+
+def test_load_labels_and_save_label_reject_a_huge_int_with_value_error(tmp_path):
+    with pytest.raises(ValueError, match="corner_LT"):
+        _load(tmp_path, _labels_doc({KEY_A: {"corner_LT": [10 ** 3000, 1]}}))
+    p = tmp_path / "l.json"
+    p.write_text(json.dumps(_labels_doc({})))
+    with pytest.raises(ValueError, match="corner_LT"):
+        vleague.save_label(p, KEY_A, "corner_LT", [10 ** 3000, 1])
+
+
+def test_a_failing_write_keeps_the_old_file_intact_and_is_a_5xx(served, monkeypatch):
+    served.post({"frame": KEY_A, "landmark": "corner_LT", "uv": [10, 20]})
+    before = served.labels.read_bytes()
+
+    def boom(src, dst):
+        raise OSError("disk full")
+    monkeypatch.setattr(vleague.os, "replace", boom)
+    status, _ = served.post({"frame": KEY_A, "landmark": "centre_spot", "uv": [30, 40]})
+    assert 500 <= status < 600
+    monkeypatch.undo()
+    assert served.labels.read_bytes() == before
+    assert json.loads(served.labels.read_text())["frames"] == {KEY_A: {"corner_LT": [10, 20]}}
+    assert sorted(x.name for x in served.labels.parent.iterdir() if x.name.startswith(".tmp")) == []
+    assert served.post({"frame": KEY_A, "landmark": "centre_spot", "uv": [30, 40]})[0] == 200
+
+
+def test_concurrent_posts_of_different_landmarks_all_land(served):
+    from footlytics.geometry.pitch import DEFAULT_PITCH
+
+    names = list(DEFAULT_PITCH.landmarks())[:24]
+    results = {}
+
+    def worker(i, name):
+        results[name] = served.post({"frame": KEY_A if i % 2 else KEY_B, "landmark": name,
+                                     "uv": [float(i), float(100 + i)]})[0]
+    threads = [threading.Thread(target=worker, args=(i, n)) for i, n in enumerate(names)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert set(results.values()) == {200}
+    frames = json.loads(served.labels.read_text())["frames"]
+    expect = {KEY_A: {}, KEY_B: {}}
+    for i, n in enumerate(names):
+        expect[KEY_A if i % 2 else KEY_B][n] = [float(i), float(100 + i)]
+    assert frames == expect
+
+
+def test_post_label_requires_a_json_content_type(served):
+    before = served.labels.read_bytes()
+    raw = json.dumps({"frame": KEY_A, "landmark": "corner_LT", "uv": [1, 1]}).encode()
+    assert _raw_post(served, raw, ctype="text/plain")[0] == 415
+    assert _raw_post(served, raw, ctype=None)[0] == 415
+    assert _raw_post(served, raw, ctype="application/x-www-form-urlencoded")[0] == 415
+    assert served.labels.read_bytes() == before
+    assert _raw_post(served, raw, ctype="application/json; charset=utf-8")[0] == 200
+
+
+def test_requests_with_a_foreign_host_header_are_403(served):
+    port = served.server.server_address[1]
+    raw = json.dumps({"frame": KEY_A, "landmark": "corner_LT", "uv": [1, 1]}).encode()
+    for host in ("evil.example", f"evil.example:{port}", f"127.0.0.1:{port + 1}", "127.0.0.1"):
+        assert _raw_post(served, raw, host=host)[0] == 403, host
+        req = urllib.request.Request(served.base + "/labels", headers={"Host": host})
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req)
+        assert e.value.code == 403, host
+    assert json.loads(served.labels.read_text())["frames"] == {}
+    for host in (f"127.0.0.1:{port}", f"localhost:{port}"):
+        assert _raw_post(served, raw, host=host)[0] == 200, host
+        req = urllib.request.Request(served.base + "/labels", headers={"Host": host})
+        assert urllib.request.urlopen(req).status == 200

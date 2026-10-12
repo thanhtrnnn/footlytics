@@ -77,7 +77,16 @@ def make_server(manifest_path, data_dir, labels_path, annotator: str, session: i
         def _text(self, status: int, msg: str) -> None:
             self._send(status, msg.encode(), "text/plain; charset=utf-8")
 
+        def _host_ok(self) -> bool:
+            port = self.server.server_address[1]
+            if self.headers.get("Host") in (f"127.0.0.1:{port}", f"localhost:{port}"):
+                return True
+            self._text(403, "forbidden host")
+            return False
+
         def do_GET(self):
+            if not self._host_ok():
+                return
             path = unquote(urlsplit(self.path).path)
             if path == "/":
                 self._send(200, page, "text/html; charset=utf-8")
@@ -102,8 +111,12 @@ def make_server(manifest_path, data_dir, labels_path, annotator: str, session: i
                 self._text(404, "not found")
 
         def do_POST(self):
+            if not self._host_ok():
+                return
             if urlsplit(self.path).path != "/label":
                 return self._text(404, "not found")
+            if self.headers.get_content_type() != "application/json":
+                return self._text(415, "Content-Type must be application/json")
             try:
                 n = int(self.headers.get("Content-Length", ""))
                 if not 0 < n <= MAX_BODY:
@@ -123,6 +136,8 @@ def make_server(manifest_path, data_dir, labels_path, annotator: str, session: i
                     doc = vleague.save_label(labels_path, key, name, uv)
             except ValueError as e:
                 return self._text(400, str(e))
+            except Exception as e:  # disk full, file removed: the old file is still intact
+                return self._text(500, f"could not save: {e}")
             self._json(200, {"frame": key, "points": doc["frames"].get(key, {})})
 
     return ThreadingHTTPServer(("127.0.0.1", port), Handler)

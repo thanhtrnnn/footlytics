@@ -13,7 +13,7 @@
   html, body { height: 100%; margin: 0; }
   body {
     background: var(--bg); color: var(--text);
-    font: 13px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
     display: flex; flex-direction: column; overflow: hidden;
   }
   header {
@@ -23,13 +23,14 @@
   #guide { flex: 1; font-size: 14px; font-weight: 600; color: var(--accent); }
   #who { color: var(--dim); white-space: nowrap; }
   #status {
-    min-width: 92px; text-align: center; padding: 2px 10px; border-radius: 10px;
+    min-width: 92px; text-align: center; padding: 4px 12px; border-radius: 10px;
     border: 1px solid var(--line); background: var(--panel); color: var(--dim);
     font-weight: 600; user-select: none;
   }
   #status[data-state="saved"] { color: var(--ok); border-color: #2b6b38; }
   #status[data-state="saving"] { color: var(--accent); border-color: #7a6410; }
   #status[data-state="failed"] { color: #fff; background: #a52a2a; border-color: var(--bad); cursor: pointer; }
+  #status[data-state="error"] { color: #fff; background: #a52a2a; border-color: var(--bad); }
   main { flex: 1; min-height: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr) 320px; }
   aside, section { min-height: 0; min-width: 0; }
   #left, #right { background: var(--panel); overflow-y: auto; }
@@ -111,6 +112,9 @@
 const DATA = /*DATA*/null;
 const W = DATA.size[0], H = DATA.size[1];
 const MAX_ZOOM = 8, LOUPE = 4, LOUPE_PX = 160, HIT_PX = 10, MIN_POINTS = 3;
+const DRAG_PX = 4;                 // screen px a press must travel before it drags
+const ZOOM_PER_PX = Math.log(1.2) / 100;   // one 100 px mouse notch = 1.2x
+const MAX_WHEEL_PX = 120;          // clamp so one flick cannot jump the zoom
 const $ = (id) => document.getElementById(id);
 const SVGNS = "http://www.w3.org/2000/svg";
 
@@ -120,7 +124,7 @@ const state = {
   labels: {},            // frame key -> {landmark: [u, v]}
   selected: DATA.names[0],
   view: { z: 1, px: 0, py: 0 },
-  img: null, imgKey: null, imgOk: false,
+  img: null, imgKey: null, imgOk: false, loadError: null,
   mouse: null,           // {x, y} in canvas CSS px, null when outside
   drag: null,
 };
@@ -239,11 +243,20 @@ function paintLoupe() {
 
 // ---- saving ----------------------------------------------------------------------------
 let chain = Promise.resolve(), inflight = 0, failed = [];
+let saveState = "saved";
 function setStatus(s) {
+  saveState = s;
+  renderStatus();
+}
+function renderStatus() {
   const el = $("status");
-  el.dataset.state = s;
-  el.textContent = s === "failed" ? "save failed" : s === "saving" ? "saving..." : "saved";
-  el.title = s === "failed" ? "Click to retry the unsaved changes" : "Every change is saved to the label file at once";
+  if (saveState === "saved" && state.loadError) {
+    el.dataset.state = "error"; el.textContent = state.loadError; el.title = "The frame image could not be read from the server";
+    return;
+  }
+  el.dataset.state = saveState;
+  el.textContent = saveState === "failed" ? "save failed" : saveState === "saving" ? "saving..." : "saved";
+  el.title = saveState === "failed" ? "Click to retry the unsaved changes" : "Every change is saved to the label file at once";
 }
 function send(op) {
   inflight++;
@@ -307,7 +320,9 @@ canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
   const m = pos(e), v = state.view;
   const [iu, iv] = toImage(m.x, m.y);
-  v.z = Math.min(MAX_ZOOM, Math.max(1, v.z * Math.exp(-e.deltaY * 0.0015)));
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 800 : 1;   // lines, pages -> px
+  const dy = Math.max(-MAX_WHEEL_PX, Math.min(MAX_WHEEL_PX, e.deltaY * unit));
+  v.z = Math.min(MAX_ZOOM, Math.max(1, v.z * Math.exp(-dy * ZOOM_PER_PX)));
   v.px = m.x - iu * scale();
   v.py = m.y - iv * scale();
   state.mouse = m;
@@ -319,7 +334,8 @@ canvas.addEventListener("mousedown", (e) => {
   const m = pos(e), name = hit(m.x, m.y);
   if (name) {
     state.selected = name; renderLandmarks(); renderPitch();
-    state.drag = { type: "point", name };
+    const uv = points()[name], [iu, iv] = toImage(m.x, m.y);
+    state.drag = { type: "point", name, sx: m.x, sy: m.y, off: [uv[0] - iu, uv[1] - iv], moved: false };
   } else {
     state.drag = { type: "pan", sx: m.x, sy: m.y, px0: state.view.px, py0: state.view.py, moved: false };
   }
@@ -331,11 +347,14 @@ window.addEventListener("mousemove", (e) => {
   state.mouse = inside || state.drag ? m : null;
   const d = state.drag;
   if (d && d.type === "point") {
-    const [u, v] = clampImg(...toImage(m.x, m.y));
-    setPoint(d.name, [round2(u), round2(v)]);
-    d.moved = true;
+    if (!d.moved && Math.hypot(m.x - d.sx, m.y - d.sy) >= DRAG_PX) d.moved = true;
+    if (d.moved) {
+      const [iu, iv] = toImage(m.x, m.y);
+      const [u, v] = clampImg(iu + d.off[0], iv + d.off[1]);
+      setPoint(d.name, [round2(u), round2(v)]);
+    }
   } else if (d && d.type === "pan") {
-    if (!d.moved && Math.hypot(m.x - d.sx, m.y - d.sy) > 3) { d.moved = true; canvas.classList.add("panning"); }
+    if (!d.moved && Math.hypot(m.x - d.sx, m.y - d.sy) >= DRAG_PX) { d.moved = true; canvas.classList.add("panning"); }
     if (d.moved) { state.view.px = d.px0 + m.x - d.sx; state.view.py = d.py0 + m.y - d.sy; afterViewChange(); }
   }
   if (inside) {
@@ -416,10 +435,14 @@ function selectFrame(i) {
   state.cur = i;
   const f = state.frames[i];
   try { history.replaceState(null, "", "#" + f.key); } catch (e) { /* ignore */ }
-  state.imgOk = false; state.imgKey = f.key;
+  state.imgOk = false; state.imgKey = f.key; state.loadError = null; renderStatus();
   const img = new Image();
   img.onload = () => { if (state.imgKey === f.key) { state.img = img; state.imgOk = true; draw(); } };
-  img.onerror = () => { if (state.imgKey === f.key) { setStatus("failed"); console.error("cannot load frame", f.key); } };
+  img.onerror = () => {
+    if (state.imgKey !== f.key) return;
+    state.loadError = "frame failed to load";
+    renderStatus(); console.error("cannot load frame", f.key);
+  };
   img.src = "/frames/" + f.key + ".jpg";
   resetView(); renderFrames(); renderLandmarks(); renderPitch();
   document.querySelector('#frames li[data-current="true"]')?.scrollIntoView({ block: "nearest" });
@@ -522,7 +545,7 @@ async function start() {
     state.frames = await fl.json();
     state.labels = (await lb.json()).frames;
   } catch (e) {
-    console.error(e); setStatus("failed"); $("status").textContent = "load failed"; return;
+    console.error(e); state.loadError = "load failed"; renderStatus(); return;
   }
   renderFrames(); renderLandmarks(); renderPitch();
   const want = decodeURIComponent(location.hash.slice(1));

@@ -178,16 +178,23 @@ def _landmark_names() -> set[str]:
     return set(DEFAULT_PITCH.landmarks())
 
 
+COORD_LIMIT = 10_000
+
+
 def _check_point(name: str, uv, valid_names: set[str]) -> None:
     if name not in valid_names:
         raise ValueError(f"unknown landmark {name!r}")
-    ok = (isinstance(uv, (list, tuple)) and len(uv) == 2
-          and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in uv)
-          and all(math.isfinite(c) for c in uv))
-    if not ok:
-        raise ValueError(f"{name}: a point is [u, v] numbers, got {uv!r}")
-    if not (0 <= uv[0] <= SIZE[0] and 0 <= uv[1] <= SIZE[1]):
-        raise ValueError(f"{name}: {list(uv)} is outside the {SIZE[0]}x{SIZE[1]} image")
+    if not (isinstance(uv, (list, tuple)) and len(uv) == 2
+            and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in uv)):
+        raise ValueError(f"{name}: a point is [u, v] numbers, got {str(uv)[:60]!r}")
+    try:
+        u, v = float(uv[0]), float(uv[1])
+    except OverflowError:
+        raise ValueError(f"{name}: coordinate too large for a pixel position") from None
+    if not (math.isfinite(u) and math.isfinite(v)) or max(abs(u), abs(v)) > COORD_LIMIT:
+        raise ValueError(f"{name}: coordinates must be finite and within +-{COORD_LIMIT} px")
+    if not (0 <= u <= SIZE[0] and 0 <= v <= SIZE[1]):
+        raise ValueError(f"{name}: {[u, v]} is outside the {SIZE[0]}x{SIZE[1]} image")
 
 
 def new_labels(annotator: str, session: int) -> dict:
@@ -218,22 +225,36 @@ def load_labels(path, manifest: dict) -> dict:
 
 def _write_atomic(path: Path, doc: dict) -> None:
     tmp = path.with_name(f".tmp-{path.name}")
-    tmp.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w") as f:
+            f.write(json.dumps(doc, indent=1, sort_keys=True) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def save_label(path, key: str, landmark: str, uv) -> dict:
-    """Set (uv a point) or remove (uv None) one landmark of one frame; rewrite the file atomically."""
+    """Set (uv a point) or remove (uv None) one landmark of one frame; rewrite the file atomically.
+
+    A frame with no points is never stored: deleting its last point drops the entry.
+    """
     path = Path(path)
     if uv is not None:
         _check_point(landmark, uv, _landmark_names())
     elif landmark not in _landmark_names():
         raise ValueError(f"unknown landmark {landmark!r}")
     doc = json.loads(path.read_text())
-    points = doc["frames"].setdefault(key, {})
+    points = doc["frames"].get(key, {})
     if uv is None:
         points.pop(landmark, None)
     else:
         points[landmark] = list(uv)
+    if points:
+        doc["frames"][key] = points
+    else:
+        doc["frames"].pop(key, None)
     _write_atomic(path, doc)
     return doc
