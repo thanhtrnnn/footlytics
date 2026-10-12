@@ -921,3 +921,213 @@ def test_labelling_error_is_none_for_nearly_collinear_clicks_on_a_line():
 def test_labelling_error_is_none_when_pixels_are_collinear_though_the_pitch_points_are_not():
     a = {n: (400.0 + 300 * i, 500.0 + 0.5 * i) for i, n in enumerate(PEN_BOX)}   # 1.5 px sag
     assert vleague.labelling_error_m(a, dict(a), LANDMARKS, (1920, 1080)) is None
+
+
+# ------------------------------------------------------------------ the vleague task kind
+
+from footlytics.bench import runner  # noqa: E402
+from footlytics.bench.paths import BenchPaths  # noqa: E402
+from footlytics.geometry.calib_nn import CameraFit  # noqa: E402
+
+
+class _VCal:
+    """Every keyframe solves to the true broadcast camera (or to None)."""
+    none = False
+
+    def fit(self, frames, which=None, **kw):
+        if self.none:
+            return {i: None for i in (which or range(len(frames)))}
+        return {i: CameraFit(BROADCAST, 1.0, H_TRUE) for i in (which or range(len(frames)))}
+
+
+class _IdTracker:
+    def __init__(self, frame, mask=None):
+        pass
+
+    def update(self, frame, mask=None):
+        return np.eye(3)
+
+
+def _vl_manifest(frames: dict) -> dict:
+    return {"version": 1, "size": [1920, 1080], "window": 12,
+            "matches": {"m1": {"video": "m1.mp4", "sha256": "0" * 64, "fps": 50.0,
+                               "frames": frames}}}
+
+
+def _vl_window(root: Path, match: str, idx: int) -> None:
+    d = root / "data" / "vleague" / match / f"{idx:07d}"
+    d.mkdir(parents=True)
+    rng = np.random.default_rng(idx)
+    for off in range(-12, 13):
+        cv2.imwrite(str(d / f"{off:+03d}.jpg"), rng.integers(0, 255, (48, 64, 3), dtype=np.uint8))
+
+
+def _vl_labels(frames: dict, shift: float = 0.0) -> dict:
+    return {"version": 1, "annotator": "A", "session": 1, "image_size": [1920, 1080],
+            "frames": {k: {n: [u + shift, v] for n, (u, v) in visible_points().items()}
+                       for k in frames}}
+
+
+@pytest.fixture
+def vl(tmp_path, monkeypatch):
+    frames = {"0000100": {"split": "dev", "relabel": False},
+              "0000200": {"split": "dev", "relabel": False},
+              "0000300": {"split": "frozen", "relabel": True}}
+    manifest = _vl_manifest(frames)
+    repo = tmp_path / "repo"
+    (repo / "bench" / "vleague" / "labels").mkdir(parents=True)
+    (repo / "bench" / "vleague" / "manifest.json").write_text(json.dumps(manifest))
+    for idx in (100, 200, 300):
+        _vl_window(tmp_path, "m1", idx)
+    cal = _VCal()
+    monkeypatch.setattr(vleague, "REPO", repo)
+    monkeypatch.setattr(runner, "_calibrator", lambda p: cal)
+    monkeypatch.setattr(runner, "require_vram", lambda mib: None)
+    monkeypatch.setattr(runner, "TRACKER", _IdTracker)
+    monkeypatch.setattr(runner, "contention", lambda: {"load1": 0.0})
+    monkeypatch.setattr(runner, "require_disk", lambda *a, **k: None)
+
+    class Env:
+        pass
+    e = Env()
+    e.repo, e.cal, e.manifest, e.paths = repo, cal, manifest, BenchPaths(tmp_path)
+    e.write = lambda name, doc: (repo / "bench" / "vleague" / "labels" / name).write_text(
+        json.dumps(doc))
+    e.write("a.json", {**_vl_labels({"m1/0000100": 1, "m1/0000200": 1, "m1/0000300": 1})})
+
+    def run(**task):
+        t = {"id": "v", "kind": "vleague", "split": "dev",
+             "labels": ["bench/vleague/labels/a.json"], "every": 10, "gate_px": 25, **task}
+        row = runner.run_suite("t", "r", e.paths, "sha", "h",
+                               suite_spec={"name": "t", "tasks": [t]})
+        return row["tasks"]["v"]
+    e.run = run
+    return e
+
+
+def test_vleague_perfect_camera_scores_zero_error_and_all_under_one_metre(vl):
+    t = vl.run()
+    assert t["status"] == "complete", t
+    a = t["aggregate"]
+    assert a["frames"] == 2 and a["uncalibrated"] == 0
+    assert a["median_error_m"] == pytest.approx(0, abs=1e-6)
+    assert a["share_under_1m"] == 1.0
+    f = t["per_frame"]["m1/0000100"]
+    assert f["n_landmarks"] == len(visible_points()) and f["source"] in ("keyframe", "bridged")
+    assert f["error_m"] == pytest.approx(0, abs=1e-6) and "jitter" in f
+    assert "labelling_error_m" not in a and a["jitter_switch_m"] is None
+
+
+def test_vleague_uncalibrated_frames_count_against_the_share(vl):
+    vl.cal.none = True
+    a = vl.run()["aggregate"]
+    assert a["frames"] == 2 and a["uncalibrated"] == 2
+    assert a["share_under_1m"] == 0.0 and a["median_error_m"] is None
+    f = vl.run()["per_frame"]["m1/0000100"]
+    assert f["error_m"] is None and f["source"] == "none"
+
+
+def test_vleague_one_uncalibrated_frame_halves_the_share(vl, monkeypatch):
+    calls = []
+
+    class Half(_VCal):
+        def fit(self, frames, which=None, **kw):
+            calls.append(1)
+            if len(calls) == 2:
+                return {i: None for i in which}
+            return super().fit(frames, which, **kw)
+    monkeypatch.setattr(runner, "_calibrator", lambda p: Half())
+    a = vl.run()["aggregate"]
+    assert a["frames"] == 2 and a["uncalibrated"] == 1 and a["share_under_1m"] == 0.5
+    assert a["median_error_m"] == pytest.approx(0, abs=1e-6)
+
+
+def test_vleague_split_dev_scores_only_dev_and_frozen_only_frozen(vl):
+    assert sorted(vl.run()["per_frame"]) == ["m1/0000100", "m1/0000200"]
+    vl.digest_ok = None
+    d = vleague.frozen_digest(vleague.load_labels(vl.repo / "bench/vleague/labels/a.json",
+                                                  vl.manifest), vl.manifest)
+    t = vl.run(split="frozen", frozen_sha256={"bench/vleague/labels/a.json": d})
+    assert t["status"] == "complete", t
+    assert sorted(t["per_frame"]) == ["m1/0000300"]
+
+
+def test_frozen_digest_ignores_dev_frames_but_not_frozen_ones(vl):
+    path = "bench/vleague/labels/a.json"
+    doc = json.loads((vl.repo / path).read_text())
+    d = vleague.frozen_digest(doc, vl.manifest)
+    assert len(d) == 64
+    doc["frames"]["m1/0000100"]["halfway_T"] = [1.0, 2.0]
+    vl.write("a.json", doc)
+    assert vl.run(split="frozen", frozen_sha256={path: d})["status"] == "complete"
+    doc["frames"]["m1/0000300"]["halfway_T"] = [1.0, 2.0]
+    vl.write("a.json", doc)
+    t = vl.run(split="frozen", frozen_sha256={path: d})
+    assert t["status"] == "failed" and "frozen labels changed" in t["error"]
+
+
+def test_frozen_pending_fails_with_a_not_frozen_message(vl):
+    t = vl.run(split="frozen", frozen_sha256={"bench/vleague/labels/a.json": "PENDING"})
+    assert t["status"] == "failed" and "not frozen yet" in t["error"]
+
+
+def test_missing_window_jpeg_fails_naming_the_frame(vl):
+    (vl.paths.data / "vleague" / "m1" / "0000200" / "+05.jpg").unlink()
+    t = vl.run()
+    assert t["status"] == "failed" and "m1/0000200" in t["error"] and "+05.jpg" in t["error"]
+
+
+def test_vleague_labelling_error_is_a_median_with_counts(vl):
+    vl.write("b.json", _vl_labels({"m1/0000300": 1}, shift=2.0))
+    t = vl.run(relabels=["bench/vleague/labels/b.json"])
+    a = t["aggregate"]
+    assert a["labelling_frames"] + a["labelling_none"] == 1
+    assert a["labelling_frames"] == 1 and a["labelling_error_m"] > 0
+
+
+def test_pair_weighted_mean():
+    f = vleague._pair_weighted
+    assert f([(1.0, 1), (4.0, 2)]) == pytest.approx(3.0)
+    assert f([(None, 0), (None, 0)]) is None
+
+
+# ------------------------------------------------------------------ shipping data
+
+def test_ship_data_replaces_atomically_and_rejects_unsafe_names():
+    from footlytics.bench import remote as rm
+    from tests.test_bench_remote import FakeSsh, ROOT
+    ssh = FakeSsh(ROOT)
+    d = rm.Remote("h", runner=ssh).ship_data("vleague", b"tar")
+    assert d == "/home/iec/footlytics-bench/data/vleague"
+    cmd = next(c for c in ssh.calls if "tar -x" in c)
+    assert "data/vleague.tmp" in cmd and "mv " in cmd
+    with pytest.raises(ValueError):
+        rm.Remote("h", runner=FakeSsh(ROOT)).ship_data("../x", b"")
+
+
+def test_cli_ship_data_tars_only_the_windows(tmp_path, monkeypatch):
+    import io
+    import tarfile
+
+    from typer.testing import CliRunner
+
+    from footlytics.bench import cli
+    d = tmp_path / "data" / "vleague" / "m1" / "0000100"
+    d.mkdir(parents=True)
+    (d / "+00.jpg").write_bytes(b"j")
+    (tmp_path / "data" / "vleague" / "index.html").write_text("x")
+    (tmp_path / "data" / "vleague" / "m1" / "notes.txt").write_text("x")
+    got = []
+
+    class R:
+        def __init__(self, host):
+            pass
+
+        def ship_data(self, name, archive):
+            got.append((name, sorted(tarfile.open(fileobj=io.BytesIO(archive)).getnames())))
+            return "/x"
+    monkeypatch.setattr(cli, "REPO", tmp_path)
+    monkeypatch.setattr(cli, "_remote", R)
+    r = CliRunner().invoke(cli.bench_app, ["ship-data", "vleague", "--remote", "h"])
+    assert r.exit_code == 0, r.output
+    assert got == [("vleague", ["m1/0000100/+00.jpg"])]

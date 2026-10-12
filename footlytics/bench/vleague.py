@@ -472,3 +472,138 @@ def labelling_error_m(a: dict, b: dict, landmarks: dict, image_size) -> float | 
         d = np.linalg.norm(apply_homography(cal.H, pa) - apply_homography(cal.H, pb), axis=1)
     d = d[np.isfinite(d)]
     return float(np.median(d)) if len(d) else None
+
+
+# ------------------------------------------------------------------ the benchmark task
+
+from . import runner  # noqa: E402  (runner imports this module last, so this does not cycle)
+
+REPO = Path(__file__).resolve().parents[2]
+MANIFEST_REL = "bench/vleague/manifest.json"
+PENDING = "PENDING"
+
+
+def frozen_digest(labels: dict, manifest: dict) -> str:
+    """sha256 of the canonical JSON of the frozen frames' entries of a label document.
+
+    Dev frames can still be corrected after the freeze; any change to a frozen frame changes this.
+    """
+    frames = manifest_frames(manifest)
+    mine = {k: v for k, v in labels["frames"].items() if frames[k]["split"] == "frozen"}
+    blob = json.dumps(mine, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+def _pair_weighted(items: list[tuple[float | None, int]]) -> float | None:
+    """Mean of per-window means weighted by their pair counts; None when there are no pairs."""
+    pairs = sum(n for m, n in items if m is not None)
+    if pairs == 0:
+        return None
+    return float(sum(m * n for m, n in items if m is not None) / pairs)
+
+
+def _window_paths(data: Path, key: str) -> list[Path]:
+    match, idx = key.rsplit("/", 1)
+    return [data / "vleague" / match / idx / f"{off:+03d}.jpg" for off in range(-WINDOW, WINDOW + 1)]
+
+
+def _check_frozen(task: dict, labels_paths: list[str], docs: dict, manifest: dict) -> None:
+    pins = task.get("frozen_sha256")
+    if task["split"] == "frozen" and not pins:
+        raise RuntimeError("split frozen needs frozen_sha256 for each labels file")
+    for rel in labels_paths if pins else []:
+        want = pins.get(rel)
+        if want is None:
+            raise RuntimeError(f"frozen_sha256 has no entry for {rel}")
+        if want == PENDING:
+            raise RuntimeError(f"{rel}: the labels are not frozen yet (frozen_sha256 is PENDING)")
+        if frozen_digest(docs[rel], manifest) != want:
+            raise RuntimeError(f"frozen labels changed: {rel} does not match its frozen_sha256")
+
+
+@runner.kind("vleague")
+def vleague_task(task: dict, ctx) -> dict:
+    """The V.League mini-GT: landmark error on labelled frames, % under 1 m, jitter, label noise."""
+    from ..geometry.clip_calib import ClipCalibrator, static_overlay_mask
+    from ..geometry.pitch import DEFAULT_PITCH
+
+    split = task["split"]
+    every, gate = task.get("every", 10), float(task.get("gate_px", 25.0))
+    manifest = json.loads((REPO / MANIFEST_REL).read_text())
+    meta = manifest_frames(manifest)
+    paths = list(task["labels"])
+    docs = {p: load_labels(REPO / p, manifest) for p in paths}
+    _check_frozen(task, paths, docs, manifest)
+    rel_docs = [load_labels(REPO / p, manifest) for p in task.get("relabels", [])]
+
+    points: dict[str, dict] = {}
+    for p in paths:
+        for key, pts in docs[p]["frames"].items():
+            if pts and meta[key]["split"] == split:
+                points.setdefault(key, pts)
+    keys = sorted(points)
+    for key in keys:                      # every window is there before any GPU time is spent
+        for jpg in _window_paths(ctx.paths.data, key):
+            if not jpg.exists():
+                raise FileNotFoundError(f"frame {key}: missing window image {jpg.name} ({jpg})")
+    runner.require_vram(task.get("vram_mib", runner.VRAM_MIB))
+    cal = runner._calibrator(ctx.paths)
+    landmarks = DEFAULT_PITCH.landmarks()
+    solver_errors = 0
+
+    def fit(chunk, which):
+        nonlocal solver_errors
+        fits = cal.fit([f[:, :, ::-1] for f in chunk], which=which)
+        solver_errors += len(getattr(cal, "last_errors", {}))
+        return fits
+
+    per, failed = {}, {}
+    for key in keys:
+        try:
+            frames = []
+            for jpg in _window_paths(ctx.paths.data, key):
+                img = runner.cv2.imread(str(jpg))
+                if img is None:
+                    raise ValueError(f"unreadable image {jpg.name}")
+                frames.append(img)
+            mask = static_overlay_mask(frames)
+            res = ClipCalibrator(fit, every=every, gate_px=gate,
+                                 tracker_factory=runner.TRACKER).run(frames, mask)
+            names = sorted(points[key])
+            truth = np.array([landmarks[n] for n in names], float)
+            grays = [runner.cv2.cvtColor(f, runner.cv2.COLOR_BGR2GRAY) for f in frames]
+            jit = jitter_m([r.H_img_to_pitch for r in res], grays, truth,
+                           [r.source for r in res])
+            centre = res[WINDOW]
+            per[key] = {"error_m": frame_error(centre.H_img_to_pitch, points[key], landmarks),
+                        "n_landmarks": len(names), "source": centre.source, "jitter": jit}
+        except Exception as e:  # noqa: BLE001
+            failed[key] = f"{type(e).__name__}: {e}"
+    if not per:
+        raise RuntimeError(f"no frame scored: {failed}")
+    errs = [f["error_m"] for f in per.values() if f["error_m"] is not None]
+    lab, lab_none = [], 0
+    for key in sorted(k for k, m in meta.items() if m["relabel"]):
+        a = next((d["frames"][key] for d in (docs[p] for p in paths) if d["frames"].get(key)), None)
+        b = next((d["frames"][key] for d in rel_docs if d["frames"].get(key)), None)
+        if a is None or b is None:
+            continue
+        e = labelling_error_m(a, b, landmarks, SIZE)
+        if e is None:
+            lab_none += 1
+        else:
+            lab.append(e)
+    agg = {"frames": len(per), "uncalibrated": len(per) - len(errs),
+           "median_error_m": float(np.median(errs)) if errs else None,
+           "share_under_1m": sum(e < 1.0 for e in errs) / len(per),
+           "jitter_switch_m": _pair_weighted([(f["jitter"]["switch_m"], f["jitter"]["pairs_switch"])
+                                              for f in per.values()]),
+           "jitter_between_m": _pair_weighted([(f["jitter"]["between_m"],
+                                                f["jitter"]["pairs_between"])
+                                               for f in per.values()]),
+           "jitter_pairs_skipped": sum(f["jitter"]["pairs_skipped"] for f in per.values()),
+           "solver_errors": solver_errors}
+    if rel_docs:
+        agg.update(labelling_error_m=float(np.median(lab)) if lab else None,
+                   labelling_frames=len(lab), labelling_none=lab_none)
+    return {"per_frame": per, "aggregate": agg, "failed": failed}

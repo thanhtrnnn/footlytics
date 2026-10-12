@@ -752,3 +752,5 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
            "seconds_per_match_minute": seconds_per_match_minute(total_s, total_frames)}
     return {"clips": per, "aggregate": agg, "failed": failed,
             "leakage": {"status": "unverified"}}
+
+from . import vleague  # noqa: E402,F401 - registers the "vleague" task kind

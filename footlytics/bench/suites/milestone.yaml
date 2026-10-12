@@ -19,3 +19,12 @@ tasks:
     clips: all
     predictions: baseline/SoccerNetGS-test.zip
     tracker: tracklab
+  - id: vleague-frozen
+    kind: vleague
+    split: frozen
+    labels: [bench/vleague/labels/labels-A-s1.json]
+    relabels: [bench/vleague/labels/labels-A-s2.json]
+    # filled in when the labels freeze (plan 4, Task 5); PENDING fails the task on purpose
+    frozen_sha256: {bench/vleague/labels/labels-A-s1.json: PENDING}
+    every: 10
+    gate_px: 25

@@ -142,6 +142,23 @@ def setup(remote: str = typer.Option(...),
     _guard(go)
 
 
+@bench_app.command("ship-data")
+def ship_data(name: str = typer.Argument(..., help="a folder of data/ in the repo, e.g. vleague"),
+              remote: str = typer.Option(...)) -> None:
+    """Copy data/<name> (the jitter-window JPEGs only) to the host's data directory."""
+    import io
+    import tarfile
+
+    src = REPO / "data" / name
+    if not src.is_dir():
+        raise typer.BadParameter(f"no {src}")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as t:
+        for p in sorted(src.rglob("*.jpg")):
+            t.add(str(p), arcname=str(p.relative_to(src)), recursive=False)
+    _guard(lambda: typer.echo(_remote(remote).ship_data(name, buf.getvalue())))
+
+
 @bench_app.command("fetch")
 def fetch(what: list[str] = typer.Argument(
               ..., help="gsr-valid gsr-test calib-valid calib-test baseline"),
