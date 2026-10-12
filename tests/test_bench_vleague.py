@@ -1018,6 +1018,11 @@ def test_vleague_perfect_camera_scores_zero_error_and_all_under_one_metre(vl):
     assert "labelling_error_m" not in a and a["jitter_switch_m"] is None
 
 
+def test_vleague_scoreboard_headline_is_the_share_under_one_metre(vl):
+    from footlytics.bench.results import headline
+    assert headline(vl.run()) == ("share_under_1m", 1.0, None)
+
+
 def test_vleague_uncalibrated_frames_count_against_the_share(vl):
     vl.cal.none = True
     a = vl.run()["aggregate"]

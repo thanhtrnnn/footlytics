@@ -605,9 +605,10 @@ def vleague_task(task: dict, ctx) -> dict:
             lab_none += 1
         else:
             lab.append(e)
-    agg = {"frames": total, "failed": len(failed), "uncalibrated": len(per) - len(errs),
+    # share_under_1m first: the scoreboard headline is the first aggregate key.
+    agg = {"share_under_1m": sum(e < 1.0 for e in errs) / total,
            "median_error_m": float(np.median(errs)) if errs else None,
-           "share_under_1m": sum(e < 1.0 for e in errs) / total,
+           "frames": total, "failed": len(failed), "uncalibrated": len(per) - len(errs),
            "jitter_switch_m": _pair_weighted([(f["jitter"]["switch_m"], f["jitter"]["pairs_switch"])
                                               for f in per.values()]),
            "jitter_between_m": _pair_weighted([(f["jitter"]["between_m"],
