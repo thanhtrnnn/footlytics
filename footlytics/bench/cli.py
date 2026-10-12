@@ -183,3 +183,24 @@ def scoreboard() -> None:
     from .results import RESULTS_DIR, write_scoreboard
 
     typer.echo(str(write_scoreboard(RESULTS_DIR)))
+
+
+@bench_app.command("vleague-sample")
+def vleague_sample(videos: list[Path] = typer.Argument(..., help="V.League match videos"),
+                   data: Path = typer.Option(Path("data/vleague"),
+                                             help="where the window JPEGs go (not in git)"),
+                   manifest: Path = typer.Option(Path("bench/vleague/manifest.json"),
+                                                 help="frame indices, splits, video sha256")) -> None:
+    """Pick 15 pitch frames per match, write their +-12 frame windows and the manifest."""
+    from . import vleague
+
+    entries = {}
+    for v in videos:
+        if not v.exists():
+            raise typer.BadParameter(f"no such video: {v}")
+        mid = vleague.match_id_from_name(v.name)
+        typer.echo(f"{mid}: sampling {v.name}")
+        entries[mid] = vleague.sample_match(v, mid, data)
+        typer.echo(f"{mid}: {len(entries[mid]['frames'])} frames")
+    vleague.write_manifest(entries, manifest)
+    typer.echo(f"manifest: {manifest}")
