@@ -29,5 +29,6 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 
 | finished (UTC) | commit | status | host | gsr-calibration-valid-6 | gsr-pipeline-valid-6 | sncalib-valid-60 |
 |---|---|---|---|---|---|---|
+| 2026-10-12 05:17 | d2500aa | complete | iec4090_2 | score 56.70 | hota_jersey_off 42.38 | score 54.43 |
 | 2026-10-11 19:10 | e5bea5b | complete | iec4090_2 | score 56.70 | hota_jersey_off 42.38 | score 54.43 |
 | 2026-10-11 17:12 | 6fea8be | complete | iec4090_2 | score 56.75 |  | score 54.43 |
