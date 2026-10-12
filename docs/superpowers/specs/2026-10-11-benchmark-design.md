@@ -128,9 +128,13 @@ reader). Rows carry `leakage: unverified` (SoccerMaster's detector) and are inte
 | Baseline (sn-gamestate), re-scored, test | 38.3 | 34.1 | 43.2 | 23.1 | | | | |
 | GSR valid, 6 quick clips | 42.4 | 39.5 | 45.8 | 12.3 | 66 % | 26 % / - / - | 3.7 m | 111 |
 
-Per-clip GS-HOTA on test ranges from 16 to 82. The weakest clips have the team left/right
-mapping wrong: without a goalkeeper class the side falls back to team mean x, which fails when
-both teams stand in one half. Team sides and ball selection are the two biggest levers.
+Per-clip GS-HOTA on test ranges from 16 to 82. The weakest clips have the teams on the wrong
+side: on the 58 valid clips (first nightly pass, 2026-10-12) 12 clips are swapped. The pipeline
+never emits the goalkeeper role, and kit clustering sometimes puts a keeper in the other team's
+cluster, which drags that team's mean x. But a prototype position-only keeper rule (found 81 of
+105 keeper tracks, 5 false) fixed only 1 of the 12 swapped clips (team accuracy 0.710 to 0.729), so
+most swaps have another cause, still being investigated. Team sides and ball selection are the two
+biggest levers.
 
 ## Validity rules
 
