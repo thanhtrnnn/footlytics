@@ -20,8 +20,9 @@ mkdir -p "$ROOT"/{bin,cache,data,runs,src,ext}
 # only brings the dependencies.
 [ -x "$ROOT/venv/bin/python" ] || "$ROOT/bin/uv" venv -q --seed --system-site-packages \
   --python /usr/bin/python3 "$ROOT/venv"
-# A host without a system torch (iec4090) gets the same pinned wheels inside the venv.
-"$ROOT/venv/bin/python" -c "import torch" 2>/dev/null || "$ROOT/venv/bin/pip" install -q "torch==${TORCH_PIN%+*}" "torchvision==$TORCHVISION_PIN" --index-url https://download.pytorch.org/whl/cu128
+# A host without the pinned system torch (none on iec4090, 2.12+cu130 on iec5090) gets the
+# pinned wheels inside the venv, shadowing the system one.
+"$ROOT/venv/bin/python" -c "import sys, torch; sys.exit(torch.__version__ != sys.argv[1])" "$TORCH_PIN" 2>/dev/null || "$ROOT/venv/bin/pip" install -q "torch==${TORCH_PIN%+*}" "torchvision==$TORCHVISION_PIN" --index-url https://download.pytorch.org/whl/cu128
 
 "$ROOT/venv/bin/pip" install -q "$SRC[dev,calib]"
 "$ROOT/venv/bin/python" - "$TORCH_PIN" <<'PY'

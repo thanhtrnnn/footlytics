@@ -152,12 +152,14 @@ def test_host_setup_installs_the_calib_extra():
     assert '"$SRC[dev,calib]"' in sh
 
 
-def test_host_setup_brings_the_pinned_torch_when_the_system_has_none():
-    # iec4090 has no system torch; the venv gets the same wheels iec4090_2 has system-wide,
-    # before the project install, so pip never resolves torch from PyPI.
+def test_host_setup_brings_the_pinned_torch_when_the_system_lacks_it():
+    # iec4090 has no system torch; iec5090 has torch 2.12+cu130, which its driver cannot run.
+    # Either way the venv gets the pinned wheels iec4090_2 has system-wide, before the project
+    # install, so pip never resolves torch from PyPI.
     from pathlib import Path
     sh = (Path(rm.__file__).parent / "host_setup.sh").read_text()
-    guard = sh.index('-c "import torch"')
+    guard = sh.index('torch.__version__ != sys.argv[1]')
+    assert '"$TORCH_PIN"' in sh[guard:sh.index("||", guard)]
     assert guard < sh.index('"$SRC[dev,calib]"')
     line = sh[guard:sh.index("\n\n", guard)]
     assert '"torch==${TORCH_PIN%+*}"' in line and '"torchvision==$TORCHVISION_PIN"' in line
