@@ -135,6 +135,11 @@ dev `ninh-binh-pvf-cand/0216012` 13.6 m and `shb-da-nang-hai-phong/0192012` 11.7
 keyframes the tracker holds to a few centimetres. Catching gross solves before they are bridged
 is the lever here, ahead of solver precision.
 
+Reproduced on iec5090 (RTX 5090, run `20261013-050657-vleague-edbbaa2`): every per-frame error is
+identical; only the frozen mean switch jitter moves (1.218 to 1.222 m, GPU float noise in the
+tracker). The run took 36 s there against 543 s on iec4090, which was shared with other users'
+jobs at 99 % utilisation, so the gap is contention, not a hardware comparison.
+
 Full pipeline, measured on this harness (2026-10-12; SoccerMaster x6 person detector + roboflow
 ball model, calibration solved every 10th frame and bridged by the camera tracker, no shirt-number
 reader). Rows carry `leakage: unverified` (SoccerMaster's detector) and are internal:

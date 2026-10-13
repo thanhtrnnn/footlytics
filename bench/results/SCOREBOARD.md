@@ -43,5 +43,6 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 
 | finished (UTC) | commit | status | host | vleague-dev | vleague-frozen |
 |---|---|---|---|---|---|
+| 2026-10-13 05:07 | edbbaa2 | complete | iec5090 | failed 0.00 | failed 0.00 |
 | 2026-10-12 22:52 | fccd3d4 | complete | iec4090 | failed 0.00 | failed 0.00 |
 | 2026-10-12 19:51 | fccd3d4 | failed | iec4090 | error | error |
