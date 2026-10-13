@@ -140,6 +140,16 @@ identical; only the frozen mean switch jitter moves (1.218 to 1.222 m, GPU float
 tracker). The run took 36 s there against 543 s on iec4090, which was shared with other users'
 jobs at 99 % utilisation, so the gap is contention, not a hardware comparison.
 
+iec5090 also reproduces the whole milestone (run `20261013-071311-milestone-248b449`, 41 min against
+58 on iec4090_2): SN-Calibration test 48.81 (48.8), GSR test pipeline GS-HOTA 49.7 (49.1), team side
+75.3 % (75.3 %), shape error 2.42 m (2.39 m), baseline 38.3 / 23.1 (identical), at 81 s per match
+minute (120). Two runs on the 5090 gave the same pipeline score, so the 0.6 gap to iec4090_2 is
+between GPUs, not run to run. A first milestone there (`20261013-062504`) is partial: the third-party
+SN-Calibration evaluator segfaulted at frame 3,090 of 3,141; rerun by hand on the same cameras it
+finished twice with 48.81. Quick on iec5090 (`20261013-061230-quick-248b449`) scores the GSR quick
+clips at 49.0 GS-HOTA with 82 % team side, against 42.4 / 66 % in the only earlier quick row, which
+ran on `e5bea5b`, before the clip-alignment and scoring fixes landed on main.
+
 Full pipeline, measured on this harness (2026-10-12; SoccerMaster x6 person detector + roboflow
 ball model, calibration solved every 10th frame and bridged by the camera tracker, no shirt-number
 reader). Rows carry `leakage: unverified` (SoccerMaster's detector) and are internal:
