@@ -419,6 +419,81 @@ def touchline_people(
     return out
 
 
+def goalkeeper_tracklets(
+    tracks: pd.DataFrame,
+    tracklets: list[Tracklet],
+    half_length: float,
+    half_width: float,
+    box_depth: float = 16.5,
+    box_half_width: float = 20.16,
+    min_frames: int = 25,
+    min_in_box: float = 0.9,
+    min_deepest: float = 0.7,
+) -> dict[int, int]:
+    """Tracklets that are a goalkeeper, mapped to the end they guard (-1 left, +1 right).
+
+    Kit colour cannot find the keeper: he wears a third colour that the two-cluster
+    team model files under whichever side it sits nearer. Position can. A keeper
+    spends the clip inside one penalty area and is the deepest person towards that
+    goal, whichever team the others belong to.
+
+    A tracklet seen for at least `min_frames` frames qualifies when at least
+    `min_in_box` of them lie inside one penalty area (`box_depth` from the goal
+    line, within `box_half_width` of the centre) and in at least `min_deepest` of
+    them it has the lowest x of everyone (left end) or the highest (right end).
+    A defender who drops into the box often is not the deepest person for long.
+    `tracklets` is the population of people considered; positions are their rows in
+    `tracks` (pitch metres, centre origin). Which team a keeper plays for is a
+    separate question, see `goalkeeper_teams`.
+    """
+    out: dict[int, int] = {}
+    if tracks.empty or not tracklets:
+        return out
+    owner = {int(i): t.id for t in tracklets for i in t.track_ids}
+    df = tracks[tracks["track_id"].isin(list(owner))]
+    if df.empty:
+        return out
+    df = df.assign(_tl=[owner[int(i)] for i in df["track_id"]])
+    lo = df.groupby("frame_idx")["x"].transform("min")
+    hi = df.groupby("frame_idx")["x"].transform("max")
+    df = df.assign(_left=df["x"] <= lo, _right=df["x"] >= hi)
+    edge = half_length - box_depth
+    for tl, g in df.groupby("_tl"):
+        if len(g) < min_frames:
+            continue
+        x, y = g["x"].to_numpy(float), g["y"].to_numpy(float)
+        for end, in_box, deepest in ((-1, x <= -edge, g["_left"]), (1, x >= edge, g["_right"])):
+            in_box = in_box & (np.abs(y) <= box_half_width)
+            if in_box.mean() >= min_in_box and deepest.to_numpy().mean() >= min_deepest:
+                out[int(tl)] = end
+                break
+    return out
+
+
+def goalkeeper_teams(
+    tracks: pd.DataFrame,
+    tracklets: list[Tracklet],
+    keepers: dict[int, int],
+) -> dict[int, str]:
+    """Team of each keeper in `keepers`: the side that defends his end.
+
+    The team whose other players have the lower mean x defends the left end. Keepers
+    are left out of that mean, since a keeper in the wrong kit cluster is exactly the
+    case this exists for. Empty when either team has no other player to judge by.
+    """
+    owner = {int(i): t for t in tracklets if t.id not in keepers for i in t.track_ids}
+    df = tracks[tracks["track_id"].isin(list(owner))]
+    if df.empty:
+        return {}
+    team = pd.Series([owner[int(i)].team for i in df["track_id"]], index=df.index)
+    mean_x = df["x"].astype(float).groupby(team).mean()
+    home, away = Team.HOME.value, Team.AWAY.value
+    if home not in mean_x or away not in mean_x or mean_x[home] == mean_x[away]:
+        return {}
+    left, right = (home, away) if mean_x[home] < mean_x[away] else (away, home)
+    return {tid: (left if end < 0 else right) for tid, end in keepers.items()}
+
+
 def apply_to_state(state: MatchState, tracklets: list[Tracklet]) -> MatchState:
     """Rewrite track_id, team and role in a MatchState from resolved tracklets.
 

@@ -36,7 +36,8 @@ from ..state.schema import MatchState, Role, Team
 def infer_attacking_direction(state: MatchState) -> dict[tuple[int, str], int]:
     """(period, team) -> +1 if that team attacks +x, else -1.
 
-    Decided by where each team's goalkeeper stands: a keeper is at the end his
+    Decided by where each team's goalkeeper (the labelled one, else the extreme
+    player) stands: a keeper is at the end his
     team defends, so the team attacks the other way. Using outfield mean position
     instead would fail during sustained pressure, when a whole team can sit in
     one half for minutes.
@@ -46,10 +47,14 @@ def infer_attacking_direction(state: MatchState) -> dict[tuple[int, str], int]:
     for (period, team), g in p.groupby(["period", "team"], observed=True):
         if team not in (Team.HOME.value, Team.AWAY.value):
             continue
+        keeper = g[g["role"] == Role.GOALKEEPER.value]
+        if not keeper.empty:
+            out[(int(period), str(team))] = -1 if keeper["x"].mean() > 0 else 1
+            continue
         mean_x = g.groupby("track_id", observed=True)["x"].mean()
         if mean_x.empty:
             continue
-        # The keeper is the extreme; whichever end he sits at is the end defended.
+        # No labelled keeper: the extreme is the extreme; whichever end he sits at is the end defended.
         gk_x = mean_x.loc[mean_x.abs().idxmax()]
         out[(int(period), str(team))] = -1 if gk_x > 0 else 1
     return out
@@ -90,10 +95,14 @@ def attacking_sign(team: str) -> int:
 
 
 def goalkeepers(state: MatchState) -> dict[str, int]:
-    """team -> track_id of its goalkeeper (most extreme mean x)."""
+    """team -> track_id of its goalkeeper: the labelled one, else the most extreme mean x."""
     out = {}
     for team, g in state.players.groupby("team", observed=True):
         if team not in (Team.HOME.value, Team.AWAY.value):
+            continue
+        labelled = g[g["role"] == Role.GOALKEEPER.value]
+        if not labelled.empty:
+            out[str(team)] = int(labelled.groupby("track_id", observed=True).size().idxmax())
             continue
         mean_x = g.groupby("track_id", observed=True)["x"].mean()
         counts = g.groupby("track_id", observed=True).size()
