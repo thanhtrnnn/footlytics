@@ -26,7 +26,8 @@ from ..analytics.kinematics import add_kinematics
 from ..geometry.homography import Calibration, apply_homography
 from ..geometry.pitch import Pitch
 from ..perception.detect import Detector, DetectorConfig
-from ..perception.teams import split_officials, TeamClassifier, kit_descriptor
+from ..perception.teams import (split_officials, TeamClassifier, kit_descriptor,
+                                team_scores_by_track)
 from ..perception.identity import (apply_to_state, assign_teams_with_roster,
                                    build_tracklets, stitch_tracklets, touchline_people)
 from ..perception.track import PitchTracker, TrackerConfig
@@ -380,7 +381,7 @@ def run_frames(
             idx = np.random.default_rng(0).choice(idx, cfg.team_fit_sample, replace=False)
         clf = TeamClassifier().fit(D[idx])
         diag = clf.diagnose(T, D)
-        scores = clf.track_scores(T, D)
+        scores = team_scores_by_track(T, D)
         report["team_diagnosis"] = diag
         report["_team_clf"] = clf
         if cfg.montage:
