@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sequence review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #14171c; --panel: #1b1f26; --line: #2c333d; --text: #dde3ea; --dim: #8b96a3;
+    --accent: #ffd43b; --ok: #51cf66; --bad: #ff6b6b; --unsure: #74c0fc;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  header { flex: none; display: flex; align-items: center; gap: 16px; padding: 8px 12px; background: #2a2410; border-bottom: 1px solid #5c4a10; }
+  #progress { font-weight: 600; color: var(--accent); }
+  #who { color: var(--dim); flex: 1; }
+  #status {
+    min-width: 92px; text-align: center; padding: 4px 12px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--dim); font-weight: 600; user-select: none;
+  }
+  #status[data-state="saved"] { color: var(--ok); border-color: #2b6b38; }
+  #status[data-state="saving"] { color: var(--accent); border-color: #7a6410; }
+  #status[data-state="failed"] { color: #fff; background: #a52a2a; border-color: var(--bad); cursor: pointer; }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 420px minmax(0, 1fr); }
+  #left { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  #filter { padding: 8px 10px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+  #list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+  #list li { padding: 6px 10px; cursor: pointer; border-left: 4px solid transparent; border-bottom: 1px solid #232932; display: grid; grid-template-columns: 1fr auto; gap: 0 8px; }
+  #list li:hover { background: #222833; }
+  #list li[data-current="true"] { background: #26303f; border-left-color: var(--accent); }
+  #list .top { font-weight: 600; }
+  #list .ev { color: var(--dim); font-size: 12px; }
+  #list .verdict { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-weight: 700; color: var(--dim); }
+  [data-v="right"] .verdict { color: var(--ok) !important; }
+  [data-v="wrong"] .verdict { color: var(--bad) !important; }
+  [data-v="unsure"] .verdict { color: var(--unsure) !important; }
+  #right { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 10px; gap: 10px; }
+  video { width: 100%; max-height: 52vh; background: #000; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button, select, input, textarea { font: inherit; color: var(--text); background: #232932; border: 1px solid var(--line); border-radius: 5px; padding: 5px 10px; }
+  button { cursor: pointer; }
+  button:hover { background: #2d3541; }
+  button.v { font-weight: 700; min-width: 110px; }
+  button.v[data-v="right"] { border-color: #2b6b38; }
+  button.v[data-v="wrong"] { border-color: #8a3030; }
+  button.v[data-v="unsure"] { border-color: #2f5f85; }
+  button.v.on[data-v="right"] { background: #1f5a2c; }
+  button.v.on[data-v="wrong"] { background: #7a2525; }
+  button.v.on[data-v="unsure"] { background: #1f4c70; }
+  textarea { width: 100%; min-height: 56px; resize: vertical; }
+  #now { font-family: ui-monospace, Menlo, monospace; color: var(--dim); }
+  #cur { font-weight: 600; }
+  fieldset { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin: 0; }
+  legend { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+  input.t { width: 90px; font-family: ui-monospace, Menlo, monospace; }
+  #missed { list-style: none; margin: 6px 0 0; padding: 0; }
+  #missed li { display: flex; gap: 8px; align-items: center; padding: 3px 0; }
+  #missed .what { flex: 1; cursor: pointer; }
+  #keys { color: var(--dim); font-size: 12px; }
+  kbd { background: #2b323c; border-radius: 3px; padding: 0 4px; font-family: ui-monospace, Menlo, monospace; }
+  #err { color: var(--bad); min-height: 1.4em; }
+</style>
+</head>
+<body>
+<header>
+  <div id="progress"></div>
+  <div id="who"></div>
+  <div id="status" data-state="saved" title="Every click is saved to the marks file at once">saved</div>
+</header>
+<main>
+  <aside id="left">
+    <div id="filter"><label for="flabel">Show</label><select id="flabel"></select></div>
+    <ul id="list"></ul>
+  </aside>
+  <section id="right">
+    <video id="video" controls preload="auto"></video>
+    <div class="row"><span id="cur"></span><span id="now"></span></div>
+    <div class="row">
+      <button class="v" data-v="right" id="b-right">Right (R)</button>
+      <button class="v" data-v="wrong" id="b-wrong">Wrong (W)</button>
+      <button class="v" data-v="unsure" id="b-unsure">Unsure (U)</button>
+      <button id="b-prev">Previous (Up)</button>
+      <button id="b-next">Next (N / Down)</button>
+      <button id="b-play">Play / pause (Space)</button>
+    </div>
+    <textarea id="note" placeholder="Note for this sequence (saved as you type; mark it right, wrong or unsure first)"></textarea>
+    <div id="err"></div>
+    <fieldset>
+      <legend>Add missed sequence</legend>
+      <div class="row">
+        <select id="m-label"></select>
+        <select id="m-team"></select>
+        <button id="m-start-b">start here</button><input class="t" id="m-start" placeholder="start mm:ss">
+        <button id="m-end-b">end here</button><input class="t" id="m-end" placeholder="end mm:ss">
+      </div>
+      <div class="row" style="margin-top:6px"><input id="m-note" placeholder="note (optional)" style="flex:1"><button id="m-add">Add missed</button></div>
+      <ul id="missed"></ul>
+    </fieldset>
+    <div id="keys"><kbd>R</kbd> right &middot; <kbd>W</kbd> wrong &middot; <kbd>U</kbd> unsure &middot; <kbd>N</kbd>/<kbd>Down</kbd> next &middot; <kbd>Up</kbd> previous &middot; <kbd>Space</kbd> play/pause. Times are match-state clock; the video is offset by <span id="off"></span> s.</div>
+  </section>
+</main>
+<script>
+"use strict";
+const DATA = /*DATA*/null;
+const LEAD = 3, TAIL = 3;
+const $ = (id) => document.getElementById(id);
+const video = $("video");
+const state = { marks: DATA.marks, cur: null, filter: "all", drafts: {} };
+const OFFSET = () => state.marks.video_offset_s;
+window.__state = state;
+
+const mmss = (s) => {
+  const neg = s < 0, t = Math.round(Math.abs(s));
+  return (neg ? "-" : "") + String(Math.floor(t / 60)).padStart(2, "0") + ":" + String(t % 60).padStart(2, "0");
+};
+const parseTime = (txt) => {
+  const m = /^\s*(?:(\d+):)?(\d+(?:\.\d+)?)\s*$/.exec(txt);
+  return m ? (m[1] ? Number(m[1]) * 60 : 0) + Number(m[2]) : null;
+};
+const fmt = (v, d) => (v === null ? "n/a" : v.toFixed(d));
+const visible = () => DATA.sequences.filter((s) => state.filter === "all" || s.label === state.filter);
+const curSeq = () => DATA.sequences.find((s) => s.id === state.cur) || null;
+const verdictOf = (id) => (state.marks.sequences[id] || {}).verdict || null;
+
+// ---- saving: one request at a time, in order; a failure is kept and can be retried -------
+let chain = Promise.resolve(), inflight = 0, failed = [];
+function setStatus(s) {
+  const el = $("status");
+  el.dataset.state = s;
+  el.textContent = s === "failed" ? "save failed" : s === "saving" ? "saving..." : "saved";
+  el.title = s === "failed" ? "Click to retry the unsaved changes" : "Every click is saved to the marks file at once";
+}
+function post(path, body) {
+  inflight++; setStatus("saving");
+  chain = chain.then(async () => {
+    try {
+      const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(await r.text());
+      const doc = await r.json();
+      if (inflight === 1 && !failed.length) { state.marks = doc; renderAll(false); }
+      $("err").textContent = "";
+    } catch (e) {
+      failed.push([path, body]);
+      $("err").textContent = "Could not save: " + e.message;
+    } finally {
+      inflight--;
+      if (!inflight) setStatus(failed.length ? "failed" : "saved");
+    }
+  });
+}
+$("status").addEventListener("click", () => {
+  if ($("status").dataset.state !== "failed") return;
+  const ops = failed; failed = [];
+  ops.forEach(([p, b]) => post(p, b));
+});
+window.addEventListener("beforeunload", (e) => { if (inflight || failed.length) e.preventDefault(); });
+
+// ---- marking ---------------------------------------------------------------------------
+function mark(v) {
+  const s = curSeq(); if (!s) return;
+  const note = $("note").value;
+  state.marks.sequences[s.id] = { verdict: v, note };
+  delete state.drafts[s.id];
+  post("/verdict", { id: s.id, verdict: v, note });
+  renderAll(false);
+}
+let noteTimer = null;
+function saveNote() {
+  clearTimeout(noteTimer); noteTimer = null;
+  const s = curSeq(); if (!s) return;
+  const note = $("note").value;
+  if (!state.marks.sequences[s.id]) { state.drafts[s.id] = note; return; }
+  if (state.marks.sequences[s.id].note === note) return;
+  state.marks.sequences[s.id].note = note;
+  post("/note", { id: s.id, note });
+}
+$("note").addEventListener("input", () => {
+  const s = curSeq(); if (!s) return;
+  if (!verdictOf(s.id)) state.drafts[s.id] = $("note").value;
+  clearTimeout(noteTimer); noteTimer = setTimeout(saveNote, 500);
+});
+$("note").addEventListener("blur", saveNote);
+
+// ---- navigation and playback -----------------------------------------------------------
+let stopAt = null;
+function select(id, play = true) {
+  saveNote();
+  state.cur = id;
+  const s = curSeq();
+  renderAll(true);
+  if (!s) return;
+  stopAt = s.end_s + OFFSET() + TAIL;
+  video.currentTime = Math.max(0, s.start_s + OFFSET() - LEAD);
+  if (play) video.play().catch(() => {});
+  document.querySelector(`#list li[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" });
+}
+function step(d) {
+  const v = visible(); if (!v.length) return;
+  const i = v.findIndex((s) => s.id === state.cur);
+  select(v[Math.min(v.length - 1, Math.max(0, i < 0 ? 0 : i + d))].id);
+}
+setInterval(() => {
+  if (stopAt !== null && !video.paused && video.currentTime >= stopAt) { video.pause(); stopAt = null; }
+}, 100);
+video.addEventListener("seeking", () => { if (stopAt !== null && video.currentTime > stopAt) stopAt = null; });
+video.addEventListener("timeupdate", () => { $("now").textContent = "video " + mmss(video.currentTime) + "  match clock " + mmss(video.currentTime - OFFSET()); });
+const togglePlay = () => { video.paused ? video.play().catch(() => {}) : video.pause(); };
+
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const tag = e.target.tagName;
+  if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") { if (e.key === "Escape") e.target.blur(); return; }
+  const k = e.key.toLowerCase();
+  const act = { r: () => mark("right"), w: () => mark("wrong"), u: () => mark("unsure"),
+    n: () => step(1), arrowdown: () => step(1), arrowup: () => step(-1), " ": togglePlay }[k];
+  if (!act) return;
+  e.preventDefault(); act();
+});
+["right", "wrong", "unsure"].forEach((v) => $("b-" + v).addEventListener("click", (e) => { mark(v); e.target.blur(); }));
+$("b-next").addEventListener("click", (e) => { step(1); e.target.blur(); });
+$("b-prev").addEventListener("click", (e) => { step(-1); e.target.blur(); });
+$("b-play").addEventListener("click", (e) => { togglePlay(); e.target.blur(); });
+
+// ---- missed sequences ------------------------------------------------------------------
+const stateNow = () => Math.round((video.currentTime - OFFSET()) * 10) / 10;
+$("m-start-b").addEventListener("click", () => { $("m-start").value = mmss(stateNow()); $("m-start").dataset.s = stateNow(); });
+$("m-end-b").addEventListener("click", () => { $("m-end").value = mmss(stateNow()); $("m-end").dataset.s = stateNow(); });
+["m-start", "m-end"].forEach((id) => $(id).addEventListener("input", () => { delete $(id).dataset.s; }));
+function timeOf(id) {
+  const el = $(id);
+  return el.dataset.s !== undefined ? Number(el.dataset.s) : parseTime(el.value);
+}
+$("m-add").addEventListener("click", () => {
+  const start_s = timeOf("m-start"), end_s = timeOf("m-end");
+  if (start_s === null || end_s === null || end_s <= start_s) { $("err").textContent = "Set start and end (end after start) first."; return; }
+  const entry = { label: $("m-label").value, team: $("m-team").value, start_s, end_s, note: $("m-note").value };
+  state.marks.missed.push(entry);
+  post("/missed", entry);
+  ["m-start", "m-end"].forEach((id) => { $(id).value = ""; delete $(id).dataset.s; });
+  $("m-note").value = "";
+  renderAll(false);
+});
+
+// ---- rendering -------------------------------------------------------------------------
+function renderList() {
+  const ul = $("list"); ul.textContent = "";
+  for (const s of visible()) {
+    const v = verdictOf(s.id);
+    const li = document.createElement("li");
+    li.dataset.id = s.id; li.dataset.current = String(s.id === state.cur); li.dataset.v = v || "";
+    const top = document.createElement("div"); top.className = "top";
+    top.textContent = `${s.label} ${s.team}  ${mmss(s.start_s)} to ${mmss(s.end_s)}  (${s.duration_s.toFixed(0)} s)`;
+    const ev = document.createElement("div"); ev.className = "ev";
+    ev.textContent = `line ${fmt(s.def_line_x, 1)} m, compact ${fmt(s.compactness_m, 1)} m, ${fmt(s.n_within_10m, 0)} near ball`;
+    const vd = document.createElement("div"); vd.className = "verdict"; vd.textContent = v || "unmarked";
+    li.append(top, ev, vd);
+    li.addEventListener("click", () => select(s.id));
+    ul.append(li);
+  }
+}
+function renderProgress() {
+  const v = visible(), k = v.filter((s) => verdictOf(s.id)).length;
+  $("progress").textContent = `${k} of ${v.length} marked`;
+}
+function renderCurrent(resetNote) {
+  const s = curSeq(), v = s ? verdictOf(s.id) : null;
+  $("cur").textContent = s ? `${s.label} ${s.team}, period ${s.period}, ${mmss(s.start_s)} to ${mmss(s.end_s)}` : "Select a sequence";
+  for (const x of ["right", "wrong", "unsure"]) $("b-" + x).classList.toggle("on", v === x);
+  if (resetNote) {
+    const m = s && state.marks.sequences[s.id];
+    $("note").value = s ? (m ? m.note : state.drafts[s.id] || "") : "";
+  }
+}
+function renderMissed() {
+  const ul = $("missed"); ul.textContent = "";
+  state.marks.missed.forEach((m, i) => {
+    const li = document.createElement("li");
+    const what = document.createElement("span"); what.className = "what";
+    what.textContent = `${m.label} ${m.team} ${mmss(m.start_s)} to ${mmss(m.end_s)}${m.note ? "  " + m.note : ""}`;
+    what.addEventListener("click", () => { stopAt = m.end_s + OFFSET() + TAIL; video.currentTime = Math.max(0, m.start_s + OFFSET() - LEAD); video.play().catch(() => {}); });
+    const del = document.createElement("button"); del.textContent = "Remove";
+    del.addEventListener("click", () => { state.marks.missed.splice(i, 1); post("/missed/delete", { index: i }); renderAll(false); });
+    li.append(what, del); ul.append(li);
+  });
+}
+function renderAll(resetNote) { renderList(); renderProgress(); renderCurrent(resetNote); renderMissed(); }
+
+function init() {
+  const fl = $("flabel");
+  for (const l of ["all", ...DATA.labels]) fl.add(new Option(l, l));
+  fl.addEventListener("change", () => { state.filter = fl.value; renderAll(false); });
+  DATA.labels.forEach((l) => $("m-label").add(new Option(l, l)));
+  DATA.teams.forEach((t) => $("m-team").add(new Option(t, t)));
+  $("who").textContent = `Reviewer ${state.marks.reviewer} - ${state.marks.video}`;
+  $("off").textContent = OFFSET();
+  video.src = DATA.video_url;
+  renderAll(true);
+  const first = DATA.sequences.find((s) => !verdictOf(s.id)) || DATA.sequences[0];
+  if (first) select(first.id, false);
+}
+init();
+</script>
+</body>
+</html>
