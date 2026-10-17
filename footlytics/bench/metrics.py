@@ -1,6 +1,8 @@
 """Our own auxiliary metrics. Official scores come from the evaluators (evaluators.py)."""
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 import pandas as pd
 
@@ -48,22 +50,31 @@ def median_reprojection_px(gt_lines: dict, cam: dict, width: int = 960,
 # ------------------------------------------------------------ full pipeline vs ground truth
 
 _PLAYING = ("player", "goalkeeper")
+ROLE_CLASSES = ("player", "goalkeeper", "referee")
 _GT_SIDE = {"home": "left", "away": "right"}       # gt_to_state: left -> HOME, right -> AWAY
 _SHAPE = ("centroid_x", "centroid_y", "width", "depth", "compactness")
+#: A predicted person within MATCH_M metres of a GT one is that person. Position error looks out
+#: to POS_GATE_M, so a player we place 3 m off still has an error rather than none.
+MATCH_M, POS_GATE_M = 2.0, 5.0
 
 
-def _playing(t: pd.DataFrame) -> pd.DataFrame:
-    p = t[t["role"].astype(str).isin(_PLAYING)]
+def _on_pitch(t: pd.DataFrame, roles=_PLAYING) -> pd.DataFrame:
+    p = t[t["role"].astype(str).isin(roles)]
     return p[np.isfinite(p["x"].astype(float)) & np.isfinite(p["y"].astype(float))]
 
 
-def match_people(gt: pd.DataFrame, pred: pd.DataFrame, frames,
-                 max_dist: float = 2.0) -> pd.DataFrame:
-    """Per frame, the Hungarian match of GT and predicted players (and keepers) on pitch
-    distance, keeping pairs within `max_dist` metres."""
+def share(ok: int, n: int) -> float | None:
+    return round(ok / n, 4) if n else None
+
+
+def match_people(gt: pd.DataFrame, pred: pd.DataFrame, frames, max_dist: float = MATCH_M,
+                 roles=_PLAYING) -> pd.DataFrame:
+    """Per frame, the Hungarian match of GT and predicted people of `roles` (players and
+    keepers by default) on pitch distance, keeping pairs within `max_dist` metres. The
+    assignment ignores `max_dist`: a tighter gate only drops pairs."""
     from scipy.optimize import linear_sum_assignment
 
-    g, p = _playing(gt), _playing(pred)
+    g, p = _on_pitch(gt, roles), _on_pitch(pred, roles)
     gb, pb = dict(tuple(g.groupby("frame_idx"))), dict(tuple(p.groupby("frame_idx")))
     rows = []
     for f in frames:
@@ -79,10 +90,8 @@ def match_people(gt: pd.DataFrame, pred: pd.DataFrame, frames,
     return pd.DataFrame(rows, columns=["frame_idx", "gt", "pred", "dist"])
 
 
-def team_accuracy(gt: pd.DataFrame, pred: pd.DataFrame, matches: pd.DataFrame,
-                  pred_sides: dict) -> float | None:
-    """Share of matched players whose predicted side (our team through `pred_sides`) is the
-    GT side. A HOME/AWAY label swap is not an error; a wrong side is."""
+def _side_hits(gt: pd.DataFrame, pred: pd.DataFrame, matches: pd.DataFrame,
+               pred_sides: dict) -> tuple[int, int]:
     ok = n = 0
     for gi, pi in zip(matches["gt"], matches["pred"]):
         side = _GT_SIDE.get(str(gt.at[gi, "team"]))
@@ -90,7 +99,71 @@ def team_accuracy(gt: pd.DataFrame, pred: pd.DataFrame, matches: pd.DataFrame,
             continue
         n += 1
         ok += pred_sides.get(str(pred.at[pi, "team"])) == side
-    return round(ok / n, 4) if n else None
+    return ok, n
+
+
+def team_accuracy(gt: pd.DataFrame, pred: pd.DataFrame, matches: pd.DataFrame,
+                  pred_sides: dict) -> float | None:
+    """Share of matched players whose predicted side (our team through `pred_sides`) is the
+    GT side. A HOME/AWAY label swap is not an error; a wrong side is."""
+    return share(*_side_hits(gt, pred, matches, pred_sides))
+
+
+def keeper_side_accuracy(gt: pd.DataFrame, pred: pd.DataFrame, matches: pd.DataFrame,
+                         pred_sides: dict) -> tuple[int, int]:
+    """`(ok, n)` over the matched GT goalkeepers: how many we put on their GT side. A keeper
+    in the other team's colour cluster drags `team_sides` and can flip a whole clip. Raw, to
+    pool across clips: a clip sees its keepers in few frames."""
+    keepers = gt.loc[matches["gt"], "role"].astype(str).to_numpy() == "goalkeeper"
+    return _side_hits(gt, pred, matches[keepers], pred_sides)
+
+
+def role_counts(gt: pd.DataFrame, pred: pd.DataFrame,
+                matches: pd.DataFrame) -> Counter[tuple[str, str]]:
+    """Matched rows per (GT role, predicted role), over a match of `ROLE_CLASSES`."""
+    return Counter(zip(gt.loc[matches["gt"], "role"].astype(str),
+                       pred.loc[matches["pred"], "role"].astype(str)))
+
+
+def role_summary(counts: dict[tuple[str, str], int]) -> dict:
+    """The role numbers from `role_counts`, one clip's or pooled:
+
+    - `keeper_recall`: share of matched GT goalkeepers we call goalkeepers.
+    - `referee_recall`: share of matched GT referees we call referees.
+    - `referee_precision`: share of the matched people we call referees who are referees.
+    """
+    gt_n, pred_n = Counter(), Counter()
+    for (g, p), n in counts.items():
+        gt_n[g] += n
+        pred_n[p] += n
+    hits = {r: counts.get((r, r), 0) for r in ("goalkeeper", "referee")}
+    return {"keeper_recall": share(hits["goalkeeper"], gt_n["goalkeeper"]),
+            "referee_recall": share(hits["referee"], gt_n["referee"]),
+            "referee_precision": share(hits["referee"], pred_n["referee"])}
+
+
+def position_summary(dists, gt_people: int) -> dict:
+    """The position numbers from matched distances (m, players and keepers within
+    `POS_GATE_M`) over `gt_people` located GT players and keepers. Both may be pooled across
+    clips: a clip has no number of its own that averages correctly.
+
+    - `pos_err_median_m`, `pos_err_p90_m`: how far a matched player sits from the truth.
+    - `recall_2m`: share of GT people with a predicted one within `MATCH_M` (detection and
+      mapping together, before teams).
+    """
+    found = sum(d <= MATCH_M for d in dists)
+    return {"pos_err_median_m": round(float(np.median(dists)), 3) if len(dists) else None,
+            "pos_err_p90_m": round(float(np.percentile(dists, 90)), 3) if len(dists) else None,
+            "recall_2m": share(found, gt_people)}
+
+
+def position_metrics(gt: pd.DataFrame, matches: pd.DataFrame, frames) -> dict:
+    """`position_summary` of one clip from its `POS_GATE_M` match over `frames`. `_pos_dists`
+    and `_gt_people` are the raw values to pool across clips; they are not metrics to store."""
+    g = _on_pitch(gt)
+    n = int(g["frame_idx"].isin(list(frames)).sum())
+    d = matches["dist"].astype(float).tolist()
+    return {**position_summary(d, n), "_pos_dists": d, "_gt_people": n}
 
 
 def _ball_centres(t: pd.DataFrame) -> dict:
@@ -148,7 +221,7 @@ def shape_error(gt: pd.DataFrame, pred: pd.DataFrame, frames, pred_sides: dict,
                 min_players: int = 6) -> dict:
     """Mean absolute error (m) of each side's shape (centroid, width, depth, compactness),
     per frame where both GT and prediction see at least `min_players` of that side."""
-    g, p = _playing(gt), _playing(pred)
+    g, p = _on_pitch(gt), _on_pitch(pred)
     g = g.assign(side=g["team"].astype(str).map(_GT_SIDE))
     p = p.assign(side=p["team"].astype(str).map(pred_sides))
     errs = {k: [] for k in _SHAPE}
@@ -167,6 +240,33 @@ def shape_error(gt: pd.DataFrame, pred: pd.DataFrame, frames, pred_sides: dict,
     vals = [v for v in out.values() if v is not None]
     out["shape_error_m"] = round(float(np.mean(vals)), 3) if vals else None
     return out
+
+
+SIDE_QUOTA = 11
+
+
+def team_counts(gt: pd.DataFrame, pred: pd.DataFrame, frames, pred_sides: dict) -> dict:
+    """Players and keepers on each side per GT frame, ours (through `pred_sides`) against GT's.
+    A keeper in the wrong colour cluster moves a player across; a team model that drifts piles
+    the crowd onto one side.
+
+    - `team_count_err`: mean over the frames and both sides of |ours - GT's|.
+    - `quota_breach_share`: share of the frames where we put more than 11 on a side.
+
+    The task's aggregate is the mean of the clips' numbers: every GSR clip has 750 frames, so
+    each frame weighs the same.
+    """
+    frames = list(frames)
+    g, p = _on_pitch(gt), _on_pitch(pred)
+    gn = g.assign(side=g["team"].astype(str).map(_GT_SIDE)).groupby(["frame_idx", "side"]).size()
+    pn = p.assign(side=p["team"].astype(str).map(pred_sides)).groupby(["frame_idx", "side"]).size()
+    errs, breaches = [], 0
+    for f in frames:
+        ours = {s: int(pn.get((f, s), 0)) for s in ("left", "right")}
+        errs += [abs(n - int(gn.get((f, s), 0))) for s, n in ours.items()]
+        breaches += max(ours.values()) > SIDE_QUOTA
+    return {"team_count_err": round(float(np.mean(errs)), 3) if errs else None,
+            "quota_breach_share": share(breaches, len(frames))}
 
 
 def seconds_per_match_minute(seconds: float, frames: int, fps: float = 25.0) -> float:

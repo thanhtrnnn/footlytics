@@ -3,8 +3,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from footlytics.bench.metrics import (ball_metrics, match_people, seconds_per_match_minute,
-                                      shape_error, team_accuracy)
+from footlytics.bench.metrics import (ROLE_CLASSES, ball_metrics, keeper_side_accuracy,
+                                      match_people, position_metrics, position_summary,
+                                      role_counts, role_summary, seconds_per_match_minute,
+                                      shape_error, team_accuracy, team_counts)
 
 
 def tracks(rows):
@@ -32,6 +34,40 @@ def test_match_people_pairs_within_the_distance():
     assert len(m) == 6 and (m["dist"] <= 2.0).all()
 
 
+def test_the_gate_drops_pairs_but_never_changes_them():
+    """The assignment ignores the gate, so the 2 m pairs are exactly the 5 m pairs within 2 m:
+    team accuracy reads them off the one 5 m match."""
+    gt = tracks(gt_frame(0))
+    pred = tracks(people(0, LEFT_X, "home", 1, dx=3.0) + people(0, RIGHT_X, "away", 101, dx=0.5))
+    near = match_people(gt, pred, [0], max_dist=5.0)
+    close = match_people(gt, pred, [0], max_dist=2.0)
+    assert sorted(near["dist"]) == [0.5] * 6 + [3.0] * 6 and len(close) == 6
+    pd.testing.assert_frame_equal(near[near["dist"] <= 2.0].reset_index(drop=True), close)
+
+
+def test_position_summary_median_p90_and_recall_over_gt_people():
+    assert position_summary([0.5, 1.0, 1.5, 3.0, 4.5], 6) == {
+        "pos_err_median_m": 1.5, "pos_err_p90_m": 3.9, "recall_2m": 0.5}
+    assert position_summary([], 4) == {
+        "pos_err_median_m": None, "pos_err_p90_m": None, "recall_2m": 0.0}
+    assert position_summary([], 0) == {
+        "pos_err_median_m": None, "pos_err_p90_m": None, "recall_2m": None}
+
+
+def test_position_metrics_charge_every_located_gt_player_in_the_scored_frames():
+    """Frame 1 predicts no left player: its six are misses. A referee, a player with no pitch
+    position and a frame outside the scored ones are not GT people."""
+    nan = np.nan
+    gt = tracks(gt_frame(0) + gt_frame(1) + gt_frame(2)
+                + [(0, 50, "referee", "official", 0.0, 30.0, 0, 0, 10, 20, False),
+                   (1, 51, "player", "home", nan, nan, 0, 0, 10, 20, False)])
+    pred = tracks(people(0, LEFT_X, "home", 1, dx=3.0) + people(0, RIGHT_X, "away", 101, dx=0.5)
+                  + people(1, RIGHT_X, "away", 101, dx=0.5))
+    p = position_metrics(gt, match_people(gt, pred, [0, 1], max_dist=5.0), [0, 1])
+    assert p["_gt_people"] == 24 and sorted(p["_pos_dists"]) == [0.5] * 12 + [3.0] * 6
+    assert (p["pos_err_median_m"], p["pos_err_p90_m"], p["recall_2m"]) == (0.5, 3.0, 0.5)
+
+
 def test_team_accuracy_ignores_a_label_swap_but_not_a_wrong_side():
     gt = tracks(gt_frame(0))
     pred = tracks(people(0, LEFT_X, "away", 1) + people(0, RIGHT_X, "home", 101))
@@ -39,6 +75,71 @@ def test_team_accuracy_ignores_a_label_swap_but_not_a_wrong_side():
     assert team_accuracy(gt, pred, m, {"away": "left", "home": "right"}) == 1.0
     assert team_accuracy(gt, pred, m, {"away": "right", "home": "left"}) == 0.0
     assert team_accuracy(gt, pred, m.iloc[:0], {}) is None
+
+
+SIDES = {"home": "left", "away": "right"}
+
+
+def side(frame, team, sign, start_id, keeper_role="goalkeeper"):
+    """A keeper and two players of `team`, defending the goal at x = sign * 50."""
+    return [(frame, start_id, keeper_role, team, sign * 50.0, 0.0, 0, 0, 10, 20, False),
+            (frame, start_id + 1, "player", team, sign * 20.0, -10.0, 0, 0, 10, 20, False),
+            (frame, start_id + 2, "player", team, sign * 15.0, 10.0, 0, 0, 10, 20, False)]
+
+
+def referee(frame):
+    return (frame, 50, "referee", "official", 0.0, 30.0, 0, 0, 10, 20, False)
+
+
+def keeper_mixup():
+    """Two frames, a keeper and two players a side and a referee. Our version: both keepers
+    called players, the left keeper in the right team's cluster, and in frame 1 a right player
+    called a referee."""
+    gt = tracks([r for f in (0, 1) for r in side(f, "home", -1, 1) + side(f, "away", 1, 11)
+                 + [referee(f)]])
+    pred = tracks([r for f in (0, 1) for r in side(f, "home", -1, 1, "player")
+                   + side(f, "away", 1, 11, "player") + [referee(f)]])
+    pred.loc[pred["track_id"] == 1, "team"] = "away"
+    pred.loc[(pred["frame_idx"] == 1) & (pred["track_id"] == 12), "role"] = "referee"
+    return gt, pred
+
+
+def test_role_counts_and_summary_when_keepers_are_called_players():
+    gt, pred = keeper_mixup()
+    m = match_people(gt, pred, [0, 1], roles=ROLE_CLASSES)
+    assert len(m) == 14 and len(match_people(gt, pred, [0, 1])) == 11   # default: no referees
+    counts = role_counts(gt, pred, m)
+    assert counts == {("goalkeeper", "player"): 4, ("player", "player"): 7,
+                      ("player", "referee"): 1, ("referee", "referee"): 2}
+    assert role_summary(counts) == {"keeper_recall": 0.0, "referee_recall": 1.0,
+                                    "referee_precision": 0.6667}
+    assert role_summary({}) == {"keeper_recall": None, "referee_recall": None,
+                                "referee_precision": None}
+
+
+def test_keeper_side_accuracy_charges_the_keeper_in_the_other_teams_cluster():
+    gt, pred = keeper_mixup()
+    m = match_people(gt, pred, [0, 1])
+    assert keeper_side_accuracy(gt, pred, m, SIDES) == (2, 4)     # the right keeper is fine
+    assert team_accuracy(gt, pred, m, SIDES) == round(9 / 11, 4)
+    assert keeper_side_accuracy(gt, pred, m.iloc[:0], SIDES) == (0, 0)
+
+
+def test_team_counts_compare_each_side_per_frame_and_flag_more_than_11():
+    """The keeper in the wrong cluster puts 2 left and 4 right in frame 0 (truth 3 and 3); in
+    frame 1 the right player called a referee leaves 3 right. A referee is never counted."""
+    gt, pred = keeper_mixup()
+    assert team_counts(gt, pred, [0, 1], SIDES) == {"team_count_err": 0.75,
+                                                    "quota_breach_share": 0.0}
+    crowd = tracks(people(0, LEFT_X * 2, "home", 1) + people(1, LEFT_X, "home", 1)
+                   + people(1, RIGHT_X, "away", 101))
+    truth = tracks(gt_frame(0) + gt_frame(1))
+    assert team_counts(truth, crowd, [0, 1], SIDES) == {"team_count_err": 3.0,
+                                                        "quota_breach_share": 0.5}
+    assert team_counts(truth, crowd.iloc[:0], [0], SIDES) == {"team_count_err": 6.0,
+                                                              "quota_breach_share": 0.0}
+    assert team_counts(truth, crowd, [], SIDES) == {"team_count_err": None,
+                                                    "quota_breach_share": None}
 
 
 def ball(f, dx, dy, interpolated=False):

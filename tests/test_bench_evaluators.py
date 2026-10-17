@@ -19,6 +19,8 @@ def test_parse_detailed_reads_percent_scores():
     assert s.combined["hota"] == pytest.approx(24.163, abs=1e-3)
     assert s.combined["deta"] == pytest.approx(11.296, abs=1e-3)
     assert s.combined["assa"] == pytest.approx(51.823, abs=1e-3)
+    assert s.combined["loca"] == pytest.approx(88.031, abs=1e-3)
+    assert s.combined["idf1"] == pytest.approx(21.142, abs=1e-3)
     assert s.combined["gt_dets"] == 6847
 
 
@@ -29,7 +31,28 @@ def test_command_switches_jersey_and_pins_split(tmp_path):
     flags = dict(zip(cmd[2::2], cmd[3::2]))
     assert flags["--USE_JERSEY_NUMBERS"] == "False" and flags["--SPLIT_TO_EVAL"] == "valid"
     assert flags["--TRACKER_SUB_FOLDER"] == "" and flags["--TRACKERS_TO_EVAL"] == "fl"
+    assert flags["--USE_TEAMS"] == "True"
     assert "--OUTPUT_FOLDER" not in flags          # the script's argparse breaks on it
+    off = trackeval_command(Path("/py"), Path("/te"), Path("/gt"), Path("/tr"), "valid", "fl",
+                            tmp_path / "seqmap.json", use_jersey=False, use_teams=False)
+    assert dict(zip(off[2::2], off[3::2]))["--USE_TEAMS"] == "False"
+
+
+def test_run_gsr_with_teams_off_tells_the_evaluator(tmp_path):
+    """The teams-off pass reaches sn-trackeval as `--USE_TEAMS False` and is parsed like any."""
+    pred = tmp_path / "tr" / "SoccerNetGS-valid" / "fl"
+    pred.mkdir(parents=True)
+    seen = []
+
+    def fake(cmd, **kw):
+        seen.append(dict(zip(cmd[2::2], cmd[3::2])))
+        (pred / "person_detailed.csv").write_text(FIXTURE.read_text())
+        return subprocess.CompletedProcess(cmd, 0, stdout="done", stderr="")
+    s = run_gsr(Path("/py"), Path("/te"), tmp_path, tmp_path / "tr", "valid", "fl",
+                ["SNGS-117"], tmp_path / "out", use_jersey=False, use_teams=False, run=fake)
+    assert seen[0]["--USE_TEAMS"] == "False" and seen[0]["--USE_JERSEY_NUMBERS"] == "False"
+    assert s.combined["hota"] == pytest.approx(24.163, abs=1e-3)
+    assert (tmp_path / "out" / "person_detailed.csv").exists()
 
 
 def test_evaluator_failure_carries_its_output(tmp_path):

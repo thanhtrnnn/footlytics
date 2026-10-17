@@ -57,14 +57,24 @@ def write_gt(paths, split, seqs, bad=()):
         (d / "Labels-GameState.json").write_text(json.dumps(labels))
 
 
+#: The fake evaluator's HOTA for each pass, by (use_jersey, use_teams).
+PASS_HOTA = {(False, True): 99.9, (False, False): 99.95, (True, True): 99.8}
+SCORES = {"hota_jersey_off": 99.9, "deta_jersey_off": 50.0, "assa_jersey_off": 60.0,
+          "loca_jersey_off": 70.0, "idf1_jersey_off": 80.0, "hota_teams_off": 99.95,
+          "hota_jersey_on": 99.8}
+PASSES = [(False, True, "eval-jersey-off"), (False, False, "eval-teams-off"),
+          (True, True, "eval-jersey-on")]
+
+
 def fake_scores(calls):
-    def run_gsr(python, te, gt_root, trackers_root, split, tracker, seqs, out_dir, use_jersey):
-        calls.append((split, tracker, tuple(seqs), use_jersey))
+    def run_gsr(python, te, gt_root, trackers_root, split, tracker, seqs, out_dir, use_jersey,
+                use_teams=True):
+        calls.append((split, tracker, tuple(seqs), use_jersey, use_teams, out_dir.name))
         for s in seqs:
             assert (trackers_root / f"SoccerNetGS-{split}" / tracker / f"{s}.json").exists()
-        v = 99.9 if not use_jersey else 99.8
-        return GsrScores({s: {"hota": v, "deta": v, "assa": v} for s in seqs},
-                         {"hota": v, "deta": v, "assa": v})
+        m = {"hota": PASS_HOTA[(use_jersey, use_teams)], "deta": 50.0, "assa": 60.0,
+             "loca": 70.0, "idf1": 80.0, "dets": 1, "gt_dets": 2}
+        return GsrScores({s: dict(m) for s in seqs}, dict(m))
     return run_gsr
 
 
@@ -78,9 +88,8 @@ def test_gt_roundtrip_isolates_a_bad_clip(paths, monkeypatch):
     t = row["tasks"]["rt"]
     assert row["status"] == "partial" and t["status"] == "partial"
     assert "1.3" in t["failed"]["SNGS-991"]
-    assert t["aggregate"]["hota_jersey_off"] == 99.9 and t["aggregate"]["hota_jersey_on"] == 99.8
-    assert t["clips"]["SNGS-990"]["hota_jersey_off"] == 99.9
-    assert {c[3] for c in calls} == {False, True} and all(c[2] == ("SNGS-990",) for c in calls)
+    assert t["aggregate"] == SCORES and t["clips"]["SNGS-990"] == SCORES
+    assert [c[3:] for c in calls] == PASSES and all(c[2] == ("SNGS-990",) for c in calls)
 
 
 def test_rescore_reads_tracker_files_from_the_zip(paths, monkeypatch):
@@ -96,6 +105,7 @@ def test_rescore_reads_tracker_files_from_the_zip(paths, monkeypatch):
     t = row["tasks"]["bl"]
     assert t["failed"] == {"SNGS-991": "no predictions in baseline/SoccerNetGS-test.zip"}
     assert calls[0][1] == "tracklab"
+    assert t["aggregate"] == SCORES and [c[3:] for c in calls] == PASSES
 
 
 def test_prune_keeps_the_last_runs_work(paths):
@@ -610,14 +620,17 @@ _SWAP = {Team.HOME.value: Team.AWAY.value, Team.AWAY.value: Team.HOME.value}
 
 
 def pipeline_fakes(monkeypatch, empty=(), uncalibrated=(), crash=(), real_calibration=False,
-                   ball_shift=None, short=()):
+                   ball_shift=None, short=(), shift_m=None, keeper_bug=()):
     """No GPU, no model. Calibration is a stub (identity homographies), the pipeline returns the
     ground truth with HOME and AWAY swapped (a side-mapping bug would show as wrong teams).
     `empty`: run_frames raises "no detections at all"; `uncalibrated`: no homography on any
     frame, so the pipeline sees nothing; `crash`: the calibrator itself raises;
     `ball_shift`: `{clip: px}` moves that clip's predicted ball box right by `px` pixels;
+    `shift_m`: `{clip: m}` moves that clip's predicted pitch positions along x by `m` metres;
+    `keeper_bug`: both keepers come out as players, the left one in the right team's cluster
+    and the right one unseen (the kit-colour failure that flips sides);
     `short`: the calibration returns one frame fewer than the clip has."""
-    ball_shift = ball_shift or {}
+    ball_shift, shift_m = ball_shift or {}, shift_m or {}
     seen = {"vram": [], "calibrated": [], "run": [], "mapped": {}}
     monkeypatch.setattr(runner, "require_vram", lambda mib: seen["vram"].append(mib))
     monkeypatch.setattr(runner, "_detector", lambda paths, cfg: "detector")
@@ -649,6 +662,15 @@ def pipeline_fakes(monkeypatch, empty=(), uncalibrated=(), crash=(), real_calibr
             tr = state.tracks
             tr["bbox_x"] = tr["bbox_x"].astype(float)
             tr.loc[tr["role"].astype(str) == "ball", "bbox_x"] += ball_shift[meta.match_id]
+        state.tracks["x"] = state.tracks["x"].astype(float) + shift_m.get(meta.match_id, 0.0)
+        if meta.match_id in keeper_bug:
+            tr = state.tracks
+            keeper = tr["role"].astype(str) == "goalkeeper"
+            left, right = keeper & (tr["x"] < 0), keeper & (tr["x"] > 0)
+            right_team = tr.loc[right, "team"].astype(str).iloc[0]
+            tr["team"] = tr["team"].astype(str).where(~left, right_team).astype("category")
+            tr["role"] = tr["role"].astype(str).where(~keeper, "player").astype("category")
+            state.tracks = tr[~right]
         return state, {"frames_processed": n, "frames_calibrated": n, "calib_success_rate": 1.0}
     monkeypatch.setattr(runner, "run_frames", run_frames)
     return seen
@@ -673,20 +695,26 @@ def test_gsr_pipeline_scores_a_clip_and_its_extras(paths, monkeypatch):
     t = row["tasks"]["gp"]
     assert t["status"] == "complete", t
     c, agg = t["clips"]["SNGS-990"], t["aggregate"]
-    assert c["hota_jersey_off"] == agg["hota_jersey_off"] == 99.9
-    assert c["hota_jersey_on"] == agg["hota_jersey_on"] == 99.8
-    assert c["deta_jersey_off"] == 99.9 and c["assa_jersey_off"] == 99.9
+    assert {k: c[k] for k in SCORES} == {k: agg[k] for k in SCORES} == SCORES
     assert c["team_accuracy"] == 1.0 and agg["team_accuracy"] == 1.0   # the swap is not an error
     assert c["shape_error_m"] is None and agg["shape_error_m"] is None   # 3 a side < min_players
     assert c["ball_recall"] == 1.0 and agg["ball_recall"] == 1.0
     assert c["ball_px_median_hits"] == agg["ball_px_median_hits"] == 0.0
     assert c["ball_wrong_share"] == agg["ball_wrong_share"] == 0.0
     assert "ball_px_median" not in c and "ball_px_median" not in agg
+    assert c["pos_err_median_m"] == agg["pos_err_median_m"] == 0.0
+    assert c["pos_err_p90_m"] == agg["pos_err_p90_m"] == 0.0
+    assert c["recall_2m"] == agg["recall_2m"] == 1.0
+    for k in ("keeper_recall", "referee_recall", "referee_precision", "keeper_side_accuracy"):
+        assert c[k] == agg[k] == 1.0, k
+    assert c["team_count_err"] == agg["team_count_err"] == 0.0
+    assert c["quota_breach_share"] == agg["quota_breach_share"] == 0.0
     assert not [k for k in c if k.startswith("_")]               # raw pooling data stays private
+    assert not [k for k in agg if k.startswith("_")]
     assert c["calib_success_rate"] == 1.0 and agg["calib_success_rate"] == 1.0
     assert c["seconds_per_match_minute"] >= 0 and agg["seconds_per_match_minute"] >= 0
     assert t["leakage"] == {"status": "unverified"} and t["failed"] == {}
-    assert {x[3] for x in calls} == {False, True} and all(x[2] == ("SNGS-990",) for x in calls)
+    assert [x[3:] for x in calls] == PASSES and all(x[2] == ("SNGS-990",) for x in calls)
     preds = json.loads((pipeline_dir(paths, "p1") / "SNGS-990.json").read_text())["predictions"]
     assert preds and all(p["attributes"]["jersey"] is None for p in preds)
     # what reached the pipeline: the clip's frames at 25 fps, no montage, the cached detector,
@@ -737,9 +765,60 @@ def test_gsr_pipeline_ball_aggregate_weights_clips_by_their_gt_ball_frames(paths
     assert agg["ball_px_median_hits"] == 7.0                      # median of 4, 4, 4, 10, 10, 10
 
 
+def test_gsr_pipeline_pools_positions_across_clips(paths, monkeypatch):
+    """Every player 0.5 m off in one clip and 3 m off in the other, which has twice the GT
+    frames (the fake pipeline sees 3 of its 6): the aggregate is over the pooled matches and GT
+    people, never an average of clip numbers. Team accuracy keeps only the 2 m pairs."""
+    write_gsr_clip(paths, seq="SNGS-990", n=3)
+    write_gsr_clip(paths, seq="SNGS-991", n=6)
+    t = run_pool(paths, monkeypatch, "pl4", shift_m={"SNGS-990": 0.5, "SNGS-991": 3.0})
+    assert t["status"] == "complete", t
+    a, b = t["clips"]["SNGS-990"], t["clips"]["SNGS-991"]
+    assert (a["pos_err_median_m"], a["pos_err_p90_m"], a["recall_2m"]) == (0.5, 0.5, 1.0)
+    assert (b["pos_err_median_m"], b["pos_err_p90_m"], b["recall_2m"]) == (3.0, 3.0, 0.0)
+    assert a["team_accuracy"] == 1.0 and b["team_accuracy"] is None    # no pair within 2 m
+    agg = t["aggregate"]
+    assert agg["recall_2m"] == round(18 / 54, 4)          # the clips' mean would say 0.5
+    assert agg["pos_err_median_m"] == 1.75 and agg["pos_err_p90_m"] == 3.0
+    assert agg["team_accuracy"] == 1.0
+    assert not [k for c in t["clips"].values() for k in c if k.startswith("_")]
+
+
+def test_gsr_pipeline_pools_roles_and_keeper_sides_across_clips(paths, monkeypatch):
+    """One clip gets the keepers right. In the other both come out as players, the left one in
+    the right team's cluster and the right one unseen. Keepers are few, so the aggregate is over
+    the pooled matched keepers: 6 of 9, where the clips' mean would say 0.5."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    t = run_pool(paths, monkeypatch, "pl5", keeper_bug=("SNGS-991",))
+    assert t["status"] == "complete", t
+    a, b = t["clips"]["SNGS-990"], t["clips"]["SNGS-991"]
+    assert (a["keeper_recall"], a["keeper_side_accuracy"]) == (1.0, 1.0)
+    assert (b["keeper_recall"], b["keeper_side_accuracy"]) == (0.0, 0.0)
+    assert (b["referee_recall"], b["referee_precision"]) == (1.0, 1.0)
+    agg = t["aggregate"]
+    assert agg["keeper_recall"] == agg["keeper_side_accuracy"] == round(6 / 9, 4)
+    assert agg["referee_recall"] == agg["referee_precision"] == 1.0
+    assert not [k for c in t["clips"].values() for k in c if k.startswith("_")]
+    assert not [k for k in agg if k.startswith("_")]
+
+
+def test_gsr_pipeline_team_counts_are_the_mean_over_clips(paths, monkeypatch):
+    """The keeper in the wrong cluster leaves 2 left and 3 right against 3 and 3 on each frame:
+    that clip is off by 0.5 a side, the clean one by 0, and the aggregate is their mean."""
+    write_gsr_clip(paths, seq="SNGS-990")
+    write_gsr_clip(paths, seq="SNGS-991")
+    t = run_pool(paths, monkeypatch, "pl6", keeper_bug=("SNGS-991",))
+    assert t["clips"]["SNGS-990"]["team_count_err"] == 0.0
+    assert t["clips"]["SNGS-991"]["team_count_err"] == 0.5
+    assert t["aggregate"]["team_count_err"] == 0.25
+    assert t["aggregate"]["quota_breach_share"] == 0.0
+
+
 def test_gsr_pipeline_an_empty_scored_clip_counts_its_gt_ball_frames_as_missed(paths, monkeypatch):
-    """A clip whose pipeline produced nothing has GT balls and no predictions: its recall is 0.0
-    and its frames stay in the pooled denominator, so it cannot flatter the aggregate."""
+    """A clip whose pipeline produced nothing has GT balls and people and no predictions: its
+    recalls are 0.0 and its frames and people stay in the pooled denominators, so it cannot
+    flatter the aggregate."""
     write_gsr_clip(paths, seq="SNGS-990")
     write_gsr_clip(paths, seq="SNGS-991")
     t = run_pool(paths, monkeypatch, "pl3", empty=("SNGS-991",), ball_shift={"SNGS-990": 4.0})
@@ -747,8 +826,11 @@ def test_gsr_pipeline_an_empty_scored_clip_counts_its_gt_ball_frames_as_missed(p
     dead = t["clips"]["SNGS-991"]
     assert dead["ball_recall"] == 0.0 and dead["ball_wrong_share"] == 0.0
     assert dead["ball_px_median_hits"] is None and not [k for k in dead if k.startswith("_")]
+    assert dead["recall_2m"] == 0.0 and dead["pos_err_median_m"] is None
     agg = t["aggregate"]
     assert agg["ball_recall"] == 0.5             # 3 hits over the 6 GT-ball frames of both clips
+    assert agg["recall_2m"] == 0.5               # 18 found over the 36 GT people of both clips
+    assert agg["pos_err_median_m"] == 0.0
     assert agg["ball_wrong_share"] == 0.0 and agg["ball_px_median_hits"] == 4.0
     assert agg["team_accuracy"] == 1.0                # the other clip means still skip it
 
@@ -770,7 +852,7 @@ def test_gsr_pipeline_isolates_a_clip_with_no_detections(paths, monkeypatch):
     # the empty predictions file reached the scorer, beside the good clip's
     out = pipeline_dir(paths, "p2")
     assert json.loads((out / "SNGS-991.json").read_text()) == {"predictions": []}
-    assert all(c[2] == ("SNGS-990", "SNGS-991") for c in calls) and len(calls) == 2
+    assert all(c[2] == ("SNGS-990", "SNGS-991") for c in calls) and len(calls) == 3
     assert t["clips"]["SNGS-991"]["hota_jersey_off"] == 99.9       # scored, not skipped
     # the good clip is scored normally
     good = t["clips"]["SNGS-990"]
@@ -887,7 +969,7 @@ def test_gsr_pipeline_a_gt_conversion_failure_keeps_the_clip_scored(paths, monke
     row = runner.run_suite("t", "p10", paths, "sha", "h", suite_spec=spec(pipeline_task("all")))
     t = row["tasks"]["gp"]
     assert t["status"] == "partial" and t["failed"] == {"SNGS-991": "ValueError: bad gt"}
-    assert len(calls) == 2 and all(c[2] == ("SNGS-990", "SNGS-991") for c in calls)
+    assert len(calls) == 3 and all(c[2] == ("SNGS-990", "SNGS-991") for c in calls)
     bad = t["clips"]["SNGS-991"]
     assert bad["error"] == "ValueError: bad gt" and bad["hota_jersey_off"] == 99.9
     assert json.loads((pipeline_dir(paths, "p10") / "SNGS-991.json").read_text())["predictions"]
@@ -899,17 +981,18 @@ def test_gsr_pipeline_a_gt_conversion_failure_keeps_the_clip_scored(paths, monke
 
 def test_gsr_pipeline_an_empty_clip_whose_gt_cannot_be_converted_has_no_ball_numbers(
         paths, monkeypatch):
-    """Without a GT state there is no ball frame count to charge: the clip stays scored and
-    recorded, says why it has no ball numbers, and the aggregate is the other clip's."""
+    """Without a GT state there is no ball frame or GT person to charge: the clip stays scored
+    and recorded, says why it has no ball or position numbers, and the aggregate is the other
+    clip's."""
     write_gsr_clip(paths, seq="SNGS-990")
     write_gsr_clip(paths, seq="SNGS-991")
     convert_failing_for(monkeypatch, "SNGS-991")
     t = run_pool(paths, monkeypatch, "pl3b", empty=("SNGS-991",), ball_shift={"SNGS-990": 4.0})
     assert t["failed"] == {"SNGS-991": "RuntimeError: no detections at all"}
     dead = t["clips"]["SNGS-991"]
-    assert dead["hota_jersey_off"] == 99.9 and dead["ball_error"] == "ValueError: bad gt"
-    assert "ball_recall" not in dead
-    assert t["aggregate"]["ball_recall"] == 1.0
+    assert dead["hota_jersey_off"] == 99.9 and dead["gt_error"] == "ValueError: bad gt"
+    assert "ball_recall" not in dead and "recall_2m" not in dead
+    assert t["aggregate"]["ball_recall"] == 1.0 and t["aggregate"]["recall_2m"] == 1.0
 
 
 # ---------------------------------------------------------------- frame alignment
@@ -1189,3 +1272,19 @@ def test_gsr_calibration_loads_the_calibrator_once_up_front_and_fails_loudly(
     t = row["tasks"]["gc"]
     assert t["status"] == "failed" and t["error"] == "RuntimeError: weights missing"
     assert len(loads) == 1 and calib == []                       # nothing reached the evaluator
+
+
+def test_gsr_pipeline_stops_when_the_shared_disk_drops_below_the_floor_mid_task(paths, monkeypatch):
+    from footlytics.bench import host
+    write_gsr_clip(paths, "SNGS-990")
+    write_gsr_clip(paths, "SNGS-991")
+    seen = pipeline_fakes(monkeypatch)
+    monkeypatch.setattr(runner, "run_gsr", fake_scores([]))
+    free = iter([10_000_000_000, 10_000_000_000, 1_000_000_000])   # preflight, clip 1, clip 2
+    monkeypatch.setattr(host, "free_disk_bytes", lambda p: next(free))
+    row = runner.run_suite("t", "p-disk", paths, "sha", "h", suite_spec=spec(
+        pipeline_task(["SNGS-990", "SNGS-991"])))
+    t = row["tasks"]["gp"]
+    assert t["status"] == "failed" and "GB free" in t["error"]
+    assert [r[0] for r in seen["run"]] == ["SNGS-990"]
+    assert row["status"] == "failed"

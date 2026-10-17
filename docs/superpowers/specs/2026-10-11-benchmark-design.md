@@ -73,7 +73,7 @@ libraries and kernel module disagree until its admin reboots it, and we have no 
 
 | Suite | Data | Metrics |
 |---|---|---|
-| quick | 6 pinned GSR valid clips | GS-HOTA (jersey off) with DetA/AssA, team accuracy, ball recall and px error, tactical-feature error (m), seconds per match minute |
+| quick | 6 pinned GSR valid clips | GS-HOTA (jersey off) with DetA, AssA, LocA and IDF1; GS-HOTA with teams off too (the gap is what team errors cost); team accuracy, keeper side accuracy, per-side player count error and share of frames over 11 a side; keeper recall, referee recall and precision; position error (median, p90, m) and recall within 2 m; ball recall and px error; tactical-feature error (m); seconds per match minute |
 | quick | 60 pinned SN-Calibration valid frames | JaC@5 x completeness, median reprojection px |
 | quick | 6 pinned GSR valid clips, calibrated frame by frame (keyframes + camera tracker) | JaC@5 x completeness on the GSR pitch-line labels, share of labelled frames calibrated, keyframe acceptance |
 | quick | V.League mini-GT: 3 matches x 15 frames, half held out | landmark error (m) on landmarks the solver did not use, % frames under 1 m, frame-to-frame jitter (m) |
@@ -128,13 +128,21 @@ reader). Rows carry `leakage: unverified` (SoccerMaster's detector) and are inte
 | Baseline (sn-gamestate), re-scored, test | 38.3 | 34.1 | 43.2 | 23.1 | | | | |
 | GSR valid, 6 quick clips | 42.4 | 39.5 | 45.8 | 12.3 | 66 % | 26 % / - / - | 3.7 m | 111 |
 
-Per-clip GS-HOTA on test ranges from 16 to 82. The weakest clips have the teams on the wrong
-side: on the 58 valid clips (first nightly pass, 2026-10-12) 12 clips are swapped. The pipeline
-never emits the goalkeeper role, and kit clustering sometimes puts a keeper in the other team's
-cluster, which drags that team's mean x. But a prototype position-only keeper rule (found 81 of
-105 keeper tracks, 5 false) fixed only 1 of the 12 swapped clips (team accuracy 0.710 to 0.729), so
-most swaps have another cause, still being investigated. Team sides and ball selection are the two
-biggest levers.
+Per-clip GS-HOTA on test ranges from 16 to 82. Team errors are the largest single loss: on the
+quick clips GS-HOTA with teams ignored is 55.0 against 42.4 jersey off (run d2500aa).
+
+Where the team errors come from, measured on the 58 valid clips (first nightly pass, 2026-10-12):
+
+- Kit-colour clustering is the main cause. Team accuracy is 0.710 as scored, 0.789 with the best
+  left/right choice on every clip, and 17 of 58 clips stay below 0.7 even then.
+- The side rule is not the lever. No per-clip rule beats team mean x on our output: mean x 0.710
+  (12 clips swapped), mean x without keepers 0.715 (12), deepest-player vote 0.649 (20),
+  deepest-three vote 0.712 (13). On a 30 s broadcast clip the two teams' mean x often differ by
+  under 3 m even in ground truth, so a few misplaced players decide the side.
+- The pipeline never emits the goalkeeper role, and kit clustering often puts a keeper in the
+  other team's cluster. A prototype position-only keeper rule found 81 of 105 keeper tracks (5
+  false) but fixed only 1 of the 12 swapped clips. It matters more for tactics than for this
+  score: `infer_attacking_direction` takes the most extreme player of each team as its keeper.
 
 ## Validity rules
 
