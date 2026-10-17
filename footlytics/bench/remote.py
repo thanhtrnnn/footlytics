@@ -101,6 +101,14 @@ class Remote:
                 f"&& mv {d}.tmp {d}", input=archive, timeout=600)
         return d
 
+    def ship_data(self, name: str, archive: bytes) -> str:
+        """Replace `data/<name>` with the contents of a tar archive."""
+        _safe(name)
+        d = f"{self.root}/data/{name}"
+        self.sh(f"rm -rf {d}.tmp && mkdir -p {d}.tmp && tar -x -C {d}.tmp && rm -rf {d} "
+                f"&& mv {d}.tmp {d}", input=archive, timeout=1800)
+        return d
+
     def setup(self, sha: str) -> str:
         _safe(sha)
         d = f"{self.root}/src/{sha}"

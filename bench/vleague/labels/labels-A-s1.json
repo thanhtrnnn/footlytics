@@ -1,0 +1,1697 @@
+{
+ "annotator": "A",
+ "frames": {
+  "cong-an-tp-ho-chi-minh-ha-noi/0021612": {
+   "corner_LT": [
+    868.24,
+    206.07
+   ],
+   "goal_area_LT_front": [
+    517.65,
+    323.71
+   ],
+   "goal_area_LT_goalline": [
+    87.06,
+    344.89
+   ],
+   "pen_arc_LB": [
+    618.82,
+    476.65
+   ],
+   "pen_arc_LT": [
+    1025.88,
+    361.36
+   ],
+   "pen_area_LB_front": [
+    82.35,
+    636.65
+   ],
+   "pen_area_LT_front": [
+    1289.41,
+    288.42
+   ],
+   "pen_spot_L": [
+    534.12,
+    394.3
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0043212": {
+   "goal_area_LB_front": [
+    752.56,
+    595.31
+   ],
+   "goal_area_LB_goalline": [
+    506.53,
+    573.6
+   ],
+   "goal_area_LT_front": [
+    1290.45,
+    489.18
+   ],
+   "goalpost_LB": [
+    693.03,
+    525.26
+   ],
+   "goalpost_LT": [
+    920,
+    493.13
+   ],
+   "pen_arc_LB": [
+    1386.93,
+    629.08
+   ],
+   "pen_arc_LT": [
+    1782.51,
+    527.77
+   ],
+   "pen_area_LB_front": [
+    865.93,
+    754.5
+   ],
+   "pen_area_LB_goalline": [
+    14.47,
+    667.67
+   ],
+   "pen_spot_L": [
+    1312.16,
+    549.48
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0064812": {
+   "goal_area_LT_front": [
+    649.85,
+    504.96
+   ],
+   "goalpost_LT": [
+    161.6,
+    525.35
+   ],
+   "pen_arc_LB": [
+    769.45,
+    679.73
+   ],
+   "pen_arc_LT": [
+    1244.62,
+    549.48
+   ],
+   "pen_area_LB_front": [
+    153.91,
+    864.09
+   ],
+   "pen_area_LT_front": [
+    1559.06,
+    465.06
+   ],
+   "pen_area_LT_goalline": [
+    712.55,
+    428.01
+   ],
+   "pen_spot_L": [
+    675.5,
+    584.77
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0090012": {
+   "centre_circle_B": [
+    995.39,
+    649
+   ],
+   "centre_circle_T": [
+    998.24,
+    473.36
+   ],
+   "centre_spot": [
+    997.57,
+    550.57
+   ],
+   "halfway_T": [
+    998.59,
+    322.74
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0120612": {
+   "centre_circle_B": [
+    1476.18,
+    544.65
+   ],
+   "centre_spot": [
+    1480.15,
+    464.2
+   ],
+   "halfway_B": [
+    1463.27,
+    1045.51
+   ],
+   "halfway_T": [
+    1490.66,
+    288.98
+   ],
+   "pen_area_LT_front": [
+    183.32,
+    329.98
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0144012": {
+   "goal_area_LT_front": [
+    308.74,
+    395.11
+   ],
+   "goal_area_LT_goalline": [
+    91.66,
+    385.46
+   ],
+   "pen_arc_LB": [
+    401.78,
+    521.27
+   ],
+   "pen_arc_LT": [
+    758.11,
+    422.11
+   ],
+   "pen_area_LT_front": [
+    967.24,
+    361.34
+   ],
+   "pen_area_LT_goalline": [
+    354.57,
+    337.22
+   ],
+   "pen_spot_L": [
+    323.22,
+    453
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0171012": {
+   "centre_circle_B": [
+    869.31,
+    519.21
+   ],
+   "centre_circle_T": [
+    875.01,
+    379.55
+   ],
+   "centre_spot": [
+    875.01,
+    439.41
+   ],
+   "halfway_T": [
+    877.86,
+    265.55
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0192612": {
+   "centre_circle_T": [
+    1755.72,
+    507.81
+   ],
+   "halfway_T": [
+    1453.6,
+    433.71
+   ],
+   "pen_arc_LB": [
+    450.33,
+    613.27
+   ],
+   "pen_arc_LT": [
+    456.03,
+    522.06
+   ],
+   "pen_area_LB_front": [
+    444.63,
+    741.53
+   ],
+   "pen_area_LT_front": [
+    456.03,
+    473.61
+   ],
+   "pen_spot_L": [
+    185.26,
+    564.82
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0223212": {
+   "goal_area_RB_front": [
+    1487.81,
+    445.11
+   ],
+   "goal_area_RB_goalline": [
+    1681.62,
+    428.01
+   ],
+   "goal_area_RT_front": [
+    1040.32,
+    353.9
+   ],
+   "goal_area_RT_goalline": [
+    1214.19,
+    342.5
+   ],
+   "goalpost_RB": [
+    1530.56,
+    399.51
+   ],
+   "goalpost_RT": [
+    1339.6,
+    362.45
+   ],
+   "pen_arc_RT": [
+    661.25,
+    385.26
+   ],
+   "pen_area_RB_front": [
+    1336.75,
+    576.22
+   ],
+   "pen_area_RT_front": [
+    464.58,
+    331.1
+   ],
+   "pen_area_RT_goalline": [
+    1020.37,
+    308.76
+   ],
+   "pen_spot_R": [
+    1023.22,
+    405.21
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0246612": {
+   "corner_RT": [
+    1758.39,
+    419.23
+   ],
+   "pen_arc_RT": [
+    1480.5,
+    629.6
+   ],
+   "pen_area_RT_front": [
+    1140.88,
+    531.32
+   ],
+   "pen_area_RT_goalline": [
+    1920,
+    507.81
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0270012": {
+   "corner_RT": [
+    1559.06,
+    316.85
+   ],
+   "pen_arc_RB": [
+    1787.08,
+    599.02
+   ],
+   "pen_arc_RT": [
+    1362.4,
+    476.46
+   ],
+   "pen_area_RT_front": [
+    1100.18,
+    405.21
+   ],
+   "pen_area_RT_goalline": [
+    1861.18,
+    376.7
+   ],
+   "pen_spot_R": [
+    1883.98,
+    513.51
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0304212": {
+   "centre_circle_B": [
+    1259.79,
+    744.38
+   ],
+   "centre_circle_T": [
+    1262.64,
+    576.22
+   ],
+   "centre_spot": [
+    1262.64,
+    644.62
+   ],
+   "halfway_B": [
+    1265.49,
+    447.96
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0327612": {
+   "goal_area_LB_front": [
+    1091.63,
+    410.91
+   ],
+   "goal_area_LB_goalline": [
+    852.21,
+    388.11
+   ],
+   "goal_area_LT_front": [
+    1653.12,
+    302.6
+   ],
+   "goal_area_LT_goalline": [
+    1427.95,
+    288.35
+   ],
+   "pen_arc_LB": [
+    1755.72,
+    450.81
+   ],
+   "pen_area_LB_front": [
+    1251.24,
+    576.22
+   ],
+   "pen_area_LB_goalline": [
+    384.78,
+    470.76
+   ],
+   "pen_spot_L": [
+    1675.92,
+    368.15
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0358212": {
+   "corner_RT": [
+    832.16,
+    414.4
+   ],
+   "goal_area_RT_front": [
+    1218.09,
+    549.48
+   ],
+   "goal_area_RT_goalline": [
+    1495.48,
+    537.42
+   ],
+   "goalpost_RT": [
+    1703.42,
+    571.6
+   ],
+   "pen_arc_RB": [
+    1084.42,
+    726.31
+   ],
+   "pen_arc_RT": [
+    613.69,
+    596.05
+   ],
+   "pen_area_RB_front": [
+    1710.15,
+    908.88
+   ],
+   "pen_area_RT_front": [
+    315.98,
+    513.3
+   ],
+   "pen_area_RT_goalline": [
+    1165.03,
+    474.7
+   ],
+   "pen_spot_R": [
+    1191.56,
+    631.49
+   ]
+  },
+  "cong-an-tp-ho-chi-minh-ha-noi/0378012": {
+   "corner_RT": [
+    1735.77,
+    208.54
+   ],
+   "pen_arc_RB": [
+    1906.79,
+    425.16
+   ],
+   "pen_arc_RT": [
+    1564.76,
+    328.25
+   ],
+   "pen_area_RT_front": [
+    1356.7,
+    271.25
+   ]
+  },
+  "ninh-binh-pvf-cand/0009012": {
+   "centre_circle_B": [
+    971.92,
+    730.13
+   ],
+   "centre_circle_T": [
+    969.07,
+    618.97
+   ],
+   "centre_spot": [
+    969.07,
+    667.43
+   ],
+   "corner_LT": [
+    210.92,
+    542.02
+   ],
+   "corner_RT": [
+    1715.82,
+    544.87
+   ],
+   "goal_area_LT_front": [
+    88.36,
+    621.82
+   ],
+   "goal_area_RT_front": [
+    1849.78,
+    627.52
+   ],
+   "halfway_B": [
+    977.62,
+    1040.8
+   ],
+   "halfway_T": [
+    966.22,
+    539.17
+   ],
+   "pen_arc_LB": [
+    133.96,
+    715.88
+   ],
+   "pen_arc_LT": [
+    296.42,
+    627.52
+   ],
+   "pen_arc_RB": [
+    1801.33,
+    721.58
+   ],
+   "pen_arc_RT": [
+    1636.02,
+    630.37
+   ],
+   "pen_area_LT_front": [
+    393.33,
+    576.22
+   ],
+   "pen_area_LT_goalline": [
+    131.11,
+    573.37
+   ],
+   "pen_area_RT_front": [
+    1539.11,
+    581.92
+   ],
+   "pen_area_RT_goalline": [
+    1812.73,
+    579.07
+   ],
+   "pen_spot_L": [
+    94.06,
+    667.43
+   ],
+   "pen_spot_R": [
+    1838.38,
+    670.28
+   ]
+  },
+  "ninh-binh-pvf-cand/0028812": {
+   "corner_LT": [
+    998.6,
+    298.63
+   ],
+   "goal_area_LB_front": [
+    301.51,
+    614.6
+   ],
+   "goal_area_LB_goalline": [
+    96.48,
+    585.66
+   ],
+   "goal_area_LT_front": [
+    767.04,
+    445.76
+   ],
+   "goal_area_LT_goalline": [
+    590.95,
+    428.88
+   ],
+   "goalpost_LB": [
+    265.33,
+    532.59
+   ],
+   "pen_arc_LB": [
+    832.16,
+    653.2
+   ],
+   "pen_arc_LT": [
+    1145.73,
+    503.65
+   ],
+   "pen_area_LB_front": [
+    440,
+    848.42
+   ],
+   "pen_area_LT_front": [
+    1349.85,
+    409.23
+   ],
+   "pen_area_LT_goalline": [
+    808.04,
+    358.93
+   ],
+   "pen_spot_L": [
+    776.68,
+    549.47
+   ]
+  },
+  "ninh-binh-pvf-cand/0050412": {
+   "corner_RT": [
+    644.15,
+    353.9
+   ],
+   "goal_area_RB_front": [
+    1393.75,
+    681.68
+   ],
+   "goal_area_RB_goalline": [
+    1618.91,
+    653.17
+   ],
+   "goal_area_RT_front": [
+    900.66,
+    510.66
+   ],
+   "goal_area_RT_goalline": [
+    1088.78,
+    487.86
+   ],
+   "goalpost_RB": [
+    1439.35,
+    593.32
+   ],
+   "goalpost_RT": [
+    1228.44,
+    527.76
+   ],
+   "pen_arc_RB": [
+    852.21,
+    732.98
+   ],
+   "pen_arc_RT": [
+    498.79,
+    576.22
+   ],
+   "pen_area_RB_front": [
+    1265.49,
+    932.49
+   ],
+   "pen_area_RT_front": [
+    262.22,
+    473.61
+   ],
+   "pen_area_RT_goalline": [
+    855.06,
+    416.61
+   ],
+   "pen_spot_R": [
+    894.96,
+    610.42
+   ]
+  },
+  "ninh-binh-pvf-cand/0082812": {
+   "centre_circle_B": [
+    370.53,
+    778.58
+   ],
+   "centre_circle_T": [
+    356.28,
+    556.27
+   ],
+   "centre_spot": [
+    364.83,
+    650.32
+   ],
+   "corner_RT": [
+    1735.77,
+    348.2
+   ],
+   "halfway_T": [
+    344.87,
+    393.81
+   ],
+   "pen_arc_RB": [
+    1889.68,
+    664.57
+   ],
+   "pen_arc_RT": [
+    1601.81,
+    516.36
+   ],
+   "pen_area_RT_front": [
+    1433.65,
+    428.01
+   ],
+   "pen_spot_R": [
+    1844.08,
+    542.02
+   ]
+  },
+  "ninh-binh-pvf-cand/0097212": {
+   "corner_RT": [
+    940.57,
+    268.4
+   ],
+   "goal_area_RB_front": [
+    1519.16,
+    530.62
+   ],
+   "goal_area_RB_goalline": [
+    1698.72,
+    510.66
+   ],
+   "goal_area_RT_front": [
+    1140.08,
+    390.96
+   ],
+   "goal_area_RT_goalline": [
+    1282.59,
+    379.55
+   ],
+   "goalpost_RB": [
+    1559.06,
+    465.06
+   ],
+   "goalpost_RT": [
+    1393.75,
+    410.91
+   ],
+   "pen_arc_RB": [
+    1091.63,
+    564.82
+   ],
+   "pen_arc_RT": [
+    829.41,
+    439.41
+   ],
+   "pen_area_RB_front": [
+    1413.7,
+    721.58
+   ],
+   "pen_area_RT_front": [
+    658.4,
+    356.75
+   ],
+   "pen_area_RT_goalline": [
+    1105.88,
+    319.7
+   ],
+   "pen_spot_R": [
+    1131.53,
+    476.46
+   ]
+  },
+  "ninh-binh-pvf-cand/0120612": {
+   "corner_RT": [
+    1490.65,
+    337.22
+   ],
+   "goal_area_RT_front": [
+    1739.1,
+    489.18
+   ],
+   "goal_area_RT_goalline": [
+    1920,
+    475.08
+   ],
+   "pen_arc_RB": [
+    1663.02,
+    694.97
+   ],
+   "pen_arc_RT": [
+    1343.52,
+    532.59
+   ],
+   "pen_area_RB_front": [
+    1915.18,
+    826.87
+   ],
+   "pen_area_RT_front": [
+    1149.92,
+    432.49
+   ],
+   "pen_area_RT_goalline": [
+    1695.68,
+    402.34
+   ],
+   "pen_spot_R": [
+    1719.8,
+    587.05
+   ]
+  },
+  "ninh-binh-pvf-cand/0153012": {
+   "centre_circle_B": [
+    872.16,
+    673.13
+   ],
+   "centre_circle_T": [
+    863.61,
+    456.51
+   ],
+   "centre_spot": [
+    866.46,
+    550.57
+   ],
+   "halfway_T": [
+    855.06,
+    296.9
+   ]
+  },
+  "ninh-binh-pvf-cand/0178212": {
+   "centre_circle_B": [
+    1245.54,
+    436.56
+   ],
+   "centre_circle_T": [
+    1248.39,
+    219.94
+   ],
+   "centre_spot": [
+    1248.39,
+    314
+   ],
+   "halfway_B": [
+    1242.69,
+    1012.3
+   ],
+   "halfway_T": [
+    1251.24,
+    57.48
+   ]
+  },
+  "ninh-binh-pvf-cand/0216012": {
+   "goal_area_LB_front": [
+    487.38,
+    599.02
+   ],
+   "goal_area_LB_goalline": [
+    233.72,
+    596.17
+   ],
+   "goal_area_LT_front": [
+    601.39,
+    393.81
+   ],
+   "goal_area_LT_goalline": [
+    401.88,
+    390.96
+   ],
+   "goalpost_LB": [
+    293.57,
+    522.06
+   ],
+   "goalpost_LT": [
+    361.98,
+    442.26
+   ],
+   "pen_arc_LB": [
+    1008.97,
+    579.07
+   ],
+   "pen_arc_LT": [
+    1003.27,
+    416.61
+   ],
+   "pen_area_LB_front": [
+    1014.67,
+    801.38
+   ],
+   "pen_area_LB_goalline": [
+    62.7,
+    798.53
+   ],
+   "pen_area_LT_front": [
+    1000.42,
+    319.7
+   ],
+   "pen_area_LT_goalline": [
+    473.13,
+    311.15
+   ],
+   "pen_spot_L": [
+    780.96,
+    487.86
+   ]
+  },
+  "ninh-binh-pvf-cand/0243012": {
+   "corner_LT": [
+    868.34,
+    79.13
+   ],
+   "goal_area_LB_front": [
+    248.44,
+    349.28
+   ],
+   "goal_area_LB_goalline": [
+    60.3,
+    320.33
+   ],
+   "goal_area_LT_front": [
+    644.02,
+    204.55
+   ],
+   "goal_area_LT_goalline": [
+    511.36,
+    182.85
+   ],
+   "goalpost_LB": [
+    209.85,
+    274.5
+   ],
+   "goalpost_LT": [
+    388.14,
+    216.48
+   ],
+   "pen_arc_LB": [
+    723.62,
+    390.28
+   ],
+   "pen_arc_LT": [
+    996.18,
+    264.86
+   ],
+   "pen_area_LB_front": [
+    376.28,
+    559.12
+   ],
+   "pen_area_LT_front": [
+    1172.26,
+    182.85
+   ],
+   "pen_area_LT_goalline": [
+    699.5,
+    127.37
+   ],
+   "pen_spot_L": [
+    670.55,
+    296.21
+   ]
+  },
+  "ninh-binh-pvf-cand/0273612": {
+   "centre_circle_B": [
+    983.32,
+    479.31
+   ],
+   "centre_circle_T": [
+    977.62,
+    291.2
+   ],
+   "centre_spot": [
+    980.47,
+    371
+   ],
+   "halfway_B": [
+    994.72,
+    978.1
+   ],
+   "halfway_T": [
+    974.77,
+    151.54
+   ]
+  },
+  "ninh-binh-pvf-cand/0295212": {
+   "centre_circle_B": [
+    159.61,
+    618.97
+   ],
+   "centre_circle_T": [
+    133.96,
+    393.81
+   ],
+   "centre_spot": [
+    145.36,
+    490.71
+   ],
+   "corner_RT": [
+    1493.51,
+    157.24
+   ],
+   "goal_area_RT_front": [
+    1701.57,
+    285.5
+   ],
+   "goal_area_RT_goalline": [
+    1855.48,
+    274.1
+   ],
+   "halfway_T": [
+    108.31,
+    222.79
+   ],
+   "pen_arc_RB": [
+    1633.17,
+    462.21
+   ],
+   "pen_arc_RT": [
+    1368.1,
+    328.25
+   ],
+   "pen_area_RT_front": [
+    1205.64,
+    245.6
+   ],
+   "pen_area_RT_goalline": [
+    1661.67,
+    211.39
+   ],
+   "pen_spot_R": [
+    1681.62,
+    371
+   ]
+  },
+  "ninh-binh-pvf-cand/0320412": {
+   "centre_circle_B": [
+    145.36,
+    921.09
+   ],
+   "centre_circle_T": [
+    122.56,
+    607.57
+   ],
+   "centre_spot": [
+    131.11,
+    744.38
+   ],
+   "halfway_T": [
+    99.76,
+    379.55
+   ],
+   "pen_arc_RT": [
+    1858.33,
+    544.87
+   ],
+   "pen_area_RT_front": [
+    1616.06,
+    419.46
+   ]
+  },
+  "ninh-binh-pvf-cand/0342012": {
+   "corner_LT": [
+    1025.12,
+    245.56
+   ],
+   "goal_area_LB_front": [
+    390.75,
+    515.71
+   ],
+   "goal_area_LB_goalline": [
+    212.26,
+    484.35
+   ],
+   "goal_area_LT_front": [
+    812.86,
+    372.38
+   ],
+   "goal_area_LT_goalline": [
+    660.9,
+    349.28
+   ],
+   "goalpost_LB": [
+    361.81,
+    438.52
+   ],
+   "goalpost_LT": [
+    538.82,
+    382.54
+   ],
+   "pen_arc_LB": [
+    870.75,
+    563.95
+   ],
+   "pen_arc_LT": [
+    1148.14,
+    436.11
+   ],
+   "pen_area_LB_front": [
+    516.18,
+    729.36
+   ],
+   "pen_area_LT_front": [
+    1334.3,
+    354.89
+   ],
+   "pen_area_LT_goalline": [
+    851.46,
+    295.2
+   ],
+   "pen_spot_L": [
+    817.69,
+    467.47
+   ]
+  },
+  "ninh-binh-pvf-cand/0363612": {
+   "goal_area_LB_front": [
+    505.3,
+    564.3
+   ],
+   "goal_area_LT_front": [
+    995.63,
+    405.38
+   ],
+   "goal_area_LT_goalline": [
+    809.58,
+    376.31
+   ],
+   "goalpost_LB": [
+    466.54,
+    477.09
+   ],
+   "goalpost_LT": [
+    671.97,
+    415.07
+   ],
+   "pen_arc_LB": [
+    1052.76,
+    629.92
+   ],
+   "pen_arc_LT": [
+    1393.32,
+    478
+   ],
+   "pen_area_LB_front": [
+    644.02,
+    814.81
+   ],
+   "pen_area_LT_front": [
+    1485.83,
+    409.58
+   ],
+   "pen_area_LT_goalline": [
+    1042.01,
+    313.09
+   ],
+   "pen_spot_L": [
+    997.57,
+    513.91
+   ]
+  },
+  "shb-da-nang-hai-phong/0000012": {
+   "centre_circle_B": [
+    946.27,
+    636.07
+   ],
+   "centre_circle_T": [
+    946.27,
+    513.51
+   ],
+   "centre_spot": [
+    943.42,
+    576.22
+   ],
+   "halfway_B": [
+    940.57,
+    1029.4
+   ],
+   "halfway_T": [
+    946.27,
+    422.31
+   ]
+  },
+  "shb-da-nang-hai-phong/0024012": {
+   "corner_LT": [
+    996.18,
+    315.51
+   ],
+   "goal_area_LB_front": [
+    342.51,
+    527.77
+   ],
+   "goal_area_LB_goalline": [
+    178.49,
+    508.47
+   ],
+   "goal_area_LT_front": [
+    771.86,
+    419.23
+   ],
+   "goal_area_LT_goalline": [
+    624.72,
+    404.76
+   ],
+   "goalpost_LB": [
+    325.63,
+    474.7
+   ],
+   "goalpost_LT": [
+    508.94,
+    433.7
+   ],
+   "pen_arc_LB": [
+    788.74,
+    554.3
+   ],
+   "pen_arc_LT": [
+    1075.06,
+    457.42
+   ],
+   "pen_area_LB_front": [
+    409.41,
+    683.71
+   ],
+   "pen_area_LT_front": [
+    1267.62,
+    388.95
+   ],
+   "pen_area_LT_goalline": [
+    817.69,
+    358.93
+   ],
+   "pen_spot_L": [
+    754.98,
+    489.17
+   ]
+  },
+  "shb-da-nang-hai-phong/0048012": {
+   "centre_circle_B": [
+    165.31,
+    846.99
+   ],
+   "centre_circle_T": [
+    159.61,
+    627.52
+   ],
+   "centre_spot": [
+    159.61,
+    715.88
+   ],
+   "corner_RT": [
+    1844.08,
+    410.91
+   ],
+   "halfway_T": [
+    153.91,
+    473.61
+   ],
+   "pen_arc_RT": [
+    1738.62,
+    567.67
+   ],
+   "pen_area_RT_front": [
+    1522.01,
+    487.86
+   ]
+  },
+  "shb-da-nang-hai-phong/0087012": {
+   "goal_area_RB_front": [
+    1670.22,
+    311.15
+   ],
+   "goal_area_RB_goalline": [
+    1829.83,
+    291.2
+   ],
+   "goal_area_RT_front": [
+    1248.39,
+    205.69
+   ],
+   "goal_area_RT_goalline": [
+    1385.2,
+    191.44
+   ],
+   "goalpost_RB": [
+    1681.62,
+    257
+   ],
+   "goalpost_RT": [
+    1502.06,
+    217.09
+   ],
+   "pen_arc_RB": [
+    1225.59,
+    342.5
+   ],
+   "pen_arc_RT": [
+    940.57,
+    245.6
+   ],
+   "pen_area_RB_front": [
+    1596.11,
+    465.06
+   ],
+   "pen_area_RT_front": [
+    758.15,
+    180.04
+   ],
+   "pen_area_RT_goalline": [
+    1182.83,
+    148.69
+   ],
+   "pen_spot_R": [
+    1305.39,
+    256.08
+   ]
+  },
+  "shb-da-nang-hai-phong/0106512": {
+   "corner_RT": [
+    1140.08,
+    282.65
+   ],
+   "goal_area_RB_front": [
+    1787.08,
+    493.56
+   ],
+   "goal_area_RT_front": [
+    1362.4,
+    385.26
+   ],
+   "goal_area_RT_goalline": [
+    1504.91,
+    371
+   ],
+   "goalpost_RB": [
+    1804.18,
+    439.41
+   ],
+   "goalpost_RT": [
+    1618.92,
+    396.66
+   ],
+   "pen_arc_RB": [
+    1339.6,
+    519.21
+   ],
+   "pen_arc_RT": [
+    1057.43,
+    422.31
+   ],
+   "pen_area_RB_front": [
+    1712.97,
+    650.32
+   ],
+   "pen_area_RT_front": [
+    872.16,
+    357.21
+   ],
+   "pen_area_RT_goalline": [
+    1311.09,
+    322.55
+   ],
+   "pen_spot_R": [
+    1368.1,
+    450.81
+   ]
+  },
+  "shb-da-nang-hai-phong/0126012": {
+   "centre_circle_B": [
+    1804.22,
+    590.48
+   ],
+   "centre_circle_T": [
+    1818.69,
+    378.23
+   ],
+   "centre_spot": [
+    1816.28,
+    469.88
+   ],
+   "corner_LT": [
+    180.9,
+    175.61
+   ],
+   "halfway_B": [
+    1781.18,
+    1071.95
+   ],
+   "halfway_T": [
+    1830.75,
+    228.67
+   ],
+   "pen_arc_LT": [
+    284.62,
+    327.57
+   ],
+   "pen_area_LT_front": [
+    501.12,
+    252.3
+   ]
+  },
+  "shb-da-nang-hai-phong/0148512": {
+   "centre_circle_B": [
+    515.89,
+    459.36
+   ],
+   "centre_circle_T": [
+    507.34,
+    274.1
+   ],
+   "centre_spot": [
+    513.04,
+    362.45
+   ],
+   "halfway_B": [
+    532.99,
+    1000.9
+   ],
+   "halfway_T": [
+    501.64,
+    142.99
+   ],
+   "pen_arc_RT": [
+    1901.09,
+    234.19
+   ],
+   "pen_area_RT_front": [
+    1701.57,
+    160.09
+   ]
+  },
+  "shb-da-nang-hai-phong/0171012": {
+   "corner_RT": [
+    1023.22,
+    362.45
+   ],
+   "goal_area_RB_front": [
+    1550.51,
+    536.32
+   ],
+   "goal_area_RB_goalline": [
+    1675.92,
+    522.06
+   ],
+   "goal_area_RT_front": [
+    1205.64,
+    447.96
+   ],
+   "goal_area_RT_goalline": [
+    1316.79,
+    439.41
+   ],
+   "goalpost_RB": [
+    1564.36,
+    484.42
+   ],
+   "goalpost_RT": [
+    1413.19,
+    459.22
+   ],
+   "pen_arc_RB": [
+    1182.78,
+    556.24
+   ],
+   "pen_arc_RT": [
+    955.23,
+    480.08
+   ],
+   "pen_area_RB_front": [
+    1496.36,
+    664.57
+   ],
+   "pen_area_RT_front": [
+    809.46,
+    428.01
+   ],
+   "pen_area_RT_goalline": [
+    1214.19,
+    410.91
+   ]
+  },
+  "shb-da-nang-hai-phong/0192012": {
+   "corner_RB": [
+    1886.83,
+    995.2
+   ],
+   "corner_RT": [
+    1114.43,
+    299.75
+   ],
+   "goal_area_RB_front": [
+    1177.13,
+    567.67
+   ],
+   "goal_area_RB_goalline": [
+    1402.3,
+    564.82
+   ],
+   "goal_area_RT_front": [
+    1068.83,
+    416.61
+   ],
+   "goal_area_RT_goalline": [
+    1236.99,
+    413.76
+   ],
+   "goalpost_RB": [
+    1343.75,
+    509.36
+   ],
+   "goalpost_RT": [
+    1278.41,
+    447.96
+   ],
+   "pen_arc_RB": [
+    704,
+    550.57
+   ],
+   "pen_arc_RT": [
+    706.85,
+    429.66
+   ],
+   "pen_area_RB_front": [
+    701.91,
+    725.56
+   ],
+   "pen_area_RB_goalline": [
+    1564.76,
+    710.18
+   ],
+   "pen_area_RT_front": [
+    701.91,
+    368.57
+   ],
+   "pen_area_RT_goalline": [
+    1174.28,
+    353.9
+   ]
+  },
+  "shb-da-nang-hai-phong/0213012": {
+   "corner_LT": [
+    1297.69,
+    375.81
+   ],
+   "goal_area_LB_front": [
+    451.06,
+    650.79
+   ],
+   "goal_area_LB_goalline": [
+    238.79,
+    624.25
+   ],
+   "goal_area_LT_front": [
+    991.36,
+    508.47
+   ],
+   "goal_area_LT_goalline": [
+    808.04,
+    494
+   ],
+   "goalpost_LB": [
+    424.52,
+    578.42
+   ],
+   "goalpost_LT": [
+    656.08,
+    529.17
+   ],
+   "pen_arc_LB": [
+    1015.48,
+    689.38
+   ],
+   "pen_arc_LT": [
+    1401.41,
+    566.36
+   ],
+   "pen_area_LB_front": [
+    521,
+    855.44
+   ],
+   "pen_area_LT_front": [
+    1664.32,
+    480.55
+   ],
+   "pen_area_LT_goalline": [
+    1066.13,
+    433.7
+   ],
+   "pen_spot_L": [
+    980.47,
+    601.87
+   ]
+  },
+  "shb-da-nang-hai-phong/0238512": {
+   "corner_RT": [
+    1248.39,
+    254.15
+   ],
+   "goal_area_RB_front": [
+    1838.38,
+    453.66
+   ],
+   "goal_area_RT_front": [
+    1450.75,
+    351.51
+   ],
+   "goal_area_RT_goalline": [
+    1584.71,
+    339.65
+   ],
+   "goalpost_RB": [
+    1869.35,
+    402.34
+   ],
+   "goalpost_RT": [
+    1688.44,
+    368.57
+   ],
+   "pen_arc_RB": [
+    1456.89,
+    477.12
+   ],
+   "pen_arc_RT": [
+    1172.26,
+    378.22
+   ],
+   "pen_area_RB_front": [
+    1775.68,
+    590.47
+   ],
+   "pen_area_RT_front": [
+    1017.52,
+    322.55
+   ],
+   "pen_area_RT_goalline": [
+    1396.6,
+    294.05
+   ],
+   "pen_spot_R": [
+    1490.66,
+    419.46
+   ]
+  },
+  "shb-da-nang-hai-phong/0255012": {
+   "centre_circle_B": [
+    827.34,
+    424.05
+   ],
+   "centre_circle_T": [
+    827.34,
+    231.09
+   ],
+   "centre_spot": [
+    827.34,
+    327.57
+   ],
+   "halfway_B": [
+    827.34,
+    1072.9
+   ],
+   "halfway_T": [
+    827.34,
+    52.59
+   ]
+  },
+  "shb-da-nang-hai-phong/0282012": {
+   "centre_circle_B": [
+    723.62,
+    737.62
+   ],
+   "centre_circle_T": [
+    723.62,
+    527.77
+   ],
+   "centre_spot": [
+    721.21,
+    619.43
+   ],
+   "halfway_B": [
+    723.62,
+    1072.9
+   ],
+   "halfway_T": [
+    723.62,
+    349.27
+   ]
+  },
+  "shb-da-nang-hai-phong/0300012": {
+   "goal_area_RB_front": [
+    1876.58,
+    561.54
+   ],
+   "goal_area_RT_front": [
+    1348.34,
+    426.46
+   ],
+   "goalpost_RB": [
+    1905.53,
+    491.59
+   ],
+   "goalpost_RT": [
+    1671.55,
+    438.52
+   ],
+   "pen_arc_RB": [
+    1309.75,
+    588.07
+   ],
+   "pen_arc_RT": [
+    967.24,
+    469.88
+   ],
+   "pen_area_RB_front": [
+    1804.22,
+    756.91
+   ],
+   "pen_area_RT_front": [
+    733.26,
+    390.28
+   ],
+   "pen_area_RT_goalline": [
+    1273.57,
+    349.28
+   ],
+   "pen_spot_R": [
+    1355.57,
+    503.65
+   ]
+  },
+  "shb-da-nang-hai-phong/0318012": {
+   "centre_circle_B": [
+    1688.44,
+    725.56
+   ],
+   "centre_circle_T": [
+    1705.32,
+    489.18
+   ],
+   "centre_spot": [
+    1695.67,
+    590.48
+   ],
+   "halfway_B": [
+    1688.44,
+    1072.9
+   ],
+   "halfway_T": [
+    1714.97,
+    327.57
+   ],
+   "pen_arc_LT": [
+    7.24,
+    455.41
+   ],
+   "pen_area_LT_front": [
+    255.68,
+    363.75
+   ]
+  }
+ },
+ "image_size": [
+  1920,
+  1080
+ ],
+ "session": 1,
+ "version": 1
+}

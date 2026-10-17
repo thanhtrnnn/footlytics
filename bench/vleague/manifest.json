@@ -1,0 +1,234 @@
+{
+  "matches": {
+    "cong-an-tp-ho-chi-minh-ha-noi": {
+      "fps": 60.0,
+      "frames": {
+        "0021612": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0043212": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0064812": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0090012": {
+          "relabel": false,
+          "split": "frozen"
+        },
+        "0120612": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0144012": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0171012": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0192612": {
+          "relabel": false,
+          "split": "frozen"
+        },
+        "0223212": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0246612": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0270012": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0304212": {
+          "relabel": false,
+          "split": "frozen"
+        },
+        "0327612": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0358212": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0378012": {
+          "relabel": false,
+          "split": "dev"
+        }
+      },
+      "rejected": [
+        14412,
+        41412,
+        169212,
+        381612
+      ],
+      "sha256": "7d3e03e8e57a759cef673a02e00c883cc3c6d8dbbba932b7c6ffe185fbd3def4",
+      "video": "C\u00d4NG AN TP H\u1ed2 CH\u00cd MINH - H\u00c0 N\u1ed8I - LPBANK V.LEAGUE 1 - 2026-27.mp4"
+    },
+    "ninh-binh-pvf-cand": {
+      "fps": 60.0,
+      "frames": {
+        "0009012": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0028812": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0050412": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0082812": {
+          "relabel": false,
+          "split": "frozen"
+        },
+        "0097212": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0120612": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0153012": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0178212": {
+          "relabel": false,
+          "split": "frozen"
+        },
+        "0216012": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0243012": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0273612": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0295212": {
+          "relabel": false,
+          "split": "frozen"
+        },
+        "0320412": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0342012": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0363612": {
+          "relabel": false,
+          "split": "dev"
+        }
+      },
+      "rejected": [
+        7212,
+        79212,
+        81012,
+        144012,
+        145812,
+        212412,
+        365412
+      ],
+      "sha256": "32ac4422331a637a8c9b31a793a6c212dad9acd55f7e06aec9c35e099f1e876f",
+      "video": "NINH B\u00ccNH - PVF-CAND - LPBANK V.LEAGUE 1 - 2025-26.mp4"
+    },
+    "shb-da-nang-hai-phong": {
+      "fps": 50.0,
+      "frames": {
+        "0000012": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0024012": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0048012": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0087012": {
+          "relabel": false,
+          "split": "frozen"
+        },
+        "0106512": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0126012": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0148512": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0171012": {
+          "relabel": false,
+          "split": "frozen"
+        },
+        "0192012": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0213012": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0238512": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0255012": {
+          "relabel": false,
+          "split": "frozen"
+        },
+        "0282012": {
+          "relabel": false,
+          "split": "dev"
+        },
+        "0300012": {
+          "relabel": true,
+          "split": "frozen"
+        },
+        "0318012": {
+          "relabel": false,
+          "split": "dev"
+        }
+      },
+      "rejected": [
+        81012,
+        84012,
+        105012,
+        124512,
+        237012,
+        321012
+      ],
+      "sha256": "b785abbe6cfc1683f86ee688d863d6db23fa21bd41882062d505cf50e688ba57",
+      "video": "SHB \u0110\u00c0 N\u1eb4NG - H\u1ea2I PH\u00d2NG - LPBANK V.LEAGUE 1 - 2025-26.mp4"
+    }
+  },
+  "size": [
+    1920,
+    1080
+  ],
+  "version": 1,
+  "window": 12
+}

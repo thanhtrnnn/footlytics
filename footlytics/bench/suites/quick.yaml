@@ -25,3 +25,9 @@ tasks:
     clips: [SNGS-025, SNGS-028, SNGS-050, SNGS-056, SNGS-081, SNGS-086]
     every: 10     # tuned on SNGS-021/033: every 10 scored 72.5, every 25 scored 65.1
     gate_px: 25
+  - id: vleague-dev
+    kind: vleague
+    split: dev
+    labels: [bench/vleague/labels/labels-A-s1.json]
+    every: 10
+    gate_px: 25

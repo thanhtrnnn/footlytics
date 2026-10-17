@@ -19,3 +19,11 @@ tasks:
     clips: all
     predictions: baseline/SoccerNetGS-test.zip
     tracker: tracklab
+  - id: vleague-frozen
+    kind: vleague
+    split: frozen
+    labels: [bench/vleague/labels/labels-A-s1.json]
+    # Frozen-frame digest; dev frames can still be corrected without invalidating the milestone.
+    frozen_sha256: {bench/vleague/labels/labels-A-s1.json: 4a11b008cc7792cf2302e22d88f66f784f59c2e4f8949d30c06a1178c6fb0b7c}
+    every: 10
+    gate_px: 25

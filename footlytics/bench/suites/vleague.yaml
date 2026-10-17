@@ -1,0 +1,18 @@
+# V.League mini-GT alone, for a host without the GSR / SN-Calibration data (e.g. iec4090).
+# The two tasks are copies of quick's vleague-dev and milestone's vleague-frozen; a test keeps
+# them identical. Frozen frames are still only scored, never tuned on.
+name: vleague
+tasks:
+  - id: vleague-dev
+    kind: vleague
+    split: dev
+    labels: [bench/vleague/labels/labels-A-s1.json]
+    every: 10
+    gate_px: 25
+  - id: vleague-frozen
+    kind: vleague
+    split: frozen
+    labels: [bench/vleague/labels/labels-A-s1.json]
+    frozen_sha256: {bench/vleague/labels/labels-A-s1.json: 4a11b008cc7792cf2302e22d88f66f784f59c2e4f8949d30c06a1178c6fb0b7c}
+    every: 10
+    gate_px: 25

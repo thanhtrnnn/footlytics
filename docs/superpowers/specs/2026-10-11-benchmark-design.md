@@ -76,7 +76,7 @@ libraries and kernel module disagree until its admin reboots it, and we have no 
 | quick | 6 pinned GSR valid clips | GS-HOTA (jersey off) with DetA, AssA, LocA and IDF1; GS-HOTA with teams off too (the gap is what team errors cost); team accuracy, keeper side accuracy, per-side player count error and share of frames over 11 a side; keeper recall, referee recall and precision; position error (median, p90, m) and recall within 2 m; ball recall and px error; tactical-feature error (m); seconds per match minute |
 | quick | 60 pinned SN-Calibration valid frames | JaC@5 x completeness, median reprojection px |
 | quick | 6 pinned GSR valid clips, calibrated frame by frame (keyframes + camera tracker) | JaC@5 x completeness on the GSR pitch-line labels, share of labelled frames calibrated, keyframe acceptance |
-| quick | V.League mini-GT: 3 matches x 15 frames, half held out | landmark error (m) on landmarks the solver did not use, % frames under 1 m, frame-to-frame jitter (m) |
+| quick | V.League mini-GT: 3 matches x 15 frames, half held out | landmark error (model m, i.e. against the 105 x 68 pitch model) on landmarks the solver did not use, % frames under 1 m, frame-to-frame jitter (model m) at keyframe switches and between keyframes |
 | quick | synthetic tests; possession rule on SoccerTrack v2 GT positions (when access arrives) | pass/fail; possession accuracy vs `ballStatus` |
 | nightly | all 58 GSR valid clips | as quick, plus run-to-run noise floor (same commit twice) |
 | milestone | 49 GSR test clips | GS-HOTA jersey off, re-scored baseline, official jersey-on GS-HOTA |
@@ -118,6 +118,38 @@ get no camera (too few visible keypoints for the solver), which caps the score; 
 completeness is the obvious lever. Clip scores vary widely by clip (44 to 86 on the quick set,
 72.5 on the two tuning clips).
 
+V.League mini-GT, measured on iec4090 (2026-10-13, run `20261012-224247-vleague-fccd3d4`, suite
+`vleague` = quick's `vleague-dev` + milestone's `vleague-frozen`; same calibrator and clip
+settings as above). Errors are in model metres (105 x 68 pitch model). One annotation pass, so
+inter-annotator error is not measured. Internal footage, `leakage: unverified`:
+
+| Split | Frames | Under 1 m | Median error | Uncalibrated | Jitter between keyframes | Jitter at keyframe switch (mean / median window) |
+|---|---|---|---|---|---|---|
+| dev | 24 | 83 % | 0.63 m | 0 | 0.03 m | 0.20 / 0.16 m |
+| frozen | 21 | **71 %** | 0.68 m | 1 | 0.05 m | 1.22 / 0.20 m |
+
+When a frame calibrates, it is mostly within a metre. The misses are gross failures, not drift:
+three frames are off by more than 10 m (frozen `cong-an-tp-ho-chi-minh-ha-noi/0192612` 42 m,
+dev `ninh-binh-pvf-cand/0216012` 13.6 m and `shb-da-nang-hai-phong/0192012` 11.7 m). The one
+42 m window alone lifts the frozen mean switch jitter from about 0.2 m to 1.2 m. Between
+keyframes the tracker holds to a few centimetres. Catching gross solves before they are bridged
+is the lever here, ahead of solver precision.
+
+Reproduced on iec5090 (RTX 5090, run `20261013-050657-vleague-edbbaa2`): every per-frame error is
+identical; only the frozen mean switch jitter moves (1.218 to 1.222 m, GPU float noise in the
+tracker). The run took 36 s there against 543 s on iec4090, which was shared with other users'
+jobs at 99 % utilisation, so the gap is contention, not a hardware comparison.
+
+iec5090 also reproduces the whole milestone (run `20261013-071311-milestone-248b449`, 41 min against
+58 on iec4090_2): SN-Calibration test 48.81 (48.8), GSR test pipeline GS-HOTA 49.7 (49.1), team side
+75.3 % (75.3 %), shape error 2.42 m (2.39 m), baseline 38.3 / 23.1 (identical), at 81 s per match
+minute (120). Two runs on the 5090 gave the same pipeline score, so the 0.6 gap to iec4090_2 is
+between GPUs, not run to run. A first milestone there (`20261013-062504`) is partial: the third-party
+SN-Calibration evaluator segfaulted at frame 3,090 of 3,141; rerun by hand on the same cameras it
+finished twice with 48.81. Quick on iec5090 (`20261013-061230-quick-248b449`) scores the GSR quick
+clips at 49.0 GS-HOTA with 82 % team side, against 42.4 / 66 % in the only earlier quick row, which
+ran on `e5bea5b`, before the clip-alignment and scoring fixes landed on main.
+
 Full pipeline, measured on this harness (2026-10-12; SoccerMaster x6 person detector + roboflow
 ball model, calibration solved every 10th frame and bridged by the camera tracker, no shirt-number
 reader). Rows carry `leakage: unverified` (SoccerMaster's detector) and are internal:
@@ -158,8 +190,19 @@ Where the team errors come from, measured on the 58 valid clips (first nightly p
   score on the non-overlapping subset alongside. Its training games are not published, so until
   they are, calibration rows carry `leakage: unverified` and their numbers are internal only.
   The SN-Calibration task scores the non-overlapping subset as soon as a list is given.
-- **V.League labels:** scored on held-out landmarks; about 10 frames labelled twice (two people
-  or two sessions) to measure labelling error; the held-out half is frozen once labelled.
+- **V.League labels:** scored on held-out landmarks; the user chose a single annotation pass, so
+  inter-annotator error is not measured and is omitted from results. The held-out half is frozen
+  after label review.
+- **V.League frames:** 15 per match, spread evenly over the match from pitch-coloured candidates
+  every 30 s. Grass also fills close-ups, so the green test alone let 14 of 45 unlabelable shots
+  through; 17 close-ups were rejected by hand (`vleague-sample --reject`, recorded in the
+  manifest), never by a model, which would bias the set toward frames the calibrator already
+  handles. The scored frame is the window centre; keyframes fall every 10 frames from the window
+  start, so the centre is calibrated by the camera tracker between keyframes. The error therefore
+  measures the whole calibration path, not a single solve; `per_frame.source` records which.
+- **V.League label checks:** labels are checked without the model before freezing. Every triangle
+  of labelled points must turn the same way in the image as on the pitch, which catches
+  left/right and far/near swaps; the labelling page flags these live.
 - **Noise:** the nightly suite runs the same commit twice; a change smaller than that spread is
   reported as no change.
 - **Footage:** SoccerNet frames are copyrighted broadcast; used for internal scoring only.

@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>V.League labelling</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #14171c; --panel: #1b1f26; --line: #2c333d; --text: #dde3ea; --dim: #8b96a3;
+    --accent: #ffd43b; --ok: #51cf66; --bad: #ff6b6b; --pt: #3bc9db; --pt-dim: #1c7c8a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    flex: none; display: flex; align-items: center; gap: 16px; padding: 8px 12px;
+    background: #2a2410; border-bottom: 1px solid #5c4a10;
+  }
+  #guidebox { flex: 1; min-width: 0; }
+  #guide { font-size: 14px; font-weight: 600; color: var(--accent); }
+  #check { margin-top: 2px; font-size: 13px; font-weight: 600; min-height: 1.45em; color: var(--dim); }
+  #check[data-check="flip"] { color: var(--bad); }
+  #check[data-check="few"] { color: var(--accent); }
+  #check[data-check="ok"] { color: var(--ok); }
+  #frames .warn { grid-row: 1 / span 2; grid-column: 3; align-self: center; font-weight: 700; }
+  #frames .warn[data-check="flip"] { color: var(--bad); }
+  #frames .warn[data-check="few"] { color: var(--accent); }
+  #who { color: var(--dim); white-space: nowrap; }
+  #status {
+    min-width: 92px; text-align: center; padding: 4px 12px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--dim);
+    font-weight: 600; user-select: none;
+  }
+  #status[data-state="saved"] { color: var(--ok); border-color: #2b6b38; }
+  #status[data-state="saving"] { color: var(--accent); border-color: #7a6410; }
+  #status[data-state="failed"] { color: #fff; background: #a52a2a; border-color: var(--bad); cursor: pointer; }
+  #status[data-state="error"] { color: #fff; background: #a52a2a; border-color: var(--bad); }
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: 230px minmax(0, 1fr) 320px; }
+  aside, section { min-height: 0; min-width: 0; }
+  #left, #right { background: var(--panel); overflow-y: auto; }
+  #left { border-right: 1px solid var(--line); }
+  #right { border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+  h2 { margin: 0; padding: 8px 10px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  #frames li {
+    padding: 6px 10px; cursor: pointer; border-left: 3px solid transparent;
+    display: grid; grid-template-columns: 1fr auto auto; gap: 0 8px; border-bottom: 1px solid #232932;
+  }
+  #frames li:hover { background: #222833; }
+  #frames li[data-current="true"] { background: #26303f; border-left-color: var(--accent); }
+  #frames .key { font-family: ui-monospace, Menlo, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+  #frames .meta { color: var(--dim); font-size: 12px; }
+  #frames .count { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-weight: 700; color: var(--dim); }
+  #frames li[data-enough="true"] .count { color: var(--ok); }
+  #frames .badge { color: var(--accent); }
+  #stage { position: relative; background: #0b0d10; overflow: hidden; }
+  #canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; }
+  #canvas.panning { cursor: grabbing; }
+  #canvas.overpoint { cursor: move; }
+  #hud {
+    position: absolute; left: 8px; bottom: 8px; padding: 3px 8px; border-radius: 4px;
+    background: rgba(0,0,0,.65); color: var(--dim); font-size: 11px; pointer-events: none;
+  }
+  #loupe {
+    position: absolute; width: 160px; height: 160px; border: 2px solid var(--accent); border-radius: 4px;
+    pointer-events: none; display: none; box-shadow: 0 2px 12px rgba(0,0,0,.6); background: #000;
+  }
+  #landmarks { overflow-y: auto; flex: 1 1 auto; min-height: 120px; }
+  #landmarks li {
+    display: grid; grid-template-columns: 18px 1fr 16px; align-items: baseline; gap: 6px;
+    padding: 3px 10px; cursor: pointer; border-left: 3px solid transparent;
+  }
+  #landmarks li:hover { background: #222833; }
+  #landmarks li[data-selected="true"] { background: #3a3210; border-left-color: var(--accent); }
+  #landmarks .num { color: var(--dim); font-family: ui-monospace, Menlo, monospace; }
+  #landmarks .name { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  #landmarks .help { grid-column: 2 / span 2; color: var(--dim); font-size: 12px; }
+  #landmarks .tick { color: var(--ok); font-weight: 700; }
+  #landmarks li:not([data-placed="true"]) .tick { visibility: hidden; }
+  #pitchbox { flex: none; border-top: 1px solid var(--line); padding: 6px 8px 8px; background: #11151a; }
+  #pitch { width: 100%; height: auto; display: block; }
+  #pitch .turf { fill: #17301f; }
+  #pitch .ln { fill: none; stroke: #7e9a86; stroke-width: .35; }
+  #pitch .edge { fill: #7e9a86; font-size: 3.2px; text-anchor: middle; }
+  #pitch .marker { fill: #0c0f12; stroke: var(--pt-dim); stroke-width: .35; cursor: pointer; }
+  #pitch .marker.placed { fill: var(--pt); stroke: #fff; }
+  #pitch .marker.selected { fill: var(--accent); stroke: #fff; stroke-width: .5; }
+  #pitch .marker.suspect { fill: var(--bad); stroke: #fff; }
+  #pitch .ring { fill: none; stroke: var(--accent); stroke-width: .35; pointer-events: none; }
+  #pitch #pitch-label { fill: var(--accent); font-size: 3.2px; font-weight: 700; pointer-events: none; paint-order: stroke; stroke: #0c0f12; stroke-width: .7px; }
+  #keys { padding: 4px 10px 8px; color: var(--dim); font-size: 12px; }
+  kbd { background: #2b323c; border-radius: 3px; padding: 0 4px; font-family: ui-monospace, Menlo, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <div id="guidebox"><div id="guide">Click the centre of the line intersection. Goal posts: the base of the post on the goal line. Label every clearly visible landmark, at least 3.</div><div id="check" data-check="empty"></div></div>
+  <div id="who"></div>
+  <div id="status" data-state="saved" title="Every change is saved to the label file at once">saved</div>
+</header>
+<main>
+  <aside id="left"><h2>Frames</h2><ul id="frames"></ul></aside>
+  <section id="stage">
+    <canvas id="canvas" data-zoom="1"></canvas>
+    <canvas id="loupe" width="160" height="160"></canvas>
+    <div id="hud"><span id="zoom">1.0x</span> &middot; <span id="coords">&ndash;</span></div>
+  </section>
+  <aside id="right">
+    <h2>Landmarks</h2>
+    <ul id="landmarks"></ul>
+    <div id="pitchbox"><svg id="pitch" viewBox="-58 -41 116 82" role="img" aria-label="Pitch diagram"></svg></div>
+    <div id="keys"><kbd>n</kbd>/<kbd>p</kbd> frame &middot; <kbd>1</kbd>-<kbd>9</kbd> landmark &middot; <kbd>Del</kbd> remove &middot; <kbd>0</kbd> reset zoom &middot; wheel zoom &middot; drag pan &middot; right-click delete</div>
+  </aside>
+</main>
+<script>
+"use strict";
+const DATA = /*DATA*/null;
+const W = DATA.size[0], H = DATA.size[1];
+const MAX_ZOOM = 8, LOUPE = 4, LOUPE_PX = 160, HIT_PX = 10, MIN_POINTS = 3, CHECK_MIN = 3, ENOUGH = 4;
+const DRAG_PX = 4;                 // screen px a press must travel before it drags
+const ZOOM_PER_PX = Math.log(1.2) / 100;   // one 100 px mouse notch = 1.2x
+const MAX_WHEEL_PX = 120;          // clamp so one flick cannot jump the zoom
+const $ = (id) => document.getElementById(id);
+const SVGNS = "http://www.w3.org/2000/svg";
+
+const state = {
+  frames: [],            // [{key, split, relabel, points}]
+  cur: -1,
+  labels: {},            // frame key -> {landmark: [u, v]}
+  selected: DATA.names[0],
+  view: { z: 1, px: 0, py: 0 },
+  img: null, imgKey: null, imgOk: false, loadError: null,
+  mouse: null,           // {x, y} in canvas CSS px, null when outside
+  drag: null,
+};
+window.__state = state;
+
+const canvas = $("canvas"), ctx = canvas.getContext("2d");
+const loupe = $("loupe"), lctx = loupe.getContext("2d");
+let cw = 0, ch = 0;
+
+// ---- view maths: image px <-> canvas CSS px --------------------------------------------
+const base = () => cw / W;                       // fit-to-width at zoom 1
+const scale = () => base() * state.view.z;
+const toScreen = (u, v) => [u * scale() + state.view.px, v * scale() + state.view.py];
+const toImage = (x, y) => [(x - state.view.px) / scale(), (y - state.view.py) / scale()];
+
+function clampView() {
+  const v = state.view, s = scale(), keep = 120;
+  v.px = Math.min(cw - keep, Math.max(keep - W * s, v.px));
+  v.py = Math.min(ch - keep, Math.max(keep - H * s, v.py));
+}
+function resetView() {
+  state.view.z = 1;
+  state.view.px = 0;
+  state.view.py = Math.max(0, (ch - H * base()) / 2);
+  afterViewChange();
+}
+function afterViewChange() {
+  clampView();
+  canvas.dataset.zoom = state.view.z.toFixed(2);
+  $("zoom").textContent = state.view.z.toFixed(1) + "x";
+  draw();
+}
+function resize() {
+  const r = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const first = cw === 0;
+  cw = r.width; ch = r.height;
+  canvas.width = Math.round(cw * dpr); canvas.height = Math.round(ch * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const ld = Math.round(LOUPE_PX * dpr);
+  loupe.width = ld; loupe.height = ld;
+  lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (first || state.view.z === 1) resetView(); else afterViewChange();
+}
+new ResizeObserver(resize).observe(canvas);
+
+// ---- consistency check -----------------------------------------------------------------
+// Pitch y grows toward the near touchline and image v grows downward, so every triple of
+// labelled points must have the same cross-product sign in pixels and in metres.
+// Mirror of vleague.orientation_suspects (keep the two in step).
+function crossOf(a, b, c) {
+  const x1 = b[0] - a[0], y1 = b[1] - a[1], x2 = c[0] - a[0], y2 = c[1] - a[1];
+  return [x1 * y2 - y1 * x2, Math.hypot(x1, y1) * Math.hypot(x2, y2)];
+}
+function checkFrame(pts) {
+  const names = Object.keys(pts || {}).filter((n) => DATA.pitch[n]).sort();
+  const res = { n: names.length, suspects: [], partners: {}, status: names.length ? "few" : "empty" };
+  if (names.length < CHECK_MIN) return res;
+  res.status = "ok";
+  const count = {}, together = {};
+  names.forEach((n) => { count[n] = 0; together[n] = {}; });
+  for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) for (let k = j + 1; k < names.length; k++) {
+    const t = [names[i], names[j], names[k]];
+    const [cp, np] = crossOf(pts[t[0]], pts[t[1]], pts[t[2]]);
+    const [cm, nm] = crossOf(P(t[0]), P(t[1]), P(t[2]));
+    if (np === 0 || nm === 0 || Math.abs(cp) < 0.02 * np || Math.abs(cm) < 0.02 * nm) continue;
+    if ((cp > 0) === (cm > 0)) continue;
+    for (const a of t) { count[a]++; for (const b of t) if (a !== b) together[a][b] = (together[a][b] || 0) + 1; }
+  }
+  const top = Math.max(...Object.values(count));
+  if (top === 0) { res.status = names.length < ENOUGH ? "few" : "ok"; return res; }
+  res.status = "flip";
+  res.suspects = names.filter((n) => count[n] === top);
+  for (const n of res.suspects) {
+    res.partners[n] = Object.entries(together[n]).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 2).map((e) => e[0]).sort();
+  }
+  return res;
+}
+function renderCheck() {
+  const el = $("check"), c = checkFrame(points());
+  el.dataset.check = c.status;
+  if (c.status === "flip") {
+    el.textContent = c.suspects.map((n) => n + " looks misplaced: its position contradicts " + c.partners[n].join(" and ")).join("; ")
+      + " (left/right or far/near swapped?)";
+  } else if (c.status === "few") {
+    el.textContent = "Label at least " + ENOUGH + " points on this frame (" + c.n + " so far).";
+  } else {
+    el.textContent = c.status === "ok" ? "Labels look consistent." : "";
+  }
+}
+
+// ---- drawing ---------------------------------------------------------------------------
+const points = () => (state.cur >= 0 && state.labels[state.frames[state.cur].key]) || {};
+let drawQueued = false;
+function draw() {
+  if (drawQueued) return;
+  drawQueued = true;
+  requestAnimationFrame(() => { drawQueued = false; paint(); });
+}
+
+function drawMarker(c, x, y, name, selected, big, bad) {
+  const r = selected ? (big ? 7 : 6) : (big ? 5 : 4);
+  c.lineWidth = 1.5;
+  c.strokeStyle = bad ? "#ff4040" : selected ? "#ffd43b" : "#3bc9db";
+  c.beginPath(); c.arc(x, y, r, 0, 2 * Math.PI); c.stroke();
+  c.beginPath();
+  c.moveTo(x - r - 4, y); c.lineTo(x + r + 4, y); c.moveTo(x, y - r - 4); c.lineTo(x, y + r + 4);
+  c.stroke();
+  if (name) {
+    c.font = "11px ui-monospace, Menlo, monospace";
+    c.lineWidth = 3; c.strokeStyle = "rgba(0,0,0,.8)"; c.strokeText(name, x + r + 6, y - r);
+    c.fillStyle = bad ? "#ff6b6b" : selected ? "#ffd43b" : "#cfeef3"; c.fillText(name, x + r + 6, y - r);
+  }
+}
+
+function paint() {
+  ctx.clearRect(0, 0, cw, ch);
+  if (state.cur < 0) return;
+  const s = scale();
+  if (state.imgOk) {
+    ctx.imageSmoothingEnabled = s < 1.5;
+    ctx.drawImage(state.img, state.view.px, state.view.py, W * s, H * s);
+  } else {
+    ctx.fillStyle = "#8b96a3"; ctx.font = "14px system-ui"; ctx.fillText("loading frame...", 16, 28);
+  }
+  const pts = points(), sus = new Set(checkFrame(pts).suspects);
+  for (const [name, uv] of Object.entries(pts)) {
+    const [x, y] = toScreen(uv[0], uv[1]);
+    drawMarker(ctx, x, y, name, name === state.selected, false, sus.has(name));
+  }
+  paintLoupe();
+}
+
+function paintLoupe() {
+  const m = state.mouse;
+  if (!m || !state.imgOk || (state.drag && state.drag.type === "pan" && state.drag.moved)) {
+    loupe.style.display = "none"; return;
+  }
+  const [iu, iv] = toImage(m.x, m.y);
+  const span = LOUPE_PX / (LOUPE * scale());           // image px covered by the loupe
+  lctx.fillStyle = "#000"; lctx.fillRect(0, 0, LOUPE_PX, LOUPE_PX);
+  lctx.imageSmoothingEnabled = true;
+  lctx.drawImage(state.img, iu - span / 2, iv - span / 2, span, span, 0, 0, LOUPE_PX, LOUPE_PX);
+  const k = LOUPE_PX / span, sus = new Set(checkFrame(points()).suspects);
+  for (const [name, uv] of Object.entries(points())) {
+    const x = (uv[0] - (iu - span / 2)) * k, y = (uv[1] - (iv - span / 2)) * k;
+    if (x > -20 && y > -20 && x < LOUPE_PX + 20 && y < LOUPE_PX + 20)
+      drawMarker(lctx, x, y, null, name === state.selected, true, sus.has(name));
+  }
+  lctx.strokeStyle = "rgba(255,212,59,.9)"; lctx.lineWidth = 1;
+  const c = LOUPE_PX / 2;
+  lctx.beginPath();
+  lctx.moveTo(c - 14, c); lctx.lineTo(c - 3, c); lctx.moveTo(c + 3, c); lctx.lineTo(c + 14, c);
+  lctx.moveTo(c, c - 14); lctx.lineTo(c, c - 3); lctx.moveTo(c, c + 3); lctx.lineTo(c, c + 14);
+  lctx.stroke();
+  let lx = m.x + 26, ly = m.y + 26;
+  if (lx + LOUPE_PX > cw) lx = m.x - 26 - LOUPE_PX;
+  if (ly + LOUPE_PX > ch) ly = m.y - 26 - LOUPE_PX;
+  loupe.style.left = Math.max(0, lx) + "px"; loupe.style.top = Math.max(0, ly) + "px";
+  loupe.style.display = "block";
+}
+
+// ---- saving ----------------------------------------------------------------------------
+let chain = Promise.resolve(), inflight = 0, failed = [];
+let saveState = "saved";
+function setStatus(s) {
+  saveState = s;
+  renderStatus();
+}
+function renderStatus() {
+  const el = $("status");
+  if (saveState === "saved" && state.loadError) {
+    el.dataset.state = "error"; el.textContent = state.loadError; el.title = "The frame image could not be read from the server";
+    return;
+  }
+  el.dataset.state = saveState;
+  el.textContent = saveState === "failed" ? "save failed" : saveState === "saving" ? "saving..." : "saved";
+  el.title = saveState === "failed" ? "Click to retry the unsaved changes" : "Every change is saved to the label file at once";
+}
+function send(op) {
+  inflight++;
+  setStatus("saving");
+  chain = chain.then(async () => {
+    try {
+      const r = await fetch("/label", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(op),
+      });
+      if (!r.ok) throw new Error(await r.text());
+    } catch (e) {
+      failed.push(op);
+      console.error("save failed", op, e);
+    }
+    inflight--;
+    if (inflight === 0) setStatus(failed.length ? "failed" : "saved");
+  });
+}
+$("status").addEventListener("click", () => {
+  if ($("status").dataset.state !== "failed") return;
+  const ops = failed; failed = [];
+  ops.forEach(send);
+});
+
+function setPoint(name, uv) {
+  const f = state.frames[state.cur];
+  if (!f) return;
+  const pts = state.labels[f.key] = state.labels[f.key] || {};
+  if (uv) pts[name] = uv; else delete pts[name];
+  refreshAfterChange();
+}
+function commit(name) {
+  const f = state.frames[state.cur];
+  const uv = (state.labels[f.key] || {})[name] || null;
+  send({ frame: f.key, landmark: name, uv });
+}
+function refreshAfterChange() {
+  const f = state.frames[state.cur];
+  f.points = Object.keys(state.labels[f.key] || {}).length;
+  renderFrames(); renderLandmarks(); renderPitch(); renderCheck(); draw();
+}
+
+// ---- pointer interaction ---------------------------------------------------------------
+function pos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function hit(x, y) {
+  let best = null, bd = HIT_PX;
+  for (const [name, uv] of Object.entries(points())) {
+    const [sx, sy] = toScreen(uv[0], uv[1]);
+    const d = Math.hypot(sx - x, sy - y);
+    if (d <= bd) { bd = d; best = name; }
+  }
+  return best;
+}
+const clampImg = (u, v) => [Math.min(W, Math.max(0, u)), Math.min(H, Math.max(0, v))];
+const round2 = (n) => Math.round(n * 100) / 100;
+
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const m = pos(e), v = state.view;
+  const [iu, iv] = toImage(m.x, m.y);
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 800 : 1;   // lines, pages -> px
+  const dy = Math.max(-MAX_WHEEL_PX, Math.min(MAX_WHEEL_PX, e.deltaY * unit));
+  v.z = Math.min(MAX_ZOOM, Math.max(1, v.z * Math.exp(-dy * ZOOM_PER_PX)));
+  v.px = m.x - iu * scale();
+  v.py = m.y - iv * scale();
+  state.mouse = m;
+  afterViewChange();
+}, { passive: false });
+
+canvas.addEventListener("mousedown", (e) => {
+  if (e.button !== 0 || state.cur < 0) return;
+  const m = pos(e), name = hit(m.x, m.y);
+  if (name) {
+    state.selected = name; renderLandmarks(); renderPitch();
+    const uv = points()[name], [iu, iv] = toImage(m.x, m.y);
+    state.drag = { type: "point", name, sx: m.x, sy: m.y, off: [uv[0] - iu, uv[1] - iv], moved: false };
+  } else {
+    state.drag = { type: "pan", sx: m.x, sy: m.y, px0: state.view.px, py0: state.view.py, moved: false };
+  }
+  e.preventDefault();
+});
+window.addEventListener("mousemove", (e) => {
+  const m = pos(e);
+  const inside = m.x >= 0 && m.y >= 0 && m.x <= cw && m.y <= ch;
+  state.mouse = inside || state.drag ? m : null;
+  const d = state.drag;
+  if (d && d.type === "point") {
+    if (!d.moved && Math.hypot(m.x - d.sx, m.y - d.sy) >= DRAG_PX) d.moved = true;
+    if (d.moved) {
+      const [iu, iv] = toImage(m.x, m.y);
+      const [u, v] = clampImg(iu + d.off[0], iv + d.off[1]);
+      setPoint(d.name, [round2(u), round2(v)]);
+    }
+  } else if (d && d.type === "pan") {
+    if (!d.moved && Math.hypot(m.x - d.sx, m.y - d.sy) >= DRAG_PX) { d.moved = true; canvas.classList.add("panning"); }
+    if (d.moved) { state.view.px = d.px0 + m.x - d.sx; state.view.py = d.py0 + m.y - d.sy; afterViewChange(); }
+  }
+  if (inside) {
+    const [u, v] = toImage(m.x, m.y);
+    $("coords").textContent = Math.round(u) + ", " + Math.round(v);
+    canvas.classList.toggle("overpoint", !d && !!hit(m.x, m.y));
+  }
+  draw();
+});
+window.addEventListener("mouseup", (e) => {
+  const d = state.drag;
+  if (!d) return;
+  state.drag = null;
+  canvas.classList.remove("panning");
+  const m = pos(e);
+  if (d.type === "point") {
+    if (d.moved) commit(d.name);
+  } else if (!d.moved && state.cur >= 0) {
+    const [u, v] = toImage(m.x, m.y);
+    if (u >= 0 && v >= 0 && u <= W && v <= H) {
+      setPoint(state.selected, [round2(u), round2(v)]);
+      commit(state.selected);
+    }
+  }
+  const inside = m.x >= 0 && m.y >= 0 && m.x <= cw && m.y <= ch;
+  if (!inside) state.mouse = null;
+  draw();
+});
+canvas.addEventListener("mouseleave", () => { if (!state.drag) { state.mouse = null; draw(); } });
+canvas.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  if (state.cur < 0) return;
+  const m = pos(e), name = hit(m.x, m.y);
+  if (name) { setPoint(name, null); commit(name); }
+});
+
+// ---- keyboard --------------------------------------------------------------------------
+function deleteSelected() {
+  if (state.cur >= 0 && points()[state.selected]) { setPoint(state.selected, null); commit(state.selected); }
+}
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "n") selectFrame(state.cur + 1);
+  else if (e.key === "p") selectFrame(state.cur - 1);
+  else if (e.key >= "1" && e.key <= "9") { selectLandmark(DATA.names[+e.key - 1]); }
+  else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); deleteSelected(); }
+  else if (e.key === "0") resetView();
+});
+
+// ---- frames list -----------------------------------------------------------------------
+function renderFrames() {
+  const ul = $("frames");
+  ul.textContent = "";
+  state.frames.forEach((f, i) => {
+    const li = document.createElement("li");
+    li.dataset.key = f.key;
+    li.dataset.current = String(i === state.cur);
+    li.dataset.split = f.split;
+    li.dataset.relabel = String(f.relabel);
+    li.dataset.points = String(f.points);
+    li.dataset.enough = String(f.points >= MIN_POINTS);
+    const key = document.createElement("span"); key.className = "key"; key.textContent = f.key;
+    const meta = document.createElement("span"); meta.className = "meta";
+    meta.textContent = f.split + (f.relabel ? " " : "");
+    if (f.relabel) { const b = document.createElement("span"); b.className = "badge"; b.textContent = "relabel"; meta.appendChild(b); }
+    const count = document.createElement("span"); count.className = "count"; count.textContent = f.points + " pts";
+    const ck = checkFrame(state.labels[f.key]).status;
+    li.dataset.check = ck;
+    li.append(key, meta, count);
+    if (ck === "flip" || ck === "few") {
+      const w = document.createElement("span"); w.className = "warn"; w.dataset.check = ck; w.textContent = "⚠";
+      w.title = ck === "flip" ? "A landmark looks swapped (left/right or far/near)" : "Fewer than " + CHECK_MIN + " points";
+      li.appendChild(w);
+    }
+    li.addEventListener("click", () => selectFrame(i));
+    ul.appendChild(li);
+  });
+  if (!state.frames.length) {
+    const li = document.createElement("li"); li.style.padding = "10px"; li.textContent = "No frames to label.";
+    ul.appendChild(li);
+  }
+}
+function selectFrame(i) {
+  if (i < 0 || i >= state.frames.length || i === state.cur) return;
+  state.cur = i;
+  const f = state.frames[i];
+  try { history.replaceState(null, "", "#" + f.key); } catch (e) { /* ignore */ }
+  state.imgOk = false; state.imgKey = f.key; state.loadError = null; renderStatus();
+  const img = new Image();
+  img.onload = () => { if (state.imgKey === f.key) { state.img = img; state.imgOk = true; draw(); } };
+  img.onerror = () => {
+    if (state.imgKey !== f.key) return;
+    state.loadError = "frame failed to load";
+    renderStatus(); console.error("cannot load frame", f.key);
+  };
+  img.src = "/frames/" + f.key + ".jpg";
+  resetView(); renderFrames(); renderLandmarks(); renderPitch(); renderCheck();
+  document.querySelector('#frames li[data-current="true"]')?.scrollIntoView({ block: "nearest" });
+}
+
+// ---- landmarks list and pitch diagram --------------------------------------------------
+function selectLandmark(name) {
+  if (!name) return;
+  state.selected = name;
+  renderLandmarks(); renderPitch(); draw();
+}
+function renderLandmarks() {
+  const ul = $("landmarks"), pts = points();
+  ul.textContent = "";
+  DATA.names.forEach((name, i) => {
+    const li = document.createElement("li");
+    li.dataset.name = name;
+    li.dataset.selected = String(name === state.selected);
+    li.dataset.placed = String(!!pts[name]);
+    li.title = DATA.help[name] || name;
+    const num = document.createElement("span"); num.className = "num"; num.textContent = i < 9 ? String(i + 1) : "";
+    const nm = document.createElement("span"); nm.className = "name"; nm.textContent = name;
+    const tick = document.createElement("span"); tick.className = "tick"; tick.textContent = "✓";
+    li.append(num, nm, tick);
+    if (DATA.help[name]) {
+      const h = document.createElement("span"); h.className = "help"; h.textContent = DATA.help[name]; li.appendChild(h);
+    }
+    li.addEventListener("click", () => selectLandmark(name));
+    ul.appendChild(li);
+  });
+  ul.querySelector('li[data-selected="true"]')?.scrollIntoView({ block: "nearest" });
+}
+
+const P = (n) => DATA.pitch[n];
+function svg(tag, attrs, parent) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  (parent || $("pitch")).appendChild(el);
+  return el;
+}
+function buildPitch() {
+  const root = $("pitch");
+  const [cx, ty] = P("corner_LT"), [rx, by] = P("corner_RB");
+  svg("rect", { class: "turf", x: -58, y: -41, width: 116, height: 82 });
+  svg("rect", { class: "ln", x: cx, y: ty, width: rx - cx, height: by - ty });
+  svg("line", { class: "ln", x1: 0, y1: ty, x2: 0, y2: by });
+  const r = P("centre_circle_B")[1];
+  svg("circle", { class: "ln", cx: 0, cy: 0, r });
+  for (const s of ["L", "R"]) {
+    const sgn = s === "L" ? -1 : 1;
+    const box = (a, b) => {
+      const [x1, y1] = P(`${a}_${s}T_front`), [x0] = P(`${a}_${s}T_goalline`);
+      svg("rect", { class: "ln", x: Math.min(x0, x1), y: y1, width: Math.abs(x1 - x0), height: -2 * y1 });
+    };
+    box("pen_area"); box("goal_area");
+    const [gx, gy] = P(`goalpost_${s}T`);
+    svg("rect", { class: "ln", x: sgn < 0 ? gx - 2 : gx, y: gy, width: 2, height: -2 * gy });
+    const [sx, sy] = P(`pen_spot_${s}`), [ax, ay] = P(`pen_arc_${s}T`), [, by2] = P(`pen_arc_${s}B`);
+    svg("circle", { class: "ln", cx: sx, cy: sy, r: 0.4 });
+    svg("path", { class: "ln", d: `M ${ax} ${ay} A ${r} ${r} 0 0 ${s === "L" ? 1 : 0} ${ax} ${by2}` });
+  }
+  svg("text", { class: "edge", x: 0, y: -37 }).textContent = "far touchline (top of the image)";
+  svg("text", { class: "edge", x: 0, y: 39.6 }).textContent = "near touchline";
+  svg("text", { class: "edge", x: -55.5, y: 0, transform: "rotate(-90 -55.5 0)" }).textContent = "L goal";
+  svg("text", { class: "edge", x: 55.5, y: 0, transform: "rotate(90 55.5 0)" }).textContent = "R goal";
+  svg("circle", { class: "ring", id: "pitch-ring", r: 2.6, cx: 0, cy: 0 });
+  for (const name of DATA.names) {
+    const [x, y] = P(name);
+    const c = svg("circle", { class: "marker", "data-name": name, cx: x, cy: y, r: 1.1 });
+    svg("title", {}, c).textContent = name + (DATA.help[name] ? ": " + DATA.help[name] : "");
+    c.addEventListener("click", () => selectLandmark(name));
+  }
+  svg("text", { id: "pitch-label", x: 0, y: 0 });
+}
+function renderPitch() {
+  const pts = points(), sus = new Set(checkFrame(pts).suspects);
+  for (const c of $("pitch").querySelectorAll(".marker")) {
+    const n = c.getAttribute("data-name"), sel = n === state.selected;
+    c.classList.toggle("selected", sel);
+    c.classList.toggle("placed", !!pts[n]);
+    c.classList.toggle("suspect", sus.has(n));
+    c.setAttribute("r", sel ? 1.8 : 1.1);
+    if (sel) {
+      const [x, y] = P(n), ring = $("pitch-ring"), label = $("pitch-label");
+      ring.setAttribute("cx", x); ring.setAttribute("cy", y);
+      label.textContent = n;
+      label.setAttribute("text-anchor", x > 20 ? "end" : "start");
+      label.setAttribute("x", x > 20 ? x - 3.5 : x + 3.5);
+      label.setAttribute("y", y < -28 ? y + 5 : y - 3);
+    }
+  }
+}
+
+// ---- start -----------------------------------------------------------------------------
+async function start() {
+  $("who").textContent = "annotator " + DATA.annotator + " · session " + DATA.session;
+  buildPitch();
+  try {
+    const [fl, lb] = await Promise.all([fetch("/frames-list"), fetch("/labels")]);
+    if (!fl.ok || !lb.ok) throw new Error("server said " + fl.status + "/" + lb.status);
+    state.frames = await fl.json();
+    state.labels = (await lb.json()).frames;
+  } catch (e) {
+    console.error(e); state.loadError = "load failed"; renderStatus(); return;
+  }
+  renderFrames(); renderLandmarks(); renderPitch(); renderCheck();
+  const want = decodeURIComponent(location.hash.slice(1));
+  const i = Math.max(0, state.frames.findIndex((f) => f.key === want));
+  selectFrame(i);
+}
+start();
+</script>
+</body>
+</html>
