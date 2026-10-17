@@ -30,7 +30,7 @@ def _clip():
     rows += _rows(4, HOME, P, lambda f: (-5.0, 12.0))
     rows += _rows(5, AWAY, P, lambda f: (10.0, 0.0))
     rows += _rows(6, AWAY, P, lambda f: (25.0, -15.0))
-    rows += _rows(7, AWAY, P, lambda f: (49.0, 0.0))
+    rows += _rows(7, AWAY, P, lambda f: (30.0, 0.0))
     return _state(rows)
 
 
@@ -51,7 +51,7 @@ def test_keeper_in_the_wrong_kit_cluster_is_found_and_given_the_defending_team()
 
 def test_a_defender_who_lives_in_the_box_stays_a_player():
     st = _clip()
-    keepers = goalkeeper_tracklets(st.tracks[st.tracks.track_id != 1], build_tracklets(st), 52.5, 34.0)
+    keepers = goalkeeper_tracklets(st.tracks, build_tracklets(st), 52.5, 34.0)
     assert 2 not in keepers
 
 
