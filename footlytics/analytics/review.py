@@ -13,7 +13,7 @@ from pathlib import Path
 import pandas as pd
 
 VERDICTS = ("right", "wrong", "unsure")
-LABELS = ("low_block", "high_press")
+LABELS = ("low_block", "high_press", "flank_overload")
 TEAMS = ("HOME", "AWAY")
 VERSION = 1
 
