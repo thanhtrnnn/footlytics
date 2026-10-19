@@ -210,6 +210,42 @@ def ball_metrics(gt: pd.DataFrame, pred: pd.DataFrame, frames,
     return {**ball_summary(d, len(gt_frames), hit_px), "_dists": d, "_gt_frames": len(gt_frames)}
 
 
+def ball_loss(gt: pd.DataFrame, cands: dict, frames, hit_px: float = BALL_HIT_PX) -> dict:
+    """Where the ball is lost, from the pipeline's raw ball candidates (`PipelineConfig.
+    keep_ball_candidates`: frame -> (boxes [n, 5] x, y, w, h, conf; kept [n] bool, True when
+    the candidate survived calibration and the on-pitch filter)).
+
+    On each GT-ball frame, counts the frames where some candidate lies within `hit_px` of the GT
+    centre (`detected`: the ceiling for the detector) and where such a candidate also survived
+    the filters (`on_pitch`: the ceiling for the selector). `ball_recall` is what is left after
+    the selector, so the three differences are the detector's, the filters' and the selector's
+    share of the lost recall. `_ball_loss` is the raw count to pool across clips.
+    """
+    g = _ball_centres(gt)
+    n = det = kept = 0
+    for f in frames:
+        if f not in g:
+            continue
+        n += 1
+        boxes, ok = cands.get(f, (np.empty((0, 5)), np.empty(0, bool)))
+        if not len(boxes):
+            continue
+        c = np.column_stack([boxes[:, 0] + boxes[:, 2] / 2, boxes[:, 1] + boxes[:, 3] / 2])
+        near = np.linalg.norm(c - g[f], axis=1) <= hit_px
+        det += int(near.any())
+        kept += int((near & np.asarray(ok, bool)).any())
+    return {"_ball_loss": Counter(gt=n, detected=det, on_pitch=kept)}
+
+
+def ball_loss_summary(c) -> dict:
+    """`ball_det_recall` (a candidate near the GT ball at all) and `ball_cand_recall` (one that
+    also survived calibration and the on-pitch filter), over the pooled counts of `ball_loss`."""
+    if not c or not c.get("gt"):
+        return {"ball_det_recall": None, "ball_cand_recall": None}
+    return {"ball_det_recall": round(c["detected"] / c["gt"], 4),
+            "ball_cand_recall": round(c["on_pitch"] / c["gt"], 4)}
+
+
 def _shape(xy: np.ndarray) -> dict:
     c = xy.mean(axis=0)
     return {"centroid_x": c[0], "centroid_y": c[1], "width": np.ptp(xy[:, 1]),

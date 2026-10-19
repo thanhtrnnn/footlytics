@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from ..analytics.ball import interpolate_ball
+from ..analytics.ball_link import link_ball_candidates
 from ..analytics.kinematics import add_kinematics
 from ..geometry.homography import Calibration, apply_homography
 from ..geometry.pitch import Pitch
@@ -81,6 +82,18 @@ class PipelineConfig:
     #: A ball candidate that sat within 0.5 m of one spot for 80% of this long is a
     #: still decoy unless nothing else moves (`BallSelector`).
     ball_still_s: float = 2.0
+    #: Choose the ball by following a trajectory across the whole clip instead of frame by
+    #: frame (`analytics.ball_link`). Off by default until the benchmark says it is better.
+    #: The ball then bypasses the tracker: its rows are written after the pass, one track id
+    #: per unbroken stretch.
+    ball_link: bool = False
+    #: What a lone ball detection must beat to be taken when the ball could not have got
+    #: there from the previous pick. A candidate that continues the track needs nothing.
+    ball_link_break_cost: float = 0.25
+    #: Keep every raw ball candidate (box, confidence, whether it survived calibration and
+    #: the on-pitch filter) in `report['_ball_candidates']`, so a benchmark can tell a
+    #: detector miss from a selection loss. Cheap, but not for a long match.
+    keep_ball_candidates: bool = False
     use_appearance: bool = True
     team_fit_sample: int = 4000     # descriptors sampled to fit the kit clusters
     #: Join track fragments into whole-player tracklets before deciding identity.
@@ -179,19 +192,27 @@ class BallSelector:
                 hits += np.linalg.norm(xy[:, None] - h[None], axis=-1).min(axis=1) <= self.still_m
         return hits >= self.still_share * self.window
 
+    def flags(self, frame: int, xy: np.ndarray, people_xy: Optional[np.ndarray] = None
+              ) -> tuple[np.ndarray, np.ndarray]:
+        """(still, decoy) per candidate. Call once per calibrated frame, with that frame's
+        candidates (maybe none): it also advances the still-ball history."""
+        xy = np.asarray(xy, float).reshape(-1, 2)
+        still = self._still(frame, xy)
+        self._hist.append((frame, xy.copy()))
+        decoy = still.copy()
+        if len(xy) and people_xy is not None and len(people_xy) and still.any():
+            near = np.linalg.norm(xy[:, None] - np.asarray(people_xy, float)[None], axis=-1).min(axis=1)
+            decoy &= near > self.alone_m
+        return still, decoy
+
     def pick(self, frame: int, xy: np.ndarray, conf: np.ndarray,
              people_xy: Optional[np.ndarray] = None) -> Optional[int]:
         """Call on every calibrated frame, with that frame's ball candidates (maybe none)."""
         xy = np.asarray(xy, float).reshape(-1, 2)
         conf = np.asarray(conf, float).ravel()
-        still = self._still(frame, xy)
-        self._hist.append((frame, xy.copy()))
+        still, decoy = self.flags(frame, xy, people_xy)
         if not len(xy):
             return None
-        decoy = still.copy()
-        if people_xy is not None and len(people_xy) and still.any():
-            near = np.linalg.norm(xy[:, None] - np.asarray(people_xy, float)[None], axis=-1).min(axis=1)
-            decoy &= near > self.alone_m
         moving = np.flatnonzero(~still)
         if self.last_xy is None or frame - self.last_frame > self.reacquire_s * self.fps:
             ok = np.flatnonzero(~decoy)
@@ -210,6 +231,41 @@ class BallSelector:
         if p is not None:
             self.last_xy, self.last_frame = xy[p].copy(), frame
         return p
+
+
+def link_ball_rows(log: list, fps: float, first_track_id: int,
+                   cfg: PipelineConfig) -> tuple[list[dict], int]:
+    """Observation rows for the ball from the clip's candidates, by `link_ball_candidates`.
+
+    `log` is (frame, pitch xy, detections, still, decoy) per frame that had ball candidates.
+    Decoys (a still ball with nobody near it) cannot be picked; a still ball that someone
+    stands beside scores half. One track id per unbroken stretch, as the tracker would give.
+    """
+    frames = [e[0] for e in log]
+    xy = [e[1] for e in log]
+    conf = [e[2][:, 4] for e in log]
+    penalty = [np.where(e[4], 1.0, np.where(e[3], 0.5, 0.0)) for e in log]
+    picks = link_ball_candidates(
+        frames, xy, conf, fps, penalty=penalty, max_speed=cfg.ball_max_speed,
+        slack_m=cfg.ball_slack_m, max_gap_s=cfg.ball_reacquire_s,
+        break_cost=cfg.ball_link_break_cost)
+    rows: list[dict] = []
+    tid, prev = first_track_id - 1, None
+    for (frame, pts, dets, _, _), p in zip(log, picks):
+        if p is None:
+            continue
+        if (prev is None or frame - prev[0] > cfg.ball_reacquire_s * fps
+                or np.linalg.norm(pts[p] - prev[1]) > cfg.ball_max_speed * (frame - prev[0]) / fps
+                + cfg.ball_slack_m):
+            tid += 1
+        prev = (frame, pts[p])
+        d = dets[p]
+        rows.append(dict(
+            frame_idx=frame, period=1, timestamp=frame / fps, track_id=tid,
+            role=Role.BALL.value, team=Team.UNKNOWN.value, jersey=np.nan,
+            bbox_x=d[0], bbox_y=d[1], bbox_w=d[2], bbox_h=d[3], det_conf=d[4],
+            x=pts[p][0], y=pts[p][1], z=0.0))
+    return rows, tid - first_track_id + 1 if rows else 0
 
 
 def _log(on: bool, *a):
@@ -260,6 +316,8 @@ def run_frames(
     n_ball_off_pitch = 0
     ball_sel = BallSelector(eff_fps, cfg.ball_max_speed, cfg.ball_slack_m,
                             cfg.ball_reacquire_s, still_s=cfg.ball_still_s)
+    ball_cands: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    link_log: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
     t0 = time.time()
 
     for frame_bgr in frames:
@@ -280,6 +338,13 @@ def run_frames(
         n_det_total += len(dets)
 
         xy_all = mapper(src_idx, frame_bgr, dets)
+        if cfg.keep_ball_candidates and len(dets):
+            is_b = np.array([detector.role_of(c) == Role.BALL.value for c in dets[:, 5]], bool)
+            if is_b.any():
+                ok = (np.zeros(int(is_b.sum()), bool) if xy_all is None else
+                      on_pitch(xy_all[is_b], [Role.BALL.value] * int(is_b.sum()), pitch,
+                               cfg.pitch_margin_m, cfg.ball_margin_m))
+                ball_cands[out_idx] = (dets[is_b, :5].copy(), ok)
         if xy_all is None:
             n_uncalibrated += 1
             dets = dets[:0]                                  # skip the frame, tracks coast
@@ -297,13 +362,20 @@ def run_frames(
             # One ball per frame, chosen for continuity and against still decoys.
             bi = np.flatnonzero([r == Role.BALL.value for r in roles])
             people = [i for i, r in enumerate(roles) if r != Role.BALL.value]
-            pick = ball_sel.pick(out_idx, xy[bi], dets[bi, 4], people_xy=xy[people])
-            if len(bi):
-                drop = set(bi.tolist()) - ({int(bi[pick])} if pick is not None else set())
-                if drop:
-                    sel = np.array([i not in drop for i in range(len(dets))], bool)
-                    dets, xy = dets[sel], xy[sel]
-                    roles = [r for r, k in zip(roles, sel) if k]
+            if cfg.ball_link:
+                # decided after the pass, over the whole clip; none goes to the tracker
+                if len(bi):
+                    still, decoy = ball_sel.flags(out_idx, xy[bi], xy[people])
+                    link_log.append((out_idx, xy[bi].copy(), dets[bi].copy(), still, decoy))
+                drop = set(bi.tolist())
+            else:
+                pick = ball_sel.pick(out_idx, xy[bi], dets[bi, 4], people_xy=xy[people])
+                drop = (set(bi.tolist()) - ({int(bi[pick])} if pick is not None else set())
+                        if len(bi) else set())
+            if drop:
+                sel = np.array([i not in drop for i in range(len(dets))], bool)
+                dets, xy = dets[sel], xy[sel]
+                roles = [r for r, k in zip(roles, sel) if k]
 
             embeddings = None
             if len(dets):
@@ -346,6 +418,13 @@ def run_frames(
 
     elapsed = time.time() - t0
 
+    n_link_segments = 0
+    if cfg.ball_link and link_log:
+        link_rows, n_link_segments = link_ball_rows(
+            link_log, eff_fps, first_track_id=tracker._next_id, cfg=cfg)
+        rows.extend(link_rows)
+        rows.sort(key=lambda r: r["frame_idx"])
+
     if not rows:
         raise RuntimeError("no detections at all -- wrong weights, or the "
                            "calibration is placing everything off the pitch")
@@ -360,11 +439,16 @@ def run_frames(
         "ball_dropped_off_pitch": n_ball_off_pitch,
         "ball_frames_unreachable": ball_sel.n_unreachable,
         "ball_still_released": ball_sel.n_released,
+        "ball_link_segments": n_link_segments,
+        "ball_link_frames": sum(r["role"] == Role.BALL.value for r in rows) if cfg.ball_link else 0,
         "tracks_created": tracker._next_id - 1,
         "frames_uncalibrated": n_uncalibrated,
         "frames_calibrated": out_idx - n_uncalibrated,
         "calib_success_rate": (out_idx - n_uncalibrated) / max(out_idx, 1),
     }
+
+    if cfg.keep_ball_candidates:
+        report["_ball_candidates"] = ball_cands
 
     # ---- role, once per track ---------------------------------------------
     role_vote = (df.groupby(["track_id", "role"], observed=True).size()
