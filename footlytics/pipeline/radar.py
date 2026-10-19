@@ -26,9 +26,11 @@ from ..analytics.kinematics import add_kinematics
 from ..geometry.homography import Calibration, apply_homography
 from ..geometry.pitch import Pitch
 from ..perception.detect import Detector, DetectorConfig
-from ..perception.teams import split_officials, TeamClassifier, kit_descriptor
+from ..perception.teams import (split_officials, TeamClassifier, kit_descriptor,
+                                team_scores_by_track)
 from ..perception.identity import (apply_to_state, assign_teams_with_roster,
-                                   build_tracklets, stitch_tracklets, touchline_people)
+                                   build_tracklets, goalkeeper_teams, goalkeeper_tracklets,
+                                   stitch_tracklets, touchline_people)
 from ..perception.track import PitchTracker, TrackerConfig
 from ..geometry.camera_motion import AnchoredCamera, MovingCalibration
 from ..state.schema import MatchMeta, MatchState, Role, Team, TeamInfo
@@ -91,6 +93,10 @@ class PipelineConfig:
     #: moving ones become assistant referees, still ones `Role.OTHER` (ball boys,
     #: staff). See `identity.touchline_people`.
     touchline_people: bool = True
+    #: Find goalkeepers by position (inside a penalty area, deepest towards the goal)
+    #: and give them the team that defends that end, whatever their kit clustered as.
+    #: See `identity.goalkeeper_tracklets`.
+    goalkeepers: bool = True
     #: Fill ball gaps of at most this many frames by interpolating between the
     #: two sightings either side. 0 disables. The tracker already coasts the ball
     #: for a few frames, so this only reaches the gaps where the track died.
@@ -380,7 +386,7 @@ def run_frames(
             idx = np.random.default_rng(0).choice(idx, cfg.team_fit_sample, replace=False)
         clf = TeamClassifier().fit(D[idx])
         diag = clf.diagnose(T, D)
-        scores = clf.track_scores(T, D)
+        scores = team_scores_by_track(T, D)
         report["team_diagnosis"] = diag
         report["_team_clf"] = clf
         if cfg.montage:
@@ -431,6 +437,15 @@ def run_frames(
     player_tracklets = [t for t in tracklets if id(t) not in side]
     if scores:
         player_tracklets = assign_teams_with_roster(player_tracklets, team_size=cfg.roster_size)
+    keepers: dict[int, int] = {}
+    if cfg.goalkeepers and scores:
+        keepers = goalkeeper_tracklets(state.tracks, player_tracklets, pitch.half_l, pitch.half_w)
+        keeper_team = goalkeeper_teams(state.tracks, player_tracklets, keepers)
+        for t in player_tracklets:
+            if t.id in keeper_team:
+                t.role, t.team = Role.GOALKEEPER.value, keeper_team[t.id]
+        keepers = {k: v for k, v in keepers.items() if k in keeper_team}
+    report["goalkeepers"] = len(keepers)
     for t in official_tracklets:
         t.team = Team.OFFICIAL.value
         t.role = Role.REFEREE.value

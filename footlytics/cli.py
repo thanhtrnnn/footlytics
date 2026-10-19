@@ -202,5 +202,51 @@ def drift_check(
     typer.echo(f"frames {idx}, invalid {len(invalid)}, runs {runs}, reanchors {cam.n_reanchors}")
 
 
+review_app = typer.Typer(help="Mark detected sequences right or wrong against the match video")
+app.add_typer(review_app, name="review")
+
+
+@review_app.command("serve")
+def review_serve(
+    video: Path = typer.Option(..., exists=True, dir_okay=False, help="match video to play"),
+    sequences: Path = typer.Option(..., exists=True, dir_okay=False, help="sequences CSV (detect_sequences output)"),
+    marks: Path = typer.Option(..., help="marks JSON, created if missing, saved on every click"),
+    reviewer: str = typer.Option(..., help="analyst name, kept in the marks file"),
+    video_offset_s: float = typer.Option(0.0, help="video seconds = match-state seconds + this"),
+    port: int = typer.Option(0, help="0 picks a free port"),
+) -> None:
+    from .review_server import make_server
+
+    try:
+        server = make_server(video, sequences, marks, reviewer, video_offset_s, port)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    typer.echo(f"review page: http://127.0.0.1:{server.server_address[1]}/  (Ctrl-C to stop; marks in {marks})")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+@review_app.command("score")
+def review_score(
+    sequences: Path = typer.Option(..., exists=True, dir_okay=False),
+    marks: Path = typer.Option(..., exists=True, dir_okay=False),
+) -> None:
+    """Per-label precision and missed count from a marks file."""
+    import pandas as pd
+
+    from .analytics.review import load_marks, score_marks
+
+    scores = score_marks(load_marks(marks), pd.read_csv(sequences))
+    cols = ["n", "marked", "right", "wrong", "unsure", "precision", "missed"]
+    typer.echo(f"{'label':<12}" + "".join(f"{c:>10}" for c in cols))
+    for label, s in scores.items():
+        cells = ["n/a" if s[c] is None else f"{s[c]:.3f}" if c == "precision" else str(s[c]) for c in cols]
+        typer.echo(f"{label:<12}" + "".join(f"{c:>10}" for c in cells))
+
+
 if __name__ == "__main__":
     app()
