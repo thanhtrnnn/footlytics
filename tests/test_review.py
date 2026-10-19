@@ -19,7 +19,7 @@ def _seqs() -> pd.DataFrame:
         ("low_block", "HOME", 2, 3000.0, 3012.0, 75000, 75300, 12.0, -30.0, 10.0, 0),
         ("high_press", "AWAY", 1, 400.0, 410.0, 10000, 10250, 10.0, 12.0, 9.0, 4),
     ]
-    return pd.DataFrame(rows, columns=COLUMNS)
+    return pd.DataFrame(rows, columns=COLUMNS[:11]).reindex(columns=COLUMNS)
 
 
 @pytest.fixture
