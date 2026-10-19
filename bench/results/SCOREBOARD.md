@@ -31,6 +31,7 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 
 | finished (UTC) | commit | status | host | gsr-calibration-valid-all | gsr-pipeline-valid-all | gsr-pipeline-valid-all-repeat |
 |---|---|---|---|---|---|---|
+| 2026-10-19 03:00 | c25af7f | complete | iec5090 | score 59.39 | hota_jersey_off 46.63 | hota_jersey_off 46.63 |
 | 2026-10-19 00:22 | 3642c2c | complete | iec5090 | score 59.39 | hota_jersey_off 45.23 | hota_jersey_off 45.23 |
 | 2026-10-18 21:43 | 792ccda | complete | iec5090 | score 59.39 | hota_jersey_off 51.13 | hota_jersey_off 51.13 |
 | 2026-10-12 09:57 | 2fe73f3 | complete | iec4090_2 | score 59.42 | hota_jersey_off 45.69 | hota_jersey_off 45.69 |
