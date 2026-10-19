@@ -376,6 +376,40 @@ class TeamClassifier:
         return cols
 
 
+def team_scores_by_track(track_ids: np.ndarray, descriptors: np.ndarray, k: int = 4,
+                         seed: int = 0) -> dict[int, float]:
+    """Signed team preference per track (negative leans home), from one kit colour per track.
+
+    `TeamClassifier` clusters every detection into two groups. Keepers and referees wear odd
+    kits and stay in shot for whole clips, so their detections can outweigh a team and the
+    2-means splits on them instead: on SoccerNet GSR valid with ground-truth boxes, 16 of 58
+    clips came out below 0.7 team accuracy, 13 of them near a coin flip. Here each track is
+    one point (its mean descriptor, weighted by how often it was seen in the fit), `k` groups
+    give the odd kits somewhere to go, and the two groups with the most tracks are the teams:
+    a team is ten people, a keeper is one, however long he stays in shot. Every track then
+    leans towards the nearer team centroid. Same data: mean accuracy 0.851 to 0.978, clips
+    below 0.7 from 16 to 1, against 0.975 for a classifier trained on the true labels.
+    """
+    from sklearn.cluster import KMeans
+
+    T = np.asarray(track_ids)
+    X = np.asarray(descriptors, np.float32)
+    usable = X.sum(axis=1) > 0
+    out = {int(t): 0.0 for t in np.unique(T)}
+    ids = np.unique(T[usable])
+    if len(ids) < 2:
+        return out
+    means = np.stack([X[usable & (T == t)].mean(axis=0) for t in ids])
+    w = np.array([(usable & (T == t)).sum() for t in ids], float)
+    km = KMeans(n_clusters=min(k, len(ids)), n_init=10, random_state=seed).fit(
+        means, sample_weight=w)
+    teams = np.argsort(np.bincount(km.labels_, minlength=km.n_clusters))[::-1][:2]
+    d = np.linalg.norm(means[:, None, :] - km.cluster_centers_[teams][None], axis=-1)
+    score = (d[:, 0] - d[:, 1]) / np.maximum(d.sum(axis=1), 1e-9)
+    out.update({int(t): float(v) for t, v in zip(ids, score)})
+    return out
+
+
 # ------------------------------------------------------------- officials split
 
 def split_officials(track_ids: np.ndarray, descriptors: np.ndarray, max_share: float = 0.25,
