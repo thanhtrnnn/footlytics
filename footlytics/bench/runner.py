@@ -35,7 +35,8 @@ from .adapters.calib import gsr_line_frames, write_camera
 from .adapters.gsr import check_version, gt_to_state, state_to_predictions, team_sides
 from .evaluators import run_gsr, run_sncalib
 from .host import ResourceError, contention, require_disk, require_vram, torch_info
-from .metrics import (MATCH_M, POS_GATE_M, ROLE_CLASSES, ball_metrics, ball_summary,
+from .metrics import (MATCH_M, POS_GATE_M, ROLE_CLASSES, ball_loss, ball_loss_summary,
+                      ball_metrics, ball_summary,
                       keeper_side_accuracy, match_people, median_reprojection_px,
                       position_metrics, position_summary, role_counts, role_summary,
                       seconds_per_match_minute, shape_error, share, team_accuracy,
@@ -617,10 +618,14 @@ def _detector(paths: BenchPaths, det_cfg: dict):
     if key not in _DETECTORS:
         from ..perception.detect import Detector, DetectorConfig       # Ultralytics is heavy
 
+        _DETECTORS.clear()      # a suite comparing detector settings must not hold them all in VRAM
         _DETECTORS[key] = Detector(paths.detector_weights, DetectorConfig(
             tile=det_cfg.get("tile", 0), imgsz=det_cfg.get("imgsz", 1280),
             conf=det_cfg.get("conf", 0.25), device="cuda", half=True,
-            ball_weights=str(paths.ball_weights)))
+            ball_weights=str(paths.ball_weights),
+            ball_conf=det_cfg.get("ball_conf", 0.10),
+            ball_imgsz=det_cfg.get("ball_imgsz", 1920),
+            max_balls=det_cfg.get("max_balls", 15)))
     return _DETECTORS[key]
 
 
@@ -657,7 +662,8 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
     total_s, total_frames = 0.0, 0
     # every clip's raw values: a pooled metric's aggregate comes from these, not clip numbers
     pool = {"_dists": [], "_gt_frames": 0, "_pos_dists": [], "_gt_people": 0,
-            "_roles": Counter(), "_keeper_ok": 0, "_keeper_n": 0}
+            "_roles": Counter(), "_keeper_ok": 0, "_keeper_n": 0,
+            "_ball_loss": Counter()}
     with zipfile.ZipFile(ctx.paths.gsr_zip(split)) as z:
         for seq in _resolve(ctx.paths, split, task.get("clips", "all")):
             require_disk(ctx.paths.root, CLIP_DISK_BYTES)
@@ -678,7 +684,9 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                     (_imread(z.read(n)) for n in names), 25.0,
                     homography_mapper([fc.H_img_to_pitch for fc in calib]), det,
                     MatchMeta(match_id=seq, fps=25.0, source_type="broadcast"),
-                    PipelineConfig(verbose=False, montage=False))
+                    # `pipeline:` in the task overrides settings, so a suite can compare them
+                    PipelineConfig(**{"verbose": False, "montage": False,
+                                      "keep_ball_candidates": True, **task.get("pipeline", {})}))
                 run_s = time.perf_counter() - t0
                 (out_dir / f"{seq}.json").write_text(json.dumps(
                     state_to_predictions(state, split)))
@@ -696,6 +704,7 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                     none = gt.tracks.iloc[:0]
                     per[seq].update(_pool(pool, {
                         **ball_metrics(gt.tracks, none, frames),
+                        **ball_loss(gt.tracks, {}, frames),
                         **position_metrics(gt.tracks, match_people(gt.tracks, none, frames),
                                            frames)}))
                 except Exception as ge:  # noqa: BLE001 - no GT state: nothing to charge
@@ -720,6 +729,7 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                     **role_summary(roles), "_roles": roles,
                     **team_counts(gt.tracks, state.tracks, frames, sides),
                     **ball_metrics(gt.tracks, state.tracks, frames),
+                    **ball_loss(gt.tracks, report.get("_ball_candidates", {}), frames),
                     **position_metrics(gt.tracks, near, frames),
                     "shape_error_m": shape_error(gt.tracks, state.tracks, frames,
                                                  sides)["shape_error_m"],
@@ -746,6 +756,7 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
            **{k: mean(k) for k in ("team_accuracy", "team_count_err", "quota_breach_share",
                                    "shape_error_m", "calib_success_rate")},
            **ball_summary(pool["_dists"], pool["_gt_frames"]),
+           **ball_loss_summary(pool["_ball_loss"]),
            **position_summary(pool["_pos_dists"], pool["_gt_people"]),
            **role_summary(pool["_roles"]),
            "keeper_side_accuracy": share(pool["_keeper_ok"], pool["_keeper_n"]),
