@@ -74,7 +74,14 @@ TRACK_SCHEMA: dict[str, str] = {
     # provenance: True where the position was filled in rather than observed,
     # by analytics.ball.interpolate_ball. Never True for people.
     "interpolated": "bool",
+    # shot filter (perception.shots): False on replays, close-ups, crowd and graphics frames,
+    # whose pitch positions must not feed tactical analytics. `shot` numbers the stretches one
+    # camera saw; analytics must not join frames across ids. Old states default to live, shot 0.
+    "live_wide":  "bool",
+    "shot":       "int32",
 }
+
+_DEFAULTS = {"live_wide": True, "shot": 0}
 
 _REQUIRED = ("frame_idx", "timestamp", "track_id", "role", "team", "x", "y")
 
@@ -134,15 +141,15 @@ class MatchState:
         df = df.copy()
         for col, dtype in TRACK_SCHEMA.items():
             if col not in df.columns:
-                df[col] = pd.Series(np.nan, index=df.index)
+                df[col] = pd.Series(_DEFAULTS.get(col, np.nan), index=df.index)
             if dtype == "category":
                 df[col] = df[col].astype("object").fillna("unknown").astype("category")
             elif dtype == "bool":
                 # Must fill before the cast: astype(bool) turns NaN into True,
                 # which would mark every row of a fresh table as interpolated.
-                df[col] = df[col].fillna(False).astype(dtype)
+                df[col] = df[col].fillna(_DEFAULTS.get(col, False)).astype(dtype)
             else:
-                df[col] = pd.to_numeric(df[col], errors="coerce").astype(dtype)
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(_DEFAULTS.get(col, np.nan)).astype(dtype)
 
         df = df[list(TRACK_SCHEMA)]
         return df.sort_values(["frame_idx", "track_id"], kind="stable").reset_index(drop=True)

@@ -68,3 +68,32 @@ def test_uncalibrated_frames_lose_their_detections_but_the_run_goes_on():
     assert report["frames_uncalibrated"] == 4 and report["frames_calibrated"] == 8
     seen = set(state.tracks.loc[~state.tracks["interpolated"], "frame_idx"])
     assert not seen & {0, 3, 6, 9}
+
+
+def _broadcast_frames(n_wide, n_other, h=480, w=640):
+    out = frames(n_wide + n_other, h, w)
+    for t, f in enumerate(out):
+        if t < n_wide:
+            f[1:, :] = (60, 140, 50)                      # grass, so the shot filter calls it wide
+    return out
+
+
+def test_broadcast_run_flags_frames_that_are_not_live_wide_and_keeps_their_rows():
+    n = 150
+    cfg = PipelineConfig(verbose=False, montage=False, use_appearance=False, stitch=False,
+                         touchline_people=False)
+    state, report = run_frames(_broadcast_frames(75, 75), 25.0, homography_mapper([H] * n),
+                               FakeDetector(n), MatchMeta(match_id="t", fps=25.0, source_type="broadcast"), cfg)
+    per = state.tracks.groupby("frame_idx")[["live_wide", "shot"]].first()
+    assert per.loc[:74, "live_wide"].all() and not per.loc[75:, "live_wide"].any()
+    assert per.loc[0, "shot"] != per.loc[149, "shot"]
+    assert report["live_wide_share"] == pytest.approx(0.5) and report["replays"] == 0
+
+
+def test_fixed_rig_runs_are_untouched_by_the_shot_filter():
+    n = 12
+    state, report = run_frames(_broadcast_frames(0, n), 25.0, homography_mapper([H] * n), FakeDetector(n),
+                               MatchMeta(match_id="t", fps=25.0, source_type="fixed_panoramic"),
+                               PipelineConfig(verbose=False, montage=False, use_appearance=False,
+                                              stitch=False, touchline_people=False))
+    assert state.tracks["live_wide"].all() and "live_wide_share" not in report
