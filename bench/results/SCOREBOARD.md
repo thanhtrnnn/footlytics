@@ -31,12 +31,19 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 
 | finished (UTC) | commit | status | host | gsr-calibration-valid-all | gsr-pipeline-valid-all | gsr-pipeline-valid-all-repeat |
 |---|---|---|---|---|---|---|
+| 2026-10-19 03:00 | c25af7f | complete | iec5090 | score 59.39 | hota_jersey_off 46.63 | hota_jersey_off 46.63 |
+| 2026-10-19 00:22 | 3642c2c | complete | iec5090 | score 59.39 | hota_jersey_off 45.23 | hota_jersey_off 45.23 |
+| 2026-10-18 21:43 | 792ccda | complete | iec5090 | score 59.39 | hota_jersey_off 51.13 | hota_jersey_off 51.13 |
 | 2026-10-12 09:57 | 2fe73f3 | complete | iec4090_2 | score 59.42 | hota_jersey_off 45.69 | hota_jersey_off 45.69 |
 
 ## quick
 
 | finished (UTC) | commit | status | host | gsr-calibration-valid-6 | gsr-pipeline-valid-6 | sncalib-valid-60 | vleague-dev |
 |---|---|---|---|---|---|---|---|
+| 2026-10-18 19:04 | c25af7f | complete | iec5090 | score 56.85 | hota_jersey_off 49.52 | score 54.66 | failed 0.00 |
+| 2026-10-18 18:51 | 3642c2c | complete | iec5090 | score 56.85 | hota_jersey_off 49.04 | score 54.66 | failed 0.00 |
+| 2026-10-18 18:38 | 792ccda | complete | iec5090 | score 56.85 | hota_jersey_off 51.12 | score 54.66 | failed 0.00 |
+| 2026-10-18 02:06 | 792ccda | partial | iec5090 | score 56.85 | error | score 54.66 | failed 0.00 |
 | 2026-10-13 06:24 | 248b449 | complete | iec5090 | score 56.85 | hota_jersey_off 49.04 | score 54.66 | failed 0.00 |
 | 2026-10-12 05:17 | d2500aa | complete | iec4090_2 | score 56.70 | hota_jersey_off 42.38 | score 54.43 |  |
 | 2026-10-11 19:10 | e5bea5b | complete | iec4090_2 | score 56.70 | hota_jersey_off 42.38 | score 54.43 |  |
