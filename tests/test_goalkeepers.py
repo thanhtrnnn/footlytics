@@ -1,7 +1,7 @@
 """Goalkeeper role: found by position, team from the end he defends."""
 import pandas as pd
 
-from footlytics.analytics.tactics import goalkeepers, infer_attacking_direction
+from footlytics.analytics.tactics import goalkeepers, infer_attacking_direction, normalise_direction
 from footlytics.perception.identity import (build_tracklets, goalkeeper_teams,
                                             goalkeeper_tracklets)
 from footlytics.state.schema import MatchMeta, MatchState, Role, Team, TeamInfo
@@ -79,3 +79,28 @@ def test_without_keeper_roles_the_extreme_player_heuristic_still_applies():
     P = Role.PLAYER.value
     rows = _rows(1, HOME, P, lambda f: (-50.0, 0.0)) + _rows(2, HOME, P, lambda f: (-5.0, 0.0))
     assert infer_attacking_direction(_state(rows)) == {(1, HOME): 1}
+
+
+def _one_end_clip(away_keeper_role):
+    """Broadcast view of the right end only: away's keeper at +51 m, every home player in
+    front of him, the deepest at +40 m. Home has no keeper in view."""
+    P = Role.PLAYER.value
+    rows = _rows(1, AWAY, away_keeper_role, lambda f: (51.0, 0.0))
+    rows += _rows(2, AWAY, P, lambda f: (36.0, 5.0)) + _rows(3, AWAY, P, lambda f: (26.0, -5.0))
+    rows += _rows(4, HOME, P, lambda f: (40.0, 8.0)) + _rows(5, HOME, P, lambda f: (30.0, -8.0))
+    return _state(rows)
+
+
+def test_one_teams_keeper_decides_the_other_teams_direction():
+    """Home's extreme player (+40 m) alone would say home defends +x, the same end as
+    away's keeper. The keeper wins: home attacks +x, and normalising leaves x alone."""
+    st = _one_end_clip(Role.GOALKEEPER.value)
+    assert infer_attacking_direction(st) == {(1, HOME): 1, (1, AWAY): -1}
+    keeper = normalise_direction(st).players.query("track_id == 1")
+    assert (keeper["x"] > 0).all()
+
+
+def test_without_keepers_the_teams_still_attack_opposite_ways():
+    """Both extremes sit at the right end; the more extreme one (away, +51 m) decides."""
+    st = _one_end_clip(Role.PLAYER.value)
+    assert infer_attacking_direction(st) == {(1, HOME): 1, (1, AWAY): -1}

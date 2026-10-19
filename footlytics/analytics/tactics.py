@@ -30,6 +30,8 @@ import pandas as pd
 
 from ..state.schema import MatchState, Role, Team
 
+_OTHER_TEAM = {Team.HOME.value: Team.AWAY.value, Team.AWAY.value: Team.HOME.value}
+
 
 # ------------------------------------------------------------------ direction
 
@@ -41,22 +43,39 @@ def infer_attacking_direction(state: MatchState) -> dict[tuple[int, str], int]:
     team defends, so the team attacks the other way. Using outfield mean position
     instead would fail during sustained pressure, when a whole team can sit in
     one half for minutes.
+
+    The two teams always attack opposite ways. A broadcast view of one end shows
+    one keeper; the other team's extreme player then stands at the same end, and
+    judged alone would give both teams the same direction. So a labelled keeper
+    decides for both teams, and without one the more extreme player does.
     """
     out: dict[tuple[int, str], int] = {}
     p = state.players
-    for (period, team), g in p.groupby(["period", "team"], observed=True):
-        if team not in (Team.HOME.value, Team.AWAY.value):
+    p = p[p["team"].isin([Team.HOME.value, Team.AWAY.value])]
+    for period, gp in p.groupby("period", observed=True):
+        keeper_x, extreme_x = {}, {}
+        for team, g in gp.groupby("team", observed=True):
+            keeper = g[g["role"] == Role.GOALKEEPER.value]
+            if not keeper.empty:
+                keeper_x[str(team)] = float(keeper["x"].mean())
+            mean_x = g.groupby("track_id", observed=True)["x"].mean()
+            if not mean_x.empty:
+                # Whichever end the extreme player sits at is the end defended.
+                extreme_x[str(team)] = float(mean_x.loc[mean_x.abs().idxmax()])
+        evidence = keeper_x or extreme_x
+        if not evidence:
             continue
-        keeper = g[g["role"] == Role.GOALKEEPER.value]
-        if not keeper.empty:
-            out[(int(period), str(team))] = -1 if keeper["x"].mean() > 0 else 1
+        if len(keeper_x) == 2:
+            # Two keepers: each team by its own, as they are seen.
+            for team, x in keeper_x.items():
+                out[(int(period), team)] = -1 if x > 0 else 1
             continue
-        mean_x = g.groupby("track_id", observed=True)["x"].mean()
-        if mean_x.empty:
-            continue
-        # No labelled keeper: the extreme is the extreme; whichever end he sits at is the end defended.
-        gk_x = mean_x.loc[mean_x.abs().idxmax()]
-        out[(int(period), str(team))] = -1 if gk_x > 0 else 1
+        team = max(evidence, key=lambda t: abs(evidence[t]))
+        sign = -1 if evidence[team] > 0 else 1
+        out[(int(period), team)] = sign
+        other = _OTHER_TEAM[team]
+        if other in extreme_x:
+            out[(int(period), other)] = -sign
     return out
 
 
