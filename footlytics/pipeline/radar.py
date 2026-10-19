@@ -31,6 +31,8 @@ from ..perception.teams import (split_officials, TeamClassifier, kit_descriptor,
 from ..perception.identity import (apply_to_state, assign_teams_with_roster,
                                    build_tracklets, goalkeeper_teams, goalkeeper_tracklets,
                                    stitch_tracklets, touchline_people)
+from ..perception.shots import (ShotConfig, frame_signals, live_wide_segments,
+                                stinger_and_replay)
 from ..perception.track import PitchTracker, TrackerConfig
 from ..geometry.camera_motion import AnchoredCamera, MovingCalibration
 from ..state.schema import MatchMeta, MatchState, Role, Team, TeamInfo
@@ -104,6 +106,11 @@ class PipelineConfig:
     #: Keep up to 600 frames for the team montage (`report['_montage']`). Off for batch
     #: runs: at 1080p that is 3.7 GB of RAM.
     montage: bool = True
+    #: Mark replays, close-ups, crowd shots and graphics (`live_wide` / `shot` columns), so analytics
+    #: skip them. None = on for broadcast footage only: on a fixed rig every frame is live and the
+    #: grass-share test would only add ways to be wrong. Rows are never dropped, only flagged.
+    shot_filter: Optional[bool] = None
+    shot: ShotConfig = field(default_factory=ShotConfig)
     verbose: bool = True
 
 
@@ -245,6 +252,8 @@ def run_frames(
     meta.fps = eff_fps
     tracker = PitchTracker(tracker_cfg or TrackerConfig(fps=eff_fps))
     n_uncalibrated = 0
+    shots_on = (meta.source_type == "broadcast") if cfg.shot_filter is None else cfg.shot_filter
+    signals = []
 
     _log(cfg.verbose, f"[pipeline] {source}")
 
@@ -278,6 +287,11 @@ def run_frames(
         frame = frame_bgr[:, :, ::-1]                       # BGR -> RGB
         dets = detector.detect(frame)
         n_det_total += len(dets)
+        if shots_on:
+            people_h = [b[3] for b, c in zip(dets[:, :4], dets[:, 5])
+                        if detector.role_of(c) != Role.BALL.value]
+            signals.append(frame_signals(frame_bgr, float(np.median(people_h)) / frame_bgr.shape[0]
+                                         if people_h else float("nan")))
 
         xy_all = mapper(src_idx, frame_bgr, dets)
         if xy_all is None:
@@ -351,7 +365,23 @@ def run_frames(
                            "calibration is placing everything off the pitch")
 
     df = pd.DataFrame(rows)
+    shot_report: dict = {}
+    if shots_on:
+        live, shot = live_wide_segments(signals, eff_fps, cfg.shot)
+        _, replay = stinger_and_replay(signals, eff_fps, cfg.shot)
+        df["live_wide"] = live[df["frame_idx"].to_numpy()]
+        df["shot"] = shot[df["frame_idx"].to_numpy()]
+        shot_report = {
+            "live_wide_share": float(live.mean()),
+            "replay_seconds": float(replay.sum() / eff_fps),
+            "replays": int(np.sum(np.diff(np.r_[0, replay.astype(int)]) == 1)),
+            "shots": int(shot.max()) + 1,
+        }
+        _log(cfg.verbose, f"[pipeline] shots: {shot_report['live_wide_share']:.0%} live wide, "
+                          f"{shot_report['replays']} replays ({shot_report['replay_seconds']:.0f} s), "
+                          f"{shot_report['shots']} shots")
     report: dict = {
+        **shot_report,
         "frames_processed": out_idx,
         "seconds": elapsed,
         "fps_processed": out_idx / max(elapsed, 1e-6),

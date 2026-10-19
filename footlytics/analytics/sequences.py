@@ -16,6 +16,9 @@ first guesses to be tuned per club against those marks, not settled definitions.
     ball, for `high_press_min_s`. Needs the ball, so it is only as good as ball
     coverage.
 
+Only live wide-camera frames count (`MatchState.tracks["live_wide"]`, see `perception.shots`): replays,
+close-ups and graphics are dropped, and a sequence never spans a cut (`shot` id change), however short.
+
 The state must already be normalised (`tactics.normalise_direction`): home
 attacks +x in every period.
 """
@@ -39,9 +42,13 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
                      high_press_min_s: float = 3.0) -> pd.DataFrame:
     """One row per sequence: label, team, period, start/end, and mean evidence over it."""
     fps = state.meta.fps
+    shot_of = state.tracks.drop_duplicates("frame_idx").set_index("frame_idx")["shot"]
+    if not state.tracks["live_wide"].all():
+        state = MatchState(state.meta, state.tracks[state.tracks["live_wide"]])
     blk = team_block(state, sample_every=sample_every)
     if blk.empty:
         return pd.DataFrame(columns=COLUMNS)
+    blk["shot"] = blk["frame_idx"].map(shot_of).astype(int)
 
     status = possession.drop_duplicates("frame_idx").set_index("frame_idx")["ballStatus"]
     blk["out_of_possession"] = blk["frame_idx"].map(status) == blk["team"].map(_OPPONENT_STATUS)
@@ -81,7 +88,7 @@ def _runs(hits: pd.DataFrame, label: str, min_s: float, step: int, fps: float) -
     """
     out = []
     for (team, period), g in hits.sort_values("frame_idx").groupby(["team", "period"]):
-        run_id = (g["frame_idx"].diff() > 2 * step).cumsum()
+        run_id = ((g["frame_idx"].diff() > 2 * step) | (g["shot"].diff() != 0)).cumsum()
         for _, r in g.groupby(run_id):
             duration = (r["frame_idx"].iloc[-1] - r["frame_idx"].iloc[0] + step) / fps
             if duration < min_s:
