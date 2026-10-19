@@ -87,6 +87,25 @@ def run(
                                               "calib_success_rate") if k in q}, indent=2))
 
 
+@app.command("run-video")
+def run_video_cmd(
+    video: Path = typer.Argument(..., exists=True, dir_okay=False),
+    out: Path = typer.Option(..., help="output directory"),
+    every: int = typer.Option(10, help="calibrate every Nth frame, bridge the rest"),
+    gate_px: float = typer.Option(25.0),
+    home: str = typer.Option("HOME"),
+    away: str = typer.Option("AWAY"),
+) -> None:
+    """Per-frame calibration (SoccerMaster, CUDA host with the bench install) + full pipeline on a
+    broadcast video; writes tracks.parquet, quality.json/md, sequences.csv for `review serve`."""
+    from .bench.paths import BenchPaths
+    from .pipeline.clip import run_video
+
+    q = run_video(video, out, BenchPaths.from_env(), every, gate_px, home, away, log=typer.echo)
+    typer.echo(json.dumps({k: q.get(k) for k in ("frames", "mean_players_per_frame", "ball_coverage",
+                                                  "seconds_per_match_minute", "calib_success_rate")}, indent=2))
+
+
 @app.command("calib-assist")
 def calib_assist(
     video: Path = typer.Argument(..., exists=True),
