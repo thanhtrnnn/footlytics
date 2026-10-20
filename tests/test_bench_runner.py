@@ -1288,3 +1288,18 @@ def test_gsr_pipeline_stops_when_the_shared_disk_drops_below_the_floor_mid_task(
     assert t["status"] == "failed" and "GB free" in t["error"]
     assert [r[0] for r in seen["run"]] == ["SNGS-990"]
     assert row["status"] == "failed"
+
+
+def test_detector_ball_detector_option_picks_the_rtdetr_weights(paths, monkeypatch):
+    from footlytics.perception import detect
+    built = []
+
+    class FakeDetector:
+        def __init__(self, weights, cfg):
+            built.append(cfg)
+    monkeypatch.setattr(detect, "Detector", FakeDetector)
+    monkeypatch.setattr(runner, "_DETECTORS", {})
+    runner._detector(paths, {})
+    runner._detector(paths, {"ball_detector": "rtdetr", "ball_conf": 0.05})
+    assert (built[0].ball_detector, built[0].ball_weights) == ("yolo", str(paths.ball_weights))
+    assert (built[1].ball_detector, built[1].ball_weights) == ("rtdetr", str(paths.ball_detr_weights))
