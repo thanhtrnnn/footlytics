@@ -4,7 +4,8 @@
 # before and after the calibration + on-pitch filters). The gap between them says where recall
 # is lost: detector, filters, or the selector.
 #   detector:  settings of the people + ball models (conf, ball_conf, ball_imgsz, max_balls,
-#              ball_detector: yolo (default, AGPL) | rtdetr (ours, Apache-2.0, weights/ball-rtdetrv2/best))
+#              ball_detector: yolo (default, AGPL) | rtdetr (ours, Apache-2.0, weights/ball-rtdetrv2/best);
+#              ball_weights_dir: a weights/ subdirectory for the rtdetr model, e.g. ball-rtdetrv2-vl/best)
 #   pipeline:  PipelineConfig overrides (ball_link, ball_link_break_cost, ...)
 # Each change of detector settings reloads the models.
 name: ball
@@ -46,4 +47,17 @@ tasks:
     clips: [SNGS-025, SNGS-028, SNGS-050, SNGS-056, SNGS-081, SNGS-086]
     every: 10
     detector: {ball_detector: rtdetr, ball_conf: 0.05}
+    pipeline: {ball_link: true}
+  - id: ball-rtdetr-vl
+    kind: gsr_pipeline
+    split: valid
+    clips: [SNGS-025, SNGS-028, SNGS-050, SNGS-056, SNGS-081, SNGS-086]
+    every: 10
+    detector: {ball_detector: rtdetr, ball_conf: 0.05, ball_weights_dir: ball-rtdetrv2-vl/best}
+  - id: ball-rtdetr-vl-link
+    kind: gsr_pipeline
+    split: valid
+    clips: [SNGS-025, SNGS-028, SNGS-050, SNGS-056, SNGS-081, SNGS-086]
+    every: 10
+    detector: {ball_detector: rtdetr, ball_conf: 0.05, ball_weights_dir: ball-rtdetrv2-vl/best}
     pipeline: {ball_link: true}
