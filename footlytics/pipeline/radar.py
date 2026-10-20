@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Iterable, Optional, Sequence
+from typing import Callable, Iterable, Iterator, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -31,7 +31,7 @@ from ..perception.teams import (split_officials, TeamClassifier, kit_descriptor,
                                 team_scores_by_track)
 from ..perception.identity import (apply_to_state, assign_teams_with_roster,
                                    build_tracklets, goalkeeper_teams, goalkeeper_tracklets,
-                                   stitch_tracklets, touchline_people)
+                                   merge_same_role, stitch_tracklets, touchline_people)
 from ..perception.shots import (ShotConfig, frame_signals, live_wide_segments,
                                 stinger_and_replay)
 from ..perception.track import PitchTracker, TrackerConfig
@@ -97,11 +97,15 @@ class PipelineConfig:
     #: detector miss from a selection loss. Cheap, but not for a long match.
     keep_ball_candidates: bool = False
     use_appearance: bool = True
+    #: Drop person tracks seen in fewer frames than this (0.2 s at 25 fps). 1 keeps everything.
+    min_track_frames: int = 5
     team_fit_sample: int = 4000     # descriptors sampled to fit the kit clusters
     #: Join track fragments into whole-player tracklets before deciding identity.
     #: On real football, this collapsed 129 fragments back to 22 correct players
     #: with zero welded identities (scripts/test_identity.py).
     stitch: bool = True
+    #: Keyword overrides for `identity.stitch_tracklets`.
+    stitch_args: dict = field(default_factory=dict)
     #: Players a side. Drives the team quota; set lower after a red card.
     roster_size: int = 11
     #: Take people who live on the boundary lines out of the teams before the quota:
@@ -112,6 +116,9 @@ class PipelineConfig:
     #: and give them the team that defends that end, whatever their kit clustered as.
     #: See `identity.goalkeeper_tracklets`.
     goalkeepers: bool = True
+    #: Give each goalkeeper slot (end of the pitch x team) one id across the whole clip, cuts
+    #: included: a side has one keeper, so this is role continuity, not forced identity.
+    merge_keepers: bool = True
     #: Fill ball gaps of at most this many frames by interpolating between the
     #: two sightings either side. 0 disables. The tracker already coasts the ball
     #: for a few frames, so this only reaches the gaps where the track died.
@@ -280,6 +287,102 @@ def _log(on: bool, *a):
         print(*a, flush=True)
 
 
+@dataclass
+class Observation:
+    """Everything one processed frame gives the tracker, before any tracking decision.
+
+    This is the seam between the expensive half of the pipeline (decode, detect, calibrate,
+    describe kit colour: GPU) and the cheap half (track, stitch, decide teams, roles and
+    identity: CPU, seconds). Pickle a clip's observations once (`save_observations`) and
+    `run_observations` replays everything after it on a laptop, so a tracking or stitching
+    change can be measured without a GPU.
+    """
+    dets: np.ndarray                    # (N, >=6) raw detector output, boxes in pixels
+    roles: list[str]                    # per detection
+    xy: Optional[np.ndarray]            # (N, 2) feet in pitch metres; None = frame not calibrated
+    desc: Optional[np.ndarray] = None   # (N, D) kit descriptor per detection; zeros for the ball
+    signal: Optional[object] = None     # shots.FrameSignals, when the shot filter is on
+    frame: Optional[np.ndarray] = field(default=None, repr=False)   # RGB, only for the montage
+
+
+def save_observations(path: str | Path, obs: Sequence[Observation], fps: float,
+                      has_referee_class: bool) -> None:
+    import pickle
+
+    slim = [Observation(o.dets.astype(np.float32), list(o.roles), o.xy,
+                        None if o.desc is None else o.desc.astype(np.float16), o.signal)
+            for o in obs]
+    with open(path, "wb") as f:
+        pickle.dump({"fps": fps, "has_referee_class": has_referee_class, "obs": slim}, f,
+                    protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def load_observations(path: str | Path) -> tuple[list[Observation], float, bool]:
+    import pickle
+
+    with open(path, "rb") as f:
+        d = pickle.load(f)
+    obs = d["obs"]
+    for o in obs:
+        if o.desc is not None:
+            o.desc = o.desc.astype(np.float32)
+    return obs, d["fps"], d["has_referee_class"]
+
+
+def observe_frames(
+    frames: Iterable[np.ndarray],
+    fps: float,
+    mapper: FeetMapper,
+    detector: Detector,
+    cfg: PipelineConfig,
+    source: str = "frames",
+) -> Iterator[Observation]:
+    """Decode-side half of the pipeline: one `Observation` per processed frame (see `stride`)."""
+    n_total = len(frames) if hasattr(frames, "__len__") else None
+    eff_fps = fps / cfg.stride
+    shots_on = cfg.shot_filter
+    _log(cfg.verbose, f"[pipeline] {source}")
+    src_idx = out_idx = 0
+    for frame_bgr in frames:
+        if src_idx == 0:
+            h, w = frame_bgr.shape[:2]
+            _log(cfg.verbose, f"[pipeline] {w}x{h}, "
+                              + (f"{n_total} frames @ " if n_total is not None else "")
+                              + f"{fps:.2f} fps, stride {cfg.stride} -> "
+                                f"effective {eff_fps:.2f} fps")
+        if src_idx % cfg.stride != 0:
+            src_idx += 1
+            continue
+        if cfg.max_frames is not None and out_idx >= cfg.max_frames:
+            break
+
+        frame = frame_bgr[:, :, ::-1]                       # BGR -> RGB
+        dets = detector.detect(frame)
+        roles = [detector.role_of(c) for c in dets[:, 5]]
+        signal = None
+        if shots_on:
+            people_h = [b[3] for b, r in zip(dets[:, :4], roles) if r != Role.BALL.value]
+            signal = frame_signals(frame_bgr, float(np.median(people_h)) / frame_bgr.shape[0]
+                                   if people_h else float("nan"))
+        xy = mapper(src_idx, frame_bgr, dets)
+        desc = None
+        if cfg.use_appearance and len(dets) and xy is not None:
+            rows = [None if r == Role.BALL.value else kit_descriptor(frame, b)
+                    for b, r in zip(dets[:, :4], roles)]
+            dim = next((d.shape for d in rows if d is not None), None) \
+                or kit_descriptor(frame, dets[0, :4]).shape
+            desc = np.stack([np.zeros(dim, np.float32) if d is None else d for d in rows])
+        yield Observation(dets, roles, xy, desc, signal, frame if cfg.montage else None)
+        src_idx += 1
+        out_idx += 1
+
+
+def _tee(obs: Iterable[Observation], sink: list) -> Iterator[Observation]:
+    for o in obs:
+        sink.append(Observation(o.dets, o.roles, o.xy, o.desc, o.signal))
+        yield o
+
+
 def run_frames(
     frames: Iterable[np.ndarray],
     fps: float,
@@ -289,17 +392,39 @@ def run_frames(
     cfg: PipelineConfig | None = None,
     tracker_cfg: TrackerConfig | None = None,
     source: str = "frames",
+    capture: Optional[list] = None,
 ) -> tuple[MatchState, dict]:
     """Process BGR frames into a MatchState. Returns (state, report).
+
+    `capture`, if given, collects every frame's `Observation` (see `save_observations`).
 
     `mapper(src_idx, frame_bgr, dets)` places each frame's detections on the pitch (see
     `FeetMapper`): a fixed calibration, a camera tracker, or per-frame homographies
     (`homography_mapper`). `fps` is the source frame rate; `cfg.stride` thins it.
     """
     cfg = cfg or PipelineConfig()
+    shots = (meta.source_type == "broadcast") if cfg.shot_filter is None else cfg.shot_filter
+    cfg = replace(cfg, shot_filter=shots)
+    obs = observe_frames(frames, fps, mapper, detector, cfg, source)
+    if capture is not None:
+        obs = _tee(obs, capture)
+    return run_observations(obs, fps, meta, cfg, tracker_cfg,
+                            has_referee_class=Role.REFEREE.value in set(detector.roles.values()))
+
+
+def run_observations(
+    observations: Iterable[Observation],
+    fps: float,
+    meta: MatchMeta,
+    cfg: PipelineConfig | None = None,
+    tracker_cfg: TrackerConfig | None = None,
+    has_referee_class: bool = False,
+) -> tuple[MatchState, dict]:
+    """Track, stitch and decide identity over pre-computed `Observation`s. `fps` is the
+    *source* rate; observations are already strided."""
+    cfg = cfg or PipelineConfig()
     pitch = Pitch(meta.pitch_length, meta.pitch_width)
     src_fps = fps
-    n_total = len(frames) if hasattr(frames, "__len__") else None
 
     # The effective frame rate after striding is what the tracker and every
     # speed downstream must use. Getting this wrong silently scales every
@@ -311,15 +436,13 @@ def run_frames(
     shots_on = (meta.source_type == "broadcast") if cfg.shot_filter is None else cfg.shot_filter
     signals = []
 
-    _log(cfg.verbose, f"[pipeline] {source}")
-
     rows: list[dict] = []
     desc_rows: list[np.ndarray] = []
     desc_track: list[int] = []
     desc_role: list[str] = []
     montage_frames, montage_boxes = [], []
 
-    src_idx = out_idx = 0
+    out_idx = 0
     n_det_total = 0
     n_off_pitch = 0
     n_ball_off_pitch = 0
@@ -329,31 +452,14 @@ def run_frames(
     link_log: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
     t0 = time.time()
 
-    for frame_bgr in frames:
-        if src_idx == 0:
-            h, w = frame_bgr.shape[:2]
-            _log(cfg.verbose, f"[pipeline] {w}x{h}, "
-                              + (f"{n_total} frames @ " if n_total is not None else "")
-                              + f"{src_fps:.2f} fps, stride {cfg.stride} -> "
-                                f"effective {eff_fps:.2f} fps")
-        if src_idx % cfg.stride != 0:
-            src_idx += 1
-            continue
-        if cfg.max_frames is not None and out_idx >= cfg.max_frames:
-            break
-
-        frame = frame_bgr[:, :, ::-1]                       # BGR -> RGB
-        dets = detector.detect(frame)
+    for ob in observations:
+        dets, xy_all, roles_all, desc_all = ob.dets, ob.xy, ob.roles, ob.desc
         n_det_total += len(dets)
         if shots_on:
-            people_h = [b[3] for b, c in zip(dets[:, :4], dets[:, 5])
-                        if detector.role_of(c) != Role.BALL.value]
-            signals.append(frame_signals(frame_bgr, float(np.median(people_h)) / frame_bgr.shape[0]
-                                         if people_h else float("nan")))
+            signals.append(ob.signal)
 
-        xy_all = mapper(src_idx, frame_bgr, dets)
         if cfg.keep_ball_candidates and len(dets):
-            is_b = np.array([detector.role_of(c) == Role.BALL.value for c in dets[:, 5]], bool)
+            is_b = np.array([r == Role.BALL.value for r in roles_all], bool)
             if is_b.any():
                 ok = (np.zeros(int(is_b.sum()), bool) if xy_all is None else
                       on_pitch(xy_all[is_b], [Role.BALL.value] * int(is_b.sum()), pitch,
@@ -364,7 +470,7 @@ def run_frames(
             dets = dets[:0]                                  # skip the frame, tracks coast
 
         if len(dets):
-            roles = [detector.role_of(c) for c in dets[:, 5]]
+            roles = list(roles_all)
             xy = xy_all                                      # same length and order as dets
 
             keep = on_pitch(xy, roles, pitch, cfg.pitch_margin_m, cfg.ball_margin_m)
@@ -372,6 +478,7 @@ def run_frames(
             n_ball_off_pitch += sum(1 for r, k in zip(roles, keep) if r == Role.BALL.value and not k)
             dets, xy = dets[keep], xy[keep]
             roles = [r for r, k in zip(roles, keep) if k]
+            desc = None if desc_all is None else desc_all[keep]
 
             # One ball per frame, chosen for continuity and against still decoys.
             bi = np.flatnonzero([r == Role.BALL.value for r in roles])
@@ -390,20 +497,15 @@ def run_frames(
                 sel = np.array([i not in drop for i in range(len(dets))], bool)
                 dets, xy = dets[sel], xy[sel]
                 roles = [r for r, k in zip(roles, sel) if k]
+                if desc is not None:
+                    desc = desc[sel]
 
-            embeddings = None
+            embeddings = desc if (len(dets) and cfg.use_appearance) else None
             if len(dets):
-                if cfg.use_appearance:
-                    embeddings = np.stack([
-                        kit_descriptor(frame, b) if r != Role.BALL.value
-                        else np.zeros(kit_descriptor(frame, dets[0, :4]).shape, np.float32)
-                        for b, r in zip(dets[:, :4], roles)
-                    ])
                 matches = tracker.update(
                     xy, roles, bboxes=dets[:, :4], confs=dets[:, 4],
                     embeddings=embeddings,
                 )
-                live = {t.id: t for t in tracker.tracks}
                 for di, tid in matches:
                     rows.append(dict(
                         frame_idx=out_idx, period=1, timestamp=out_idx / eff_fps,
@@ -419,15 +521,14 @@ def run_frames(
                         desc_rows.append(embeddings[di])
                         desc_track.append(tid)
                         desc_role.append(roles[di])
-                        if cfg.montage and len(montage_frames) < 600:
-                            montage_frames.append(frame)
+                        if cfg.montage and ob.frame is not None and len(montage_frames) < 600:
+                            montage_frames.append(ob.frame)
                             montage_boxes.append(dets[di, :4])
 
         if cfg.verbose and out_idx % 50 == 0:
             el = time.time() - t0
             _log(True, f"  frame {out_idx}  ({out_idx / max(el, 1e-6):.1f} fps proc, "
                        f"{len(rows):,} observations)")
-        src_idx += 1
         out_idx += 1
 
     elapsed = time.time() - t0
@@ -444,6 +545,17 @@ def run_frames(
                            "calibration is placing everything off the pitch")
 
     df = pd.DataFrame(rows)
+    if cfg.min_track_frames > 1:
+        # The tracker reports a detection from its first frame, so a one-frame false alarm
+        # (a doubled box, a spectator at the touchline) becomes a track id. Real people last.
+        n = df.groupby("track_id")["frame_idx"].transform("size")
+        ball = df["role"] == Role.BALL.value
+        df = df[(n >= cfg.min_track_frames) | ball].reset_index(drop=True)
+        alive = set(df["track_id"].unique().tolist())
+        sel = [i for i, t in enumerate(desc_track) if t in alive]
+        desc_rows = [desc_rows[i] for i in sel]
+        desc_role = [desc_role[i] for i in sel]
+        desc_track = [desc_track[i] for i in sel]
     shot_report: dict = {}
     if shots_on:
         live, shot = live_wide_segments(signals, eff_fps, cfg.shot)
@@ -472,6 +584,7 @@ def run_frames(
         "ball_link_segments": n_link_segments,
         "ball_link_frames": sum(r["role"] == Role.BALL.value for r in rows) if cfg.ball_link else 0,
         "tracks_created": tracker._next_id - 1,
+        "scene_jumps_compensated": tracker.n_comp,
         "frames_uncalibrated": n_uncalibrated,
         "frames_calibrated": out_idx - n_uncalibrated,
         "calib_success_rate": (out_idx - n_uncalibrated) / max(out_idx, 1),
@@ -518,7 +631,7 @@ def run_frames(
     # would put the officials into one team and skew the eleven-a-side quota. Split a third
     # kit off first; with two kits the helper returns nothing and the 2-means path is untouched.
     officials: set[int] = set()
-    if desc_rows and Role.REFEREE.value not in set(detector.roles.values()):
+    if desc_rows and not has_referee_class:
         info: dict = {}
         officials = split_officials(np.array(desc_track), np.stack(desc_rows), info=info)
         report["officials_check"] = info
@@ -527,10 +640,10 @@ def run_frames(
             _log(cfg.verbose, f"[pipeline] officials split off (third kit): {sorted(officials)}")
     report["officials_split"] = len(officials)
 
-    tracklets = build_tracklets(state, embeddings=track_emb or None)
+    tracklets = build_tracklets(state, embeddings=track_emb or None, team_scores=scores or None)
     n_before = len(tracklets)
     if cfg.stitch:
-        tracklets = stitch_tracklets(tracklets, eff_fps)
+        tracklets = stitch_tracklets(tracklets, eff_fps, **cfg.stitch_args)
     for t in tracklets:
         if scores:
             w = [(scores.get(x, 0.0), 1.0) for x in t.track_ids]
@@ -543,22 +656,40 @@ def run_frames(
         "assistant_referees": sum(r == Role.REFEREE.value for r in on_line.values()),
         "other": sum(r == Role.OTHER.value for r in on_line.values()),
     }
-    official_tracklets = [t for t in tracklets
-                          if set(t.track_ids) & officials or on_line.get(t.id) == Role.REFEREE.value]
+    # A stitched tracklet is an official when most of its frames are, not when one of its
+    # fragments is: a single mis-clustered fragment must not turn a player into a referee.
+    frames_of = state.tracks.groupby("track_id").size().to_dict()
+
+    def official_share(t) -> float:
+        return (sum(frames_of.get(i, 0) for i in t.track_ids if i in officials)
+                / max(sum(frames_of.get(i, 0) for i in t.track_ids), 1))
+
+    # Goalkeepers first, among everyone who is not on a touchline: a keeper wears a third kit,
+    # which is exactly what the official split looks for, and position says who he is better.
+    keepers: dict[int, int] = {}
+    if cfg.goalkeepers and scores:
+        keepers = goalkeeper_tracklets(
+            state.tracks, [t for t in tracklets if t.id not in on_line], pitch.half_l, pitch.half_w)
+    official_tracklets = [t for t in tracklets if t.id not in keepers
+                          and (official_share(t) >= 0.5 or on_line.get(t.id) == Role.REFEREE.value)]
     other_tracklets = [t for t in tracklets
-                       if on_line.get(t.id) == Role.OTHER.value and not set(t.track_ids) & officials]
+                       if on_line.get(t.id) == Role.OTHER.value and t.id not in keepers
+                       and official_share(t) < 0.5]
     side = {id(t) for t in official_tracklets} | {id(t) for t in other_tracklets}
     player_tracklets = [t for t in tracklets if id(t) not in side]
     if scores:
         player_tracklets = assign_teams_with_roster(player_tracklets, team_size=cfg.roster_size)
-    keepers: dict[int, int] = {}
-    if cfg.goalkeepers and scores:
-        keepers = goalkeeper_tracklets(state.tracks, player_tracklets, pitch.half_l, pitch.half_w)
+    if keepers:
         keeper_team = goalkeeper_teams(state.tracks, player_tracklets, keepers)
         for t in player_tracklets:
             if t.id in keeper_team:
                 t.role, t.team = Role.GOALKEEPER.value, keeper_team[t.id]
         keepers = {k: v for k, v in keepers.items() if k in keeper_team}
+        if cfg.merge_keepers and keepers:
+            # One keeper a side: every sighting at the same end for the same team is him.
+            slot = {k: (end, keeper_team[k]) for k, end in keepers.items()}
+            player_tracklets = merge_same_role(player_tracklets, slot)
+            keepers = {t.id: slot[t.id][0] for t in player_tracklets if t.id in slot}
     report["goalkeepers"] = len(keepers)
     for t in official_tracklets:
         t.team = Team.OFFICIAL.value

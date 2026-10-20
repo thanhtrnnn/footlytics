@@ -54,6 +54,9 @@ class Tracklet:
     jersey_votes: dict[int, float] = field(default_factory=dict)
     #: how many individual reads contributed
     jersey_reads: int = 0
+    #: shot ids (`shots.live_wide_segments`) of its first and last frame, None without a shot filter
+    shot: Optional[int] = None
+    shot_end: Optional[int] = None
 
     def best_jersey(self) -> tuple[Optional[int], float, int]:
         """(number, share of evidence, number of reads) for the leading number.
@@ -181,8 +184,10 @@ def merge_by_jersey(
 
 
 def build_tracklets(state: MatchState, embeddings: Optional[dict[int, np.ndarray]] = None,
-                    tail_frames: int = 10) -> list[Tracklet]:
-    """One tracklet per track_id in the state."""
+                    tail_frames: int = 10,
+                    team_scores: Optional[dict[int, float]] = None) -> list[Tracklet]:
+    """One tracklet per track_id in the state. `team_scores` (track id -> signed kit-colour
+    lean, `teams.team_scores_by_track`) lets stitching refuse to join the two teams."""
     out: list[Tracklet] = []
     players = state.tracks[state.tracks["role"] != Role.BALL.value]
     fps = state.meta.fps
@@ -204,6 +209,9 @@ def build_tracklets(state: MatchState, embeddings: Optional[dict[int, np.ndarray
             exit_velocity=vel, n_frames=len(g),
             embedding=None if embeddings is None else embeddings.get(int(tid)),
             role=str(g["role"].mode().iloc[0]),
+            team_score=0.0 if team_scores is None else float(team_scores.get(int(tid), 0.0)),
+            shot=int(g["shot"].iloc[0]) if "shot" in g.columns else None,
+            shot_end=int(g["shot"].iloc[-1]) if "shot" in g.columns else None,
         ))
     return sorted(out, key=lambda t: t.start)
 
@@ -211,7 +219,7 @@ def build_tracklets(state: MatchState, embeddings: Optional[dict[int, np.ndarray
 def stitch_tracklets(
     tracklets: list[Tracklet],
     fps: float,
-    max_gap_s: float = 2.0,
+    max_gap_s: float = 10.0,
     max_speed: float = 9.0,
     position_tolerance: float = 2.0,
     appearance_weight: float = 8.0,
@@ -220,6 +228,10 @@ def stitch_tracklets(
     jersey_veto: bool = True,
     jersey_min_share: float = 0.7,
     jersey_min_reads: int = 2,
+    across_shots: bool = False,
+    team_veto: float = 0.0,
+    coast_s: float = 1.0,
+    gap_weight: float = 0.0,
 ) -> list[Tracklet]:
     """Join fragments that are plausibly the same player, before and after a gap.
 
@@ -239,45 +251,74 @@ def stitch_tracklets(
     mixed beyond repair. Two fragments carrying confidently different numbers
     cannot be the same player, and saying so *before* the merge is what prevents
     the weld. Call `add_jersey_reads` before this, not after.
+
+    Other things that refuse a merge:
+    * `across_shots=False`: the two fragments belong to different shots (a cut, a replay, a
+      close-up between them). A player seen before a cut and a player seen after it cannot be
+      told to be the same one, so identity ends at the cut.
+    * `team_veto > 0`: the fragments lean to opposite teams by more than this each (kit colour,
+      `Tracklet.team_score`).
+    * kit-colour distance above `max_appearance_dist`; below it, it also adds to the cost.
+
+    `coast_s` caps how long the exit velocity is extrapolated over a gap: a player lost for six
+    seconds is not still running the way he was. `gap_weight` charges metres per second of gap,
+    so the nearest fragment in time wins a tie.
     """
     work = list(tracklets)
 
     for _ in range(max_passes):
         work.sort(key=lambda t: t.start)
         n = len(work)
-        cost = np.full((n, n), 1e6)
+        if n < 2:
+            break
+        start = np.array([t.start for t in work])
+        end = np.array([t.end for t in work])
+        sxy = np.array([t.start_xy for t in work], float)
+        exy = np.array([t.end_xy for t in work], float)
+        vel = np.array([t.exit_velocity for t in work], float)
 
-        for i, a in enumerate(work):
-            for j, b in enumerate(work):
-                if i == j or b.start <= a.end:
-                    continue                     # b must begin after a ends
-                gap_frames = b.start - a.end
-                gap_s = gap_frames / fps
-                if gap_s > max_gap_s:
-                    continue
-                # Where a was heading, coasting through the gap.
-                predicted = a.end_xy + a.exit_velocity * gap_s
-                reach = max_speed * gap_s + position_tolerance
-                if np.linalg.norm(b.start_xy - a.end_xy) > reach:
-                    continue
-                if jersey_veto:
-                    na, sa, ra = a.best_jersey()
-                    nb, sb, rb = b.best_jersey()
-                    if (na is not None and nb is not None and na != nb
-                            and sa >= jersey_min_share and sb >= jersey_min_share
-                            and ra >= jersey_min_reads and rb >= jersey_min_reads):
-                        continue          # different players, whatever the geometry says
-                d = float(np.linalg.norm(b.start_xy - predicted))
-                if a.embedding is not None and b.embedding is not None:
-                    ea = a.embedding / max(np.linalg.norm(a.embedding), 1e-9)
-                    eb = b.embedding / max(np.linalg.norm(b.embedding), 1e-9)
-                    cos_d = 1.0 - float(ea @ eb)
-                    if cos_d > max_appearance_dist:
-                        continue
-                    d += appearance_weight * cos_d
-                cost[i, j] = d
+        gap_f = start[None, :] - end[:, None]                         # [a, b]: a's end to b's start
+        gap_s = gap_f / fps
+        ok = (gap_f > 0) & (gap_s <= max_gap_s)
+        np.fill_diagonal(ok, False)
 
-        if not np.isfinite(cost).any() or (cost < 1e6).sum() == 0:
+        gs = np.clip(gap_s, 0.0, None)
+        jump = np.linalg.norm(sxy[None, :, :] - exy[:, None, :], axis=-1)
+        ok &= jump <= max_speed * gs + position_tolerance
+        predicted = exy[:, None, :] + vel[:, None, :] * np.minimum(gs, coast_s)[:, :, None]
+        d = np.linalg.norm(sxy[None, :, :] - predicted, axis=-1)
+
+        if not across_shots:
+            sa = np.array([-1 if t.shot_end is None else t.shot_end for t in work])
+            sb = np.array([-1 if t.shot is None else t.shot for t in work])
+            ok &= sa[:, None] == sb[None, :]
+
+        if team_veto > 0:
+            sc = np.array([t.team_score for t in work], float)
+            opposite = (sc[:, None] * sc[None, :] < 0) & (np.minimum(
+                np.abs(sc)[:, None], np.abs(sc)[None, :]) > team_veto)
+            ok &= ~opposite
+
+        if jersey_veto:
+            bj = [t.best_jersey() for t in work]
+            num = np.array([-1 if b[0] is None else b[0] for b in bj])
+            conf = np.array([b[1] >= jersey_min_share and b[2] >= jersey_min_reads for b in bj])
+            both = (num[:, None] >= 0) & (num[None, :] >= 0) & conf[:, None] & conf[None, :]
+            ok &= ~(both & (num[:, None] != num[None, :]))   # different players, whatever the geometry says
+
+        have = np.array([t.embedding is not None for t in work])
+        if have.any():
+            dim = next(t.embedding.shape[0] for t in work if t.embedding is not None)
+            E = np.stack([t.embedding / max(np.linalg.norm(t.embedding), 1e-9)
+                          if t.embedding is not None else np.zeros(dim) for t in work])
+            cos_d = 1.0 - E @ E.T
+            both = have[:, None] & have[None, :]
+            ok &= ~(both & (cos_d > max_appearance_dist))
+            d = d + np.where(both, appearance_weight * cos_d, 0.0)
+        d = d + gap_weight * gs
+
+        cost = np.where(ok, d, 1e6)
+        if (cost < 1e6).sum() == 0:
             break
 
         ri, ci = linear_sum_assignment(cost)
@@ -296,29 +337,33 @@ def stitch_tracklets(
 
         new_work: list[Tracklet] = []
         by_index = {i: t for i, t in enumerate(work)}
+        succ = {v: k for k, v in merged_into.items()}
         for i, t in by_index.items():
             if i in merged_into:
                 continue
             cur = t
-            j = next((k for k, v in merged_into.items() if v == i), None)
+            j = succ.get(i)
             while j is not None:
                 nxt = by_index[j]
+                tot = cur.n_frames + nxt.n_frames
                 cur = Tracklet(
                     id=cur.id,
                     track_ids=cur.track_ids + nxt.track_ids,
                     start=cur.start, end=nxt.end,
                     start_xy=cur.start_xy, end_xy=nxt.end_xy,
                     exit_velocity=nxt.exit_velocity,
-                    n_frames=cur.n_frames + nxt.n_frames,
+                    n_frames=tot,
                     embedding=(cur.embedding if nxt.embedding is None else
                                (nxt.embedding if cur.embedding is None else
                                 (cur.n_frames * cur.embedding + nxt.n_frames * nxt.embedding)
-                                / (cur.n_frames + nxt.n_frames))),
+                                / tot)),
                     role=cur.role,
+                    team_score=(cur.n_frames * cur.team_score + nxt.n_frames * nxt.team_score) / tot,
                     jersey_votes=_merge_votes(cur.jersey_votes, nxt.jersey_votes),
                     jersey_reads=cur.jersey_reads + nxt.jersey_reads,
+                    shot=cur.shot, shot_end=nxt.shot_end,
                 )
-                j = next((k for k, v in merged_into.items() if v == j), None)
+                j = succ.get(j)
             new_work.append(cur)
 
         if len(new_work) == len(work):
@@ -326,6 +371,51 @@ def stitch_tracklets(
         work = new_work
 
     return sorted(work, key=lambda t: t.start)
+
+
+def merge_same_role(tracklets: list[Tracklet], slot_of: dict[int, object]) -> list[Tracklet]:
+    """Join tracklets that fill the same single slot, whenever and wherever they were seen.
+
+    `slot_of` maps a tracklet id to a slot key; tracklets sharing a key are one person by
+    construction. The use is the goalkeeper: a side has exactly one, so every tracklet found in
+    front of the same goal for the same team is that man, however many cuts lie between the
+    sightings. This is role-level continuity -- it gives the slot one id, it does not claim the
+    cut-separated fragments of an outfield player are anyone in particular. Tracklets that
+    overlap in time are two people (a doubled box, a defender misread as the keeper): they are
+    not joined and stay as they are.
+    """
+    slots: dict[object, list[Tracklet]] = {}
+    rest: list[Tracklet] = []
+    for t in tracklets:
+        if t.id in slot_of:
+            slots.setdefault(slot_of[t.id], []).append(t)
+        else:
+            rest.append(t)
+    out = list(rest)
+    for group in slots.values():
+        group.sort(key=lambda t: -t.n_frames)          # the best-seen sighting anchors the id
+        acc: list[Tracklet] = []
+        spans: list[list[tuple[int, int]]] = []
+        for t in group:
+            for k, sp in zip(acc, spans):
+                if all(t.end < s0 or e0 < t.start for s0, e0 in sp):
+                    tot = k.n_frames + t.n_frames
+                    if t.embedding is not None and k.embedding is not None:
+                        k.embedding = (k.n_frames * k.embedding + t.n_frames * t.embedding) / tot
+                    k.team_score = (k.n_frames * k.team_score + t.n_frames * t.team_score) / tot
+                    k.track_ids = k.track_ids + t.track_ids
+                    k.n_frames = tot
+                    if t.end > k.end:
+                        k.end, k.end_xy, k.exit_velocity = t.end, t.end_xy, t.exit_velocity
+                    if t.start < k.start:
+                        k.start, k.start_xy, k.shot = t.start, t.start_xy, t.shot
+                    sp.append((t.start, t.end))
+                    break
+            else:
+                acc.append(t)
+                spans.append([(t.start, t.end)])
+        out.extend(acc)
+    return sorted(out, key=lambda t: t.start)
 
 
 def assign_teams_with_roster(

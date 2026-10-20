@@ -73,6 +73,25 @@ class TrackerConfig:
     #: EMA factor for a track's running appearance template. Low = long memory,
     #: which is what we want, since a track's kit does not change.
     appearance_ema: float = 0.15
+    #: Re-register the tracks onto the frame's detections when the whole scene jumped. The
+    #: calibration is re-solved at keyframes and the new homography can differ from the
+    #: bridged one by metres; every player then appears to move at once, no gate admits
+    #: that, and every track dies and is reborn in the same frame. A camera tracker (BoT-SORT's
+    #: "CMC") fixes this the same way: estimate the common shift, apply it to all tracks.
+    motion_comp: bool = True
+    #: Compensate only when fewer than this share of last frame's matched tracks have a
+    #: detection within 1 m of their prediction.
+    comp_trigger: float = 0.75
+    #: Tracks unseen for at most this many frames take part in the compensation. 1 = only
+    #: those matched in the previous frame. Wider reaches back across a stretch of
+    #: uncalibrated frames, where the pairs found are mostly wrong (measured: more ids, not fewer).
+    comp_max_gap: int = 1
+    #: Largest image shift between frames considered, pixels (plus 40 px per frame of gap).
+    comp_max_px: float = 150.0
+    #: At least this share of those tracks must find their detection under the winning shift.
+    comp_min_share: float = 0.5
+    #: Reach of one track's calibration-error sample, metres.
+    comp_sigma: float = 8.0
 
 
 class _KF:
@@ -155,6 +174,8 @@ class PitchTracker:
         self.dt = 1.0 / self.cfg.fps
         self.tracks: list[Track] = []
         self._next_id = 1
+        self.n_comp = 0                 # frames in which a scene jump was compensated
+        self.last_reason = ""           # why the last _compensate call did or did not act
 
     # ------------------------------------------------------------------ step
 
@@ -186,6 +207,10 @@ class PitchTracker:
             t.kf.predict()
             t.age += 1
             t.time_since_update += 1
+
+        if self.cfg.motion_comp:
+            pi = np.flatnonzero(kinds == "person")
+            self._compensate(xy[pi], None if bboxes is None else np.asarray(bboxes, float)[pi])
 
         matches: list[tuple[int, int]] = []
         used_det: set[int] = set()
@@ -270,6 +295,84 @@ class PitchTracker:
 
         self.tracks = [t for t in self.tracks if t.time_since_update <= self.cfg.max_age]
         return matches
+
+    # ---------------------------------------------------------- scene jumps
+
+    def _compensate(self, det_xy: np.ndarray, det_boxes: Optional[np.ndarray]) -> bool:
+        """Re-register the tracks onto the scene when the calibration jumped between frames.
+
+        The homography is re-solved at keyframes and bridged by a camera tracker in between;
+        on a fast pan the two disagree by metres, and not by one common shift: in one measured
+        frame players moved -1.1..-2.1 m in x and -2.4..+1.2 m in y, depending on where they
+        stood. The same happens after a stretch of frames that could not be calibrated at all.
+        Every track then misses its detection by more than any gate, and all of them are reborn
+        at once.
+
+        The picture has no such problem -- the camera pans, players do not jump -- so the
+        correspondence is found in pixels: the best common image shift (Hough over the
+        box-foot vectors from the tracks seen in the last `comp_max_gap` frames to this frame's
+        detections) pairs each track with its detection. The pitch-space displacement of those
+        pairs is then a sample of the calibration error, and every track is moved by the
+        Gaussian-weighted mean of its neighbours' samples (`comp_sigma` metres).
+
+        Only runs when the tracks visibly fail to line up (fewer than `comp_trigger` of them
+        have a detection within 1 m of their prediction, a little more the longer they coasted),
+        so ordinary frames are untouched.
+        """
+        cfg = self.cfg
+        self.last_reason = "no boxes or few detections"
+        if det_boxes is None or len(det_xy) < 4:
+            return False
+        R = [t for t in self.tracks if t.kind == "person" and 1 <= t.time_since_update <= cfg.comp_max_gap
+             and t.last_bbox is not None and t.last_meas is not None]
+        if len(R) < 4:
+            self.last_reason = f"few recent tracks ({len(R)})"
+            return False
+        age = np.array([t.time_since_update for t in R], float)
+        P = np.array([t.kf.pos for t in R])
+        d_pitch = np.linalg.norm(det_xy[None, :, :] - P[:, None, :], axis=-1)
+        if (d_pitch.min(axis=1) <= 1.0 + 0.25 * (age - 1)).mean() >= cfg.comp_trigger:
+            self.last_reason = "aligned"
+            return False
+
+        def feet(b: np.ndarray) -> np.ndarray:
+            return np.c_[b[:, 0] + b[:, 2] / 2, b[:, 1] + b[:, 3]]
+
+        tb = np.array([t.last_bbox for t in R], float)
+        fb, ft = feet(np.asarray(det_boxes, float)), feet(tb)
+        tol = np.maximum(6.0, 0.18 * tb[:, 3]) + 2.0 * (age - 1)      # per track, pixels
+        reach = cfg.comp_max_px + 40.0 * (age - 1)
+        V = fb[None, :, :] - ft[:, None, :]                          # (tracks, dets, 2)
+        cand = V[np.linalg.norm(V, axis=-1) <= reach[:, None]]
+        if len(cand) == 0:
+            self.last_reason = "no pixel candidates"
+            return False
+        cand = cand[::max(1, len(cand) // 500)]
+        dd = np.linalg.norm(fb[None, None] - (ft[:, None, None] + cand[None, :, None]), axis=-1)
+        score = (dd.min(axis=2) <= tol[:, None]).sum(axis=0)         # per candidate
+        shift = cand[int(np.argmax(score))]
+        D = np.linalg.norm(fb[None] - (ft + shift)[:, None], axis=-1)
+        ti, dj = D.argmin(axis=1), D.argmin(axis=0)
+        pairs = [(i, int(ti[i])) for i in range(len(R))
+                 if dj[ti[i]] == i and D[i, ti[i]] <= tol[i]]
+        if len(pairs) < max(4, int(cfg.comp_min_share * len(R))):
+            self.last_reason = f"too few pixel pairs ({len(pairs)}/{len(R)}) shift={np.round(shift)}"
+            return False
+        src = P[[i for i, _ in pairs]]
+        samples = det_xy[[j for _, j in pairs]] - src
+        if np.linalg.norm(np.median(samples, axis=0)) < 0.4 and np.abs(samples).max() < 1.5:
+            self.last_reason = "nothing to correct"
+            return False
+        # smooth field: each track moves like its neighbours did
+        for t in self.tracks:
+            w = np.exp(-0.5 * (np.linalg.norm(src - t.kf.pos, axis=1) / cfg.comp_sigma) ** 2)
+            delta = (w[:, None] * samples).sum(axis=0) / (w.sum() + 0.05)
+            t.kf.x[:2] += delta
+            if t.last_meas is not None:
+                t.last_meas = t.last_meas + delta
+        self.n_comp += 1
+        self.last_reason = "compensated"
+        return True
 
     # ----------------------------------------------------------------- views
 
