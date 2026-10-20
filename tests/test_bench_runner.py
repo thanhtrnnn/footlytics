@@ -1303,3 +1303,5 @@ def test_detector_ball_detector_option_picks_the_rtdetr_weights(paths, monkeypat
     runner._detector(paths, {"ball_detector": "rtdetr", "ball_conf": 0.05})
     assert (built[0].ball_detector, built[0].ball_weights) == ("yolo", str(paths.ball_weights))
     assert (built[1].ball_detector, built[1].ball_weights) == ("rtdetr", str(paths.ball_detr_weights))
+    runner._detector(paths, {"ball_detector": "rtdetr", "ball_weights_dir": "ball-rtdetrv2-vl/best"})
+    assert built[2].ball_weights == str(paths.root / "weights" / "ball-rtdetrv2-vl" / "best")
