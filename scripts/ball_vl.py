@@ -6,8 +6,25 @@ Subcommands (`detect` needs the GPU host, the rest are CPU):
   pseudo   candidates -> ball tracks -> pseudo-label file (+ review sheets)
   eval     score a candidates file against the hand-labelled test set
 
-Frozen-split windows are never read: `dev_windows` raises on anything the manifest does not
-mark "dev", and there is no flag to turn that off.
+Frozen-split windows are never read: `dev_windows` only returns windows the manifest marks
+"dev", and there is no flag to turn that off.
+
+How the V.League ball fine-tune was made (host = bench host, CUDA; data under ~/footlytics-bench):
+
+  detect   --weights weights/ball-rtdetrv2/best --video <10 min clip> --vl-root data/vleague --out cands-base.pkl
+  pseudo   --cands cands-base.pkl --out pseudo.json          # tracks: footlytics.perception.ball_pseudo
+  sheet    --labels pseudo.json --video <clip> --src clip --lo 0 --hi 9750 --out sheets    # hand check
+  extra    --labels pseudo.json --video <clip> --out frames --extra-json extra.json
+           (clip frames < 390 s only; dev windows of the two training matches; windows that overlap
+           the test part of the clip are skipped)
+  scripts/train_ball_detr.py --base weights/ball-rtdetrv2/best --extra extra.json --extra-share 0.5 \
+           --steps 8000 --lr 3e-5 --warmup 200 --final-only --out weights/ball-rtdetrv2-vl
+  testsheet / zoom   label the test set by eye (candidates of both detectors, shown unnamed)
+  detect on the test frames with each model, then `eval --gt bench/vleague/ball-ft/test-gt.json`
+
+Test set: 178 sampled frames, 142 scored (36 "unsure" are excluded): 122 from the clip tail
+(8:00-10:00, trained on nothing after 6:30) and 20 from the dev windows of ninh-binh-pvf-cand, a
+match that is in no training source.
 """
 from __future__ import annotations
 

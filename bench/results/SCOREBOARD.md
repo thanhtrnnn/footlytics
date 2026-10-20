@@ -5,10 +5,11 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 
 ## ball
 
-| finished (UTC) | commit | status | host | ball-base | ball-link | ball-link-conf05 | ball-link-conf05-img2560 | ball-rtdetr | ball-rtdetr-link |
-|---|---|---|---|---|---|---|---|---|---|
-| 2026-10-20 03:21 | 13d9289 | complete | iec5090 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 |
-| 2026-10-19 17:08 | 8e60cd0 | complete | iec5090 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 |  |  |
+| finished (UTC) | commit | status | host | ball-base | ball-link | ball-link-conf05 | ball-link-conf05-img2560 | ball-rtdetr | ball-rtdetr-link | ball-rtdetr-vl | ball-rtdetr-vl-link |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-20 06:19 | 03e24c7 | complete | iec5090 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 |
+| 2026-10-20 03:21 | 13d9289 | complete | iec5090 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 |  |  |
+| 2026-10-19 17:08 | 8e60cd0 | complete | iec5090 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 |  |  |  |  |
 
 ## calib-tune
 
