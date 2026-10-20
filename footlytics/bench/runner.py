@@ -29,8 +29,10 @@ from ..geometry.calib_nn import DEFAULT_KP_THRESHOLD, DEFAULT_LINE_THRESHOLD, so
 from ..geometry.camera_motion import AnchoredCamera
 from ..geometry.clip_calib import ClipCalibrator, static_overlay_mask
 from ..geometry.sn_camera import scale_camera
-from ..pipeline.radar import PipelineConfig, homography_mapper, run_frames
-from ..state.schema import MatchMeta
+from ..pipeline.radar import (PipelineConfig, homography_mapper, load_observations, run_frames,
+                              run_observations, save_observations)
+from ..perception.track import TrackerConfig
+from ..state.schema import MatchMeta, Role
 from .adapters.calib import gsr_line_frames, write_camera
 from .adapters.gsr import check_version, gt_to_state, state_to_predictions, team_sides
 from .evaluators import run_gsr, run_sncalib
@@ -650,11 +652,17 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
     """
     split, cfg = task["split"], task.get("calibrator", {})
     every, gate = task.get("every", 10), float(task.get("gate_px", 25.0))
-    require_vram(task.get("vram_mib", PIPELINE_VRAM_MIB))
-    # Both models load before the clip loop and a failure there fails the task. Inside the
-    # loop it would be retried per clip and score each as all misses.
-    _calibrator(ctx.paths)
-    det = _detector(ctx.paths, task.get("detector", {}))
+    #: `capture_dir` also pickles each clip's detections, pitch positions and kit descriptors;
+    #: `replay_dir` runs tracking, stitching and identity from such a capture, on the CPU.
+    capture_dir, replay_dir = (Path(task[k]).expanduser() if task.get(k) else None
+                               for k in ("capture_dir", "replay_dir"))
+    det = None
+    if not replay_dir:
+        require_vram(task.get("vram_mib", PIPELINE_VRAM_MIB))
+        # Both models load before the clip loop and a failure there fails the task. Inside the
+        # loop it would be retried per clip and score each as all misses.
+        _calibrator(ctx.paths)
+        det = _detector(ctx.paths, task.get("detector", {}))
     out_dir = ctx.work / "trackers" / f"SoccerNetGS-{split}" / "footlytics"
     out_dir.mkdir(parents=True, exist_ok=True)
     per, failed = {}, {}
@@ -675,18 +683,34 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                 continue
             calib = None
             try:
-                res, calib_s, _ = _clip_calibration(ctx, z, split, seq, cfg, every, gate,
-                                                    fresh=task.get("fresh", False))
-                _check_alignment(seq, names, len(res))
-                calib = res
-                t0 = time.perf_counter()
-                state, report = run_frames(
-                    (_imread(z.read(n)) for n in names), 25.0,
-                    homography_mapper([fc.H_img_to_pitch for fc in calib]), det,
-                    MatchMeta(match_id=seq, fps=25.0, source_type="broadcast"),
-                    # `pipeline:` in the task overrides settings, so a suite can compare them
-                    PipelineConfig(**{"verbose": False, "montage": False,
-                                      "keep_ball_candidates": True, **task.get("pipeline", {})}))
+                meta = MatchMeta(match_id=seq, fps=25.0, source_type="broadcast")
+                # `pipeline:` in the task overrides settings, so a suite can compare them
+                pcfg = PipelineConfig(**{"verbose": False, "montage": False,
+                                         "keep_ball_candidates": True,
+                                         **task.get("pipeline", {})})
+                tcfg = TrackerConfig(fps=25.0 / pcfg.stride, **task.get("tracker", {}))
+                if replay_dir:
+                    # Everything after detection and calibration, from a capture: no GPU.
+                    obs, ofps, has_ref = load_observations(Path(replay_dir) / f"{seq}.pkl")
+                    calib_s = 0.0
+                    t0 = time.perf_counter()
+                    state, report = run_observations(obs, ofps, meta, pcfg, tcfg,
+                                                     has_referee_class=has_ref)
+                else:
+                    res, calib_s, _ = _clip_calibration(ctx, z, split, seq, cfg, every, gate,
+                                                        fresh=task.get("fresh", False))
+                    _check_alignment(seq, names, len(res))
+                    calib = res
+                    t0 = time.perf_counter()
+                    captured = [] if capture_dir else None
+                    state, report = run_frames(
+                        (_imread(z.read(n)) for n in names), 25.0,
+                        homography_mapper([fc.H_img_to_pitch for fc in calib]), det,
+                        meta, pcfg, tcfg, **({"capture": captured} if capture_dir else {}))
+                    if capture_dir:
+                        Path(capture_dir).mkdir(parents=True, exist_ok=True)
+                        save_observations(Path(capture_dir) / f"{seq}.pkl", captured, 25.0,
+                                          Role.REFEREE.value in set(det.roles.values()))
                 run_s = time.perf_counter() - t0
                 (out_dir / f"{seq}.json").write_text(json.dumps(
                     state_to_predictions(state, split)))

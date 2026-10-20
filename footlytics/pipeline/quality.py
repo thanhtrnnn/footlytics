@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from ..state.schema import MatchState, Role
@@ -58,7 +59,61 @@ def compute_quality(state: MatchState, report: dict, stride: int = 1, expected_p
             v = report[k]
             q[k] = v["summary"] if isinstance(v, dict) and "summary" in v else v
     q["validation"] = list(report.get("validation", []))
+    q.update({f"seg_{k}": v for k, v in segment_identity(tr, fps).items()})
     return q
+
+
+def segment_identity(tracks: pd.DataFrame, fps: float, min_s: float = 3.0) -> dict:
+    """How well identity holds inside each live-wide segment (the `shot` ids marked live).
+
+    Inside one continuous shot a player is one track, so the honest question is how many ids
+    the pipeline spent per player that was in view. Across a cut identity cannot be kept
+    (no re-ID, no jersey reads), so nothing here joins segments: each is judged alone.
+
+    Per segment of at least `min_s` seconds, over players and keepers:
+      ids            distinct track ids
+      visible        90th percentile of the people seen in one frame (the camera pans, so this,
+                     not 22, is how many different players the segment can contain)
+      ids_per_player ids / visible, ideally ~1
+      keepers        distinct goalkeeper ids (a shot shows at most both keepers)
+    Aggregates: segment-weighted mean of ids_per_player, the median track length in seconds
+    (per track and segment: a track is cut at the segment's edge), and keeper ids over the
+    whole clip (2). Empty when the state has no `live_wide` / `shot` columns (not broadcast).
+    """
+    if not {"live_wide", "shot"} <= set(tracks.columns) or tracks.empty:
+        return {}
+    ppl = tracks[tracks["role"].isin([Role.PLAYER.value, Role.GOALKEEPER.value])
+                 & tracks["live_wide"].astype(bool)]
+    if ppl.empty:
+        return {}
+    segs, lengths = [], []
+    for shot, g in ppl.groupby("shot"):
+        span = int(g["frame_idx"].max() - g["frame_idx"].min() + 1)
+        if span < min_s * fps:
+            continue
+        per_frame = g.groupby("frame_idx")["track_id"].nunique()
+        visible = float(np.percentile(per_frame.to_numpy(), 90))
+        n_ids = int(g["track_id"].nunique())
+        lengths += (g.groupby("track_id")["frame_idx"].nunique() / fps).tolist()
+        segs.append({"shot": int(shot), "seconds": span / fps, "ids": n_ids, "visible": visible,
+                     "ids_per_player": n_ids / max(visible, 1.0),
+                     "keepers": int(g.loc[g["role"] == Role.GOALKEEPER.value, "track_id"].nunique())})
+    if not segs:
+        return {}
+    d = pd.DataFrame(segs)
+    w = d["seconds"] / d["seconds"].sum()
+    return {
+        "live_segments": int(len(d)),
+        "live_seconds": float(d["seconds"].sum()),
+        "ids_per_segment_mean": float(d["ids"].mean()),
+        "visible_per_segment_mean": float(d["visible"].mean()),
+        "ids_per_player_mean": float((d["ids_per_player"] * w).sum()),
+        "ids_per_player_median": float(d["ids_per_player"].median()),
+        "median_track_seconds": float(np.median(lengths)),
+        "keeper_ids_per_segment_mean": float(d["keepers"].mean()),
+        "keeper_ids_per_segment_max": int(d["keepers"].max()),
+        "keeper_ids_total": int(ppl.loc[ppl["role"] == Role.GOALKEEPER.value, "track_id"].nunique()),
+    }
 
 
 def write_quality(q: dict, out_dir: str | Path) -> None:
