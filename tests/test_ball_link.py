@@ -50,6 +50,20 @@ def test_a_lone_bright_detection_that_would_break_the_track_twice_is_ignored():
     assert picks[10] == 0 and all(p == 0 for p in picks if p is not None)
 
 
+def test_a_high_break_cost_keeps_only_tracks_with_enough_confidence_mass():
+    # a steady 0.5-confidence ball for 30 frames, and further on a 3-frame blip of 0.8s in
+    # another place: with the default cost the blip is taken, with a break cost above its
+    # total confidence it is not, and the steady ball is kept either way
+    xy = [arr([0.2 * t, 0]) for t in range(30)] + [arr([40.0, 20.0]) for _ in range(3)]
+    conf = [np.array([0.5])] * 30 + [np.array([0.8])] * 3
+    frames_ = list(range(30)) + [60, 61, 62]
+    low = link_ball_candidates(frames_, xy, conf, FPS, break_cost=0.25)
+    high = link_ball_candidates(frames_, xy, conf, FPS, break_cost=3.0)
+    assert [p for p in low[30:]] == [0, 0, 0]
+    assert [p for p in high[30:]] == [None, None, None]
+    assert all(p == 0 for p in high[:30])
+
+
 def test_gaps_within_the_limit_keep_the_track_and_longer_ones_start_a_new_one():
     xy = [arr([0, 0]), arr([0.3, 0]), arr([30, 0])]
     conf = [np.array([0.3])] * 3
