@@ -229,7 +229,7 @@ def stitch_tracklets(
     jersey_min_share: float = 0.7,
     jersey_min_reads: int = 2,
     across_shots: bool = False,
-    team_veto: float = 0.0,
+    team_veto: float = 0.3,
     coast_s: float = 1.0,
     gap_weight: float = 0.0,
 ) -> list[Tracklet]:

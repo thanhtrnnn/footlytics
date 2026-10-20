@@ -97,12 +97,15 @@ class PipelineConfig:
     #: detector miss from a selection loss. Cheap, but not for a long match.
     keep_ball_candidates: bool = False
     use_appearance: bool = True
-    #: Drop person tracks seen in fewer frames than this (0.2 s at 25 fps). 1 keeps everything.
-    min_track_frames: int = 5
+    #: Drop person tracks seen in fewer frames than this (0.6 s at 25 fps). 1 keeps everything.
+    #: GS-HOTA on the 58 valid clips: 5 -> 59.0, 15 -> 60.1 (a track that short is a doubled box,
+    #: a spectator at the line or a flicker, not a player).
+    min_track_frames: int = 15
     team_fit_sample: int = 4000     # descriptors sampled to fit the kit clusters
     #: Join track fragments into whole-player tracklets before deciding identity.
-    #: On real football, this collapsed 129 fragments back to 22 correct players
-    #: with zero welded identities (scripts/test_identity.py).
+    #: On a fixed rig this collapsed 129 fragments back to 22 correct players with zero
+    #: welded identities (scripts/test_identity.py). On broadcast, fragments are joined
+    #: inside one shot only (`stitch_tracklets(across_shots=False)`): identity ends at a cut.
     stitch: bool = True
     #: Keyword overrides for `identity.stitch_tracklets`.
     stitch_args: dict = field(default_factory=dict)
@@ -545,12 +548,13 @@ def run_observations(
                            "calibration is placing everything off the pitch")
 
     df = pd.DataFrame(rows)
-    if cfg.min_track_frames > 1:
+    floor = min(cfg.min_track_frames, max(out_idx // 4, 1))      # a very short clip keeps its tracks
+    if floor > 1:
         # The tracker reports a detection from its first frame, so a one-frame false alarm
         # (a doubled box, a spectator at the touchline) becomes a track id. Real people last.
         n = df.groupby("track_id")["frame_idx"].transform("size")
         ball = df["role"] == Role.BALL.value
-        df = df[(n >= cfg.min_track_frames) | ball].reset_index(drop=True)
+        df = df[(n >= floor) | ball].reset_index(drop=True)
         alive = set(df["track_id"].unique().tolist())
         sel = [i for i, t in enumerate(desc_track) if t in alive]
         desc_rows = [desc_rows[i] for i in sel]
@@ -644,10 +648,7 @@ def run_observations(
     n_before = len(tracklets)
     if cfg.stitch:
         tracklets = stitch_tracklets(tracklets, eff_fps, **cfg.stitch_args)
-    for t in tracklets:
-        if scores:
-            w = [(scores.get(x, 0.0), 1.0) for x in t.track_ids]
-            t.team_score = float(np.mean([v for v, _ in w])) if w else 0.0
+    # (each tracklet's team_score is already the frame-weighted mean of its fragments')
     # People who live on the boundary lines -- assistant referees, ball boys, staff --
     # are not players, whatever kit cluster they fall into. Decide before the quota.
     on_line = (touchline_people(state.tracks, tracklets, pitch.half_l, pitch.half_w)

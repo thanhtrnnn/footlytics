@@ -93,10 +93,13 @@ def test_exit_velocity_is_not_extrapolated_over_a_long_gap():
 def test_team_veto_refuses_opposite_kits():
     a, b = _tl(1, 0, 100, 0, 5), _tl(2, 110, 200, 6, 9)
     a.team_score, b.team_score = -0.6, 0.6
-    assert len(stitch_tracklets([a, b], 25.0, team_veto=0.3)) == 2
+    assert len(stitch_tracklets([a, b], 25.0)) == 2
     a2, b2 = _tl(1, 0, 100, 0, 5), _tl(2, 110, 200, 6, 9)
     a2.team_score, b2.team_score = -0.6, 0.6
-    assert len(stitch_tracklets([a2, b2], 25.0)) == 1                # off by default
+    assert len(stitch_tracklets([a2, b2], 25.0, team_veto=0.0)) == 1
+    a3, b3 = _tl(1, 0, 100, 0, 5), _tl(2, 110, 200, 6, 9)
+    a3.team_score, b3.team_score = -0.1, 0.1               # a doubtful lean is not a veto
+    assert len(stitch_tracklets([a3, b3], 25.0)) == 1
 
 
 # ----------------------------------------------------------------- keeper slots

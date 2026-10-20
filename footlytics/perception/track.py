@@ -30,6 +30,15 @@ That is why `update()` accepts optional appearance embeddings. Kit colour alone
 resolves most of it (opponents differ); a ReID embedding resolves teammates; and
 jersey numbers settle the remainder. Without at least one of them, expect
 identity to degrade steadily through every set piece and every tackle.
+
+Broadcast footage: the calibration is not rigid
+-----------------------------------------------
+Tracking in metres assumes a position means the same place from one frame to the next. On a
+panning broadcast camera the homography is re-solved at keyframes and bridged by a camera
+tracker in between; the two disagree by metres, differently in different parts of the pitch
+(measured: -1.1..-2.1 m in x and -2.4..+1.2 m in y in one frame). No physical gate admits that,
+so every track dies and is reborn in the same frame. `TrackerConfig.motion_comp` finds the
+correspondence in the picture, where nothing jumped, and moves the tracks accordingly.
 """
 
 from __future__ import annotations
@@ -91,7 +100,7 @@ class TrackerConfig:
     #: At least this share of those tracks must find their detection under the winning shift.
     comp_min_share: float = 0.5
     #: Reach of one track's calibration-error sample, metres.
-    comp_sigma: float = 8.0
+    comp_sigma: float = 14.0
 
 
 class _KF:
