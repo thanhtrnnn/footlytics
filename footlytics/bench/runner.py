@@ -612,6 +612,15 @@ PIPELINE_VRAM_MIB = 14_000
 _DETECTORS: dict = {}
 
 
+def _ball_weights(paths: BenchPaths, det_cfg: dict) -> str:
+    """The ball model of a detector setting: `ball_weights_dir` (a directory under weights/, e.g.
+    ball-rtdetrv2-vl/best, for an RT-DETR fine-tune) overrides the default RT-DETR directory."""
+    if det_cfg.get("ball_detector") != "rtdetr":
+        return str(paths.ball_weights)
+    sub = det_cfg.get("ball_weights_dir")
+    return str(paths.root / "weights" / sub) if sub else str(paths.ball_detr_weights)
+
+
 def _detector(paths: BenchPaths, det_cfg: dict):
     """One detector per process and settings (the people model plus the ball model)."""
     key = tuple(sorted(det_cfg.items()))
@@ -623,8 +632,7 @@ def _detector(paths: BenchPaths, det_cfg: dict):
             tile=det_cfg.get("tile", 0), imgsz=det_cfg.get("imgsz", 1280),
             conf=det_cfg.get("conf", 0.25), device="cuda", half=True,
             ball_detector=det_cfg.get("ball_detector", "yolo"),
-            ball_weights=str(paths.ball_detr_weights if det_cfg.get("ball_detector") == "rtdetr"
-                             else paths.ball_weights),
+            ball_weights=_ball_weights(paths, det_cfg),
             ball_conf=det_cfg.get("ball_conf", 0.10),
             ball_imgsz=det_cfg.get("ball_imgsz", 1920),
             max_balls=det_cfg.get("max_balls", 15)))

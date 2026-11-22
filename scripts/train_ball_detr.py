@@ -52,8 +52,14 @@ def load_split(root: Path, split: str) -> dict[str, list]:
 
 
 class CropSet(torch.utils.data.Dataset):
-    def __init__(self, zip_path: Path, frames: list[tuple], size: int, n: int, pos_share=0.75):
+    """Random 960 px crops. `frames` come from the GSR zip: (seq, name, box). With `extra` (frames
+    on disk: (jpg path, box), e.g. V.League pseudo-labels) a share `extra_share` of the samples
+    comes from there instead; those frames always hold a (pseudo-)labelled ball."""
+
+    def __init__(self, zip_path: Path, frames: list[tuple], size: int, n: int, pos_share=0.75,
+                 extra: list[tuple] | None = None, extra_share: float = 0.0):
         self.zip_path, self.frames, self.size, self.n, self.pos = zip_path, frames, size, n, pos_share
+        self.extra, self.extra_share = extra or [], extra_share if extra else 0.0
         self._z = None
 
     def __len__(self):
@@ -63,8 +69,12 @@ class CropSet(torch.utils.data.Dataset):
         if self._z is None:
             self._z = zipfile.ZipFile(self.zip_path)
         rng = random.Random(i * 7919 + int(time.time() * 1000) % 100003)
-        seq, name, box = rng.choice(self.frames)
-        img = cv2.imdecode(np.frombuffer(self._z.read(f"{seq}/img1/{name}"), np.uint8), cv2.IMREAD_COLOR)
+        if self.extra and rng.random() < self.extra_share:
+            path, box = rng.choice(self.extra)
+            img = cv2.imread(path)
+        else:
+            seq, name, box = rng.choice(self.frames)
+            img = cv2.imdecode(np.frombuffer(self._z.read(f"{seq}/img1/{name}"), np.uint8), cv2.IMREAD_COLOR)
         H, W = img.shape[:2]
         s = rng.uniform(0.8, 1.25)                       # source px per output px
         c = min(int(self.size * s), H, W)
@@ -139,6 +149,11 @@ def main():
     ap.add_argument("--holdout", type=int, default=6, help="train clips held out for the check")
     ap.add_argument("--eval-every", type=int, default=2500)
     ap.add_argument("--workers", type=int, default=10)
+    ap.add_argument("--extra", help="json [[jpg path, [x, y, w, h]], ...]: V.League pseudo-labelled frames")
+    ap.add_argument("--extra-share", type=float, default=0.5, help="share of samples drawn from --extra")
+    ap.add_argument("--warmup", type=int, default=500)
+    ap.add_argument("--final-only", action="store_true",
+                    help="no best-by-holdout choice: the last step is saved as <out>/best")
     a = ap.parse_args()
     root, out = Path(a.root).expanduser(), Path(a.out).expanduser()
     out.mkdir(parents=True, exist_ok=True)
@@ -158,10 +173,14 @@ def main():
     bb = [p for n, p in model.named_parameters() if "backbone" in n]
     rest = [p for n, p in model.named_parameters() if "backbone" not in n]
     opt = torch.optim.AdamW([{"params": bb, "lr": a.lr * 0.1}, {"params": rest, "lr": a.lr}], weight_decay=1e-4)
-    warm = 500
+    warm = a.warmup
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: min(1, (s + 1) / warm) * 0.5 * (1 + math.cos(math.pi * min(s, a.steps) / a.steps)))
-    dl = torch.utils.data.DataLoader(CropSet(zp, tr, CROP, a.steps * a.bs), batch_size=a.bs, num_workers=a.workers,
+    extra = [(p, tuple(b)) for p, b in json.loads(Path(a.extra).read_text())] if a.extra else None
+    if extra:
+        print(f"extra frames {len(extra)} at share {a.extra_share}", flush=True)
+    dl = torch.utils.data.DataLoader(CropSet(zp, tr, CROP, a.steps * a.bs, extra=extra, extra_share=a.extra_share),
+                                     batch_size=a.bs, num_workers=a.workers,
                                      collate_fn=collate, persistent_workers=True, prefetch_factor=4)
     t0, best, log = time.time(), -1.0, []
     for step, (x, labels) in enumerate(dl, 1):
@@ -182,7 +201,10 @@ def main():
             print(f"EVAL step {step} {json.dumps(ev)}", flush=True)
             log.append({"step": step, "seconds": round(time.time() - t0), **ev})
             model.save_pretrained(out / "last")
-            if ev["det_recall"] > best:
+            if a.final_only:
+                if done:
+                    model.save_pretrained(out / "best")
+            elif ev["det_recall"] > best:
                 best = ev["det_recall"]
                 model.save_pretrained(out / "best")
             (out / "train-log.json").write_text(json.dumps(log, indent=1))

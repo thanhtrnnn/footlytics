@@ -1,0 +1,110 @@
+{
+ "all@0.05": {
+  "frames": 142,
+  "ball_visible": 111,
+  "not_visible": 31,
+  "recall_any": 0.991,
+  "recall_top1": 0.973,
+  "fp_per_frame": 2.3239,
+  "fp_per_frame_novis": 7.9355
+ },
+ "all@0.2": {
+  "frames": 142,
+  "ball_visible": 111,
+  "not_visible": 31,
+  "recall_any": 0.982,
+  "recall_top1": 0.973,
+  "fp_per_frame": 0.0915,
+  "fp_per_frame_novis": 0.2903
+ },
+ "all@0.3": {
+  "frames": 142,
+  "ball_visible": 111,
+  "not_visible": 31,
+  "recall_any": 0.973,
+  "recall_top1": 0.964,
+  "fp_per_frame": 0.0563,
+  "fp_per_frame_novis": 0.1935
+ },
+ "all@0.5": {
+  "frames": 142,
+  "ball_visible": 111,
+  "not_visible": 31,
+  "recall_any": 0.955,
+  "recall_top1": 0.955,
+  "fp_per_frame": 0.007,
+  "fp_per_frame_novis": 0.0323
+ },
+ "clip@0.05": {
+  "frames": 122,
+  "ball_visible": 92,
+  "not_visible": 30,
+  "recall_any": 1.0,
+  "recall_top1": 0.9891,
+  "fp_per_frame": 2.1885,
+  "fp_per_frame_novis": 7.8
+ },
+ "clip@0.2": {
+  "frames": 122,
+  "ball_visible": 92,
+  "not_visible": 30,
+  "recall_any": 1.0,
+  "recall_top1": 0.9891,
+  "fp_per_frame": 0.082,
+  "fp_per_frame_novis": 0.3
+ },
+ "clip@0.3": {
+  "frames": 122,
+  "ball_visible": 92,
+  "not_visible": 30,
+  "recall_any": 1.0,
+  "recall_top1": 0.9891,
+  "fp_per_frame": 0.0574,
+  "fp_per_frame_novis": 0.2
+ },
+ "clip@0.5": {
+  "frames": 122,
+  "ball_visible": 92,
+  "not_visible": 30,
+  "recall_any": 0.9891,
+  "recall_top1": 0.9891,
+  "fp_per_frame": 0.0082,
+  "fp_per_frame_novis": 0.0333
+ },
+ "windows@0.05": {
+  "frames": 20,
+  "ball_visible": 19,
+  "not_visible": 1,
+  "recall_any": 0.9474,
+  "recall_top1": 0.8947,
+  "fp_per_frame": 3.15,
+  "fp_per_frame_novis": 12.0
+ },
+ "windows@0.2": {
+  "frames": 20,
+  "ball_visible": 19,
+  "not_visible": 1,
+  "recall_any": 0.8947,
+  "recall_top1": 0.8947,
+  "fp_per_frame": 0.15,
+  "fp_per_frame_novis": 0.0
+ },
+ "windows@0.3": {
+  "frames": 20,
+  "ball_visible": 19,
+  "not_visible": 1,
+  "recall_any": 0.8421,
+  "recall_top1": 0.8421,
+  "fp_per_frame": 0.05,
+  "fp_per_frame_novis": 0.0
+ },
+ "windows@0.5": {
+  "frames": 20,
+  "ball_visible": 19,
+  "not_visible": 1,
+  "recall_any": 0.7895,
+  "recall_top1": 0.7895,
+  "fp_per_frame": 0.0,
+  "fp_per_frame_novis": 0.0
+ }
+}
