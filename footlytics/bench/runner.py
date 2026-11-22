@@ -622,7 +622,9 @@ def _detector(paths: BenchPaths, det_cfg: dict):
         _DETECTORS[key] = Detector(paths.detector_weights, DetectorConfig(
             tile=det_cfg.get("tile", 0), imgsz=det_cfg.get("imgsz", 1280),
             conf=det_cfg.get("conf", 0.25), device="cuda", half=True,
-            ball_weights=str(paths.ball_weights),
+            ball_detector=det_cfg.get("ball_detector", "yolo"),
+            ball_weights=str(paths.ball_detr_weights if det_cfg.get("ball_detector") == "rtdetr"
+                             else paths.ball_weights),
             ball_conf=det_cfg.get("ball_conf", 0.10),
             ball_imgsz=det_cfg.get("ball_imgsz", 1920),
             max_balls=det_cfg.get("max_balls", 15)))

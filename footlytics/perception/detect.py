@@ -132,6 +132,10 @@ class DetectorConfig:
     #: fires, its boxes replace the ball rows.
     ball_weights: Optional[str] = None
     ball_imgsz: int = 1920
+    #: "yolo" (default: Ultralytics weights at `ball_weights`, AGPL) or "rtdetr" (a fine-tuned
+    #: RT-DETRv2 directory at `ball_weights`, Apache-2.0: `perception.ball_detr`; `ball_imgsz`
+    #: is unused, it sees the frame at native resolution).
+    ball_detector: str = "yolo"
     #: Ball candidates kept per frame, most confident first. Not 1: the ball model also
     #: finds the spare balls beside the pitch, and a still, unoccluded spare ball usually
     #: out-scores the match ball -- keeping only the best box put the "ball" beyond the far
@@ -164,7 +168,14 @@ class Detector:
             print(f"[detect] classes not recognised as football roles: {sorted(unknown)} "
                   f"-- edit _ROLE_PATTERNS if one of these is a player/ball class")
         print(f"[detect] class map: { {self.names[c]: r for c, r in self.roles.items()} }")
-        self.ball_model = YOLO(str(self.cfg.ball_weights)) if self.cfg.ball_weights else None
+        if self.cfg.ball_detector not in ("yolo", "rtdetr"):
+            raise ValueError(f"ball_detector {self.cfg.ball_detector!r}: one of 'yolo', 'rtdetr'")
+        if self.cfg.ball_detector == "rtdetr":
+            from .ball_detr import BallDetr
+            self.ball_model = (BallDetr(str(self.cfg.ball_weights), self.cfg.device, self.cfg.ball_conf,
+                                        self.cfg.max_balls) if self.cfg.ball_weights else None)
+        else:
+            self.ball_model = YOLO(str(self.cfg.ball_weights)) if self.cfg.ball_weights else None
         ball_classes = [c for c, r in self.roles.items() if r == Role.BALL.value]
         self._ball_cls = ball_classes[0] if ball_classes else None
         if self.ball_model is not None and self._ball_cls is None:
@@ -239,6 +250,13 @@ class Detector:
         """Replace the ball rows with the dedicated model's best boxes when it fires."""
         if self.ball_model is None:
             return d
+        if self.cfg.ball_detector == "rtdetr":
+            row = self.ball_model(frame, float(self._ball_cls))
+            if not len(row):
+                return d
+            not_ball = (np.array([self.roles.get(int(c)) != Role.BALL.value for c in d[:, 5]], bool)
+                        if len(d) else np.zeros(0, bool))
+            return np.vstack([d[not_ball], row]) if len(d) else row
         res = self.ball_model.predict(
             _bgr(frame), imgsz=self.cfg.ball_imgsz, conf=self.cfg.ball_conf, device=self.cfg.device,
             half=self.cfg.half, verbose=False,

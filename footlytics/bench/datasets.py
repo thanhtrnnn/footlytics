@@ -149,6 +149,8 @@ def _detector(paths: BenchPaths) -> Path:
 
 
 FETCHABLE: dict[str, Callable[[BenchPaths], Path]] = {
+    # training data only (ball detector); never scored: valid/test stay the benchmark
+    "gsr-train": _gsr("train"),
     "gsr-valid": _gsr("valid"),
     "gsr-test": _gsr("test"),
     "calib-valid": _calib("valid"),
