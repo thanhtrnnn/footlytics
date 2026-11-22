@@ -95,13 +95,16 @@ def run_video_cmd(
     gate_px: float = typer.Option(25.0),
     home: str = typer.Option("HOME"),
     away: str = typer.Option("AWAY"),
+    capture: Optional[Path] = typer.Option(None, help="also pickle detections, pitch positions and kit descriptors here"),
+    replay: Optional[Path] = typer.Option(None, help="run tracking onward from such a pickle: no GPU, no calibration"),
 ) -> None:
     """Per-frame calibration (SoccerMaster, CUDA host with the bench install) + full pipeline on a
     broadcast video; writes tracks.parquet, quality.json/md, sequences.csv for `review serve`."""
     from .bench.paths import BenchPaths
     from .pipeline.clip import run_video
 
-    q = run_video(video, out, BenchPaths.from_env(), every, gate_px, home, away, log=typer.echo)
+    q = run_video(video, out, BenchPaths.from_env(), every, gate_px, home, away, log=typer.echo,
+                  capture=capture, replay=replay)
     typer.echo(json.dumps({k: q.get(k) for k in ("frames", "mean_players_per_frame", "ball_coverage",
                                                   "seconds_per_match_minute", "calib_success_rate")}, indent=2))
 

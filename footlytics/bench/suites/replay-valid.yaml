@@ -1,0 +1,11 @@
+# Tracking, stitching and identity on all 58 valid clips, replayed from a `capture-valid` run:
+# no GPU, no calibration, a few minutes. Scores are the nightly's pipeline numbers for the same
+# detections and calibration, so a tracking change shows up here before it is worth a nightly.
+# `tracker:` overrides TrackerConfig fields, `pipeline:` PipelineConfig fields.
+name: replay-valid
+tasks:
+  - id: gsr-pipeline-valid-all
+    kind: gsr_pipeline
+    split: valid
+    clips: all
+    replay_dir: ~/footlytics-bench/ts-out/obs-valid

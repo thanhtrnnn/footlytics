@@ -22,7 +22,8 @@ from ..analytics.sequences import detect_sequences
 from ..analytics.tactics import normalise_direction
 from ..geometry.clip_calib import ClipCalibrator, FrameCalib, static_overlay_mask
 from .quality import compute_quality, write_quality
-from .radar import PipelineConfig, homography_mapper, run_frames
+from .radar import (PipelineConfig, homography_mapper, load_observations, run_frames,
+                    run_observations, save_observations)
 from ..state.schema import MatchMeta, TeamInfo
 
 
@@ -81,24 +82,42 @@ def calibrate_video(video: Path, calibrator, every: int = 10, gate_px: float = 2
 
 
 def run_video(video: Path, out: Path, paths, every: int = 10, gate_px: float = 25.0,
-              home: str = "HOME", away: str = "AWAY", log=print) -> dict:
-    """Calibrate, detect, track, then write tracks, quality and sequences into `out`."""
+              home: str = "HOME", away: str = "AWAY", log=print,
+              capture: Path | None = None, replay: Path | None = None) -> dict:
+    """Calibrate, detect, track, then write tracks, quality and sequences into `out`.
+
+    `capture` also pickles what the GPU half produced (detections, pitch positions, kit
+    descriptors); `replay` skips that half and runs tracking onward from such a pickle.
+    """
     from ..bench import runner
 
     out.mkdir(parents=True, exist_ok=True)
     cap = cv2.VideoCapture(str(video))
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     cap.release()
-    calibrator = runner._calibrator(paths)
-    det = runner._detector(paths, {})
-    calib, cstats = calibrate_video(video, calibrator, every, gate_px, log)
-
-    t0 = time.perf_counter()
     meta = MatchMeta(match_id=video.stem, fps=fps, source_type="broadcast",
                      home=TeamInfo(home, home[:3].upper()), away=TeamInfo(away, away[:3].upper()))
-    state, report = run_frames(read_frames(video), fps,
-                               homography_mapper([c.H_img_to_pitch for c in calib]), det, meta,
-                               PipelineConfig(verbose=False, montage=False), source=str(video))
+    pcfg = PipelineConfig(verbose=False, montage=False)
+    if replay:
+        obs, fps, has_ref = load_observations(replay)
+        cstats = {"calib_seconds": 0.0, "keyframes": 0, "keyframes_accepted": 0,
+                  "solver_errors": 0,
+                  "sources": {"replay": len(obs)}}
+        calib = None
+        t0 = time.perf_counter()
+        state, report = run_observations(obs, fps, meta, pcfg, has_referee_class=has_ref)
+    else:
+        calibrator = runner._calibrator(paths)
+        det = runner._detector(paths, {})
+        calib, cstats = calibrate_video(video, calibrator, every, gate_px, log)
+
+        t0 = time.perf_counter()
+        captured = [] if capture else None
+        state, report = run_frames(read_frames(video), fps,
+                                   homography_mapper([c.H_img_to_pitch for c in calib]), det,
+                                   meta, pcfg, source=str(video), capture=captured)
+        if capture:
+            save_observations(capture, captured, fps, "referee" in set(det.roles.values()))
     run_s = time.perf_counter() - t0
 
     state.save(out)
@@ -109,7 +128,8 @@ def run_video(video: Path, out: Path, paths, every: int = 10, gate_px: float = 2
     q = compute_quality(state, {**clean, "seconds": seconds})
     q["calibration"] = cstats
     write_quality(q, out)
-    (out / "calib_sources.json").write_text(json.dumps([c.source for c in calib]))
+    if calib is not None:
+        (out / "calib_sources.json").write_text(json.dumps([c.source for c in calib]))
 
     norm = normalise_direction(state)
     poss = infer_possession(norm)

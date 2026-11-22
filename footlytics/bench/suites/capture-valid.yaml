@@ -1,0 +1,10 @@
+# The nightly pipeline task on all 58 valid clips, also pickling each clip's detections, pitch
+# positions and kit descriptors (`capture_dir`). Replay them with `replay-valid` on the CPU.
+name: capture-valid
+tasks:
+  - id: gsr-pipeline-valid-all
+    kind: gsr_pipeline
+    split: valid
+    clips: all
+    every: 10
+    capture_dir: ~/footlytics-bench/ts-out/obs-valid
