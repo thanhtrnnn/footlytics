@@ -1,0 +1,23 @@
+# The tuned RT-DETR ball selector next to the one it replaces, in one small run: the `ball`
+# suite's two tasks of interest (same clips, same settings), for a GPU another job is sharing.
+# Selector settings were tuned offline on the six GSR train clips the ball detector held out
+# (scripts/capture_ball_candidates.py, scripts/replay_ball_select.py), never on valid.
+# `vram_mib` is below the pipeline default (14000) so the run starts beside a fine-tuning job.
+name: ball-select
+tasks:
+  - id: ball-rtdetr-link
+    kind: gsr_pipeline
+    split: valid
+    clips: [SNGS-025, SNGS-028, SNGS-050, SNGS-056, SNGS-081, SNGS-086]
+    every: 10
+    vram_mib: 10000
+    detector: {ball_detector: rtdetr, ball_conf: 0.05}
+    pipeline: {ball_link: true}
+  - id: ball-rtdetr-select
+    kind: gsr_pipeline
+    split: valid
+    clips: [SNGS-025, SNGS-028, SNGS-050, SNGS-056, SNGS-081, SNGS-086]
+    every: 10
+    vram_mib: 10000
+    detector: {ball_detector: rtdetr, ball_conf: 0.15}
+    pipeline: {ball_link: true, ball_link_break_cost: 3.0}

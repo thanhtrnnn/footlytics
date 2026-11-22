@@ -91,6 +91,9 @@ class PipelineConfig:
     ball_link: bool = False
     #: What a lone ball detection must beat to be taken when the ball could not have got
     #: there from the previous pick. A candidate that continues the track needs nothing.
+    #: Also the confidence mass an isolated stretch needs to survive, since each stretch pays
+    #: it once. Tuned for the RT-DETR ball detector at `ball_conf` 0.15: 3.0 (see the
+    #: `ball-rtdetr-select` task of the `ball` suite); the default is the YOLO-era value.
     ball_link_break_cost: float = 0.25
     #: Keep every raw ball candidate (box, confidence, whether it survived calibration and
     #: the on-pitch filter) in `report['_ball_candidates']`, so a benchmark can tell a

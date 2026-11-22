@@ -10,6 +10,12 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 | 2026-10-20 03:21 | 13d9289 | complete | iec5090 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 |
 | 2026-10-19 17:08 | 8e60cd0 | complete | iec5090 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 | hota_jersey_off 51.12 |  |  |
 
+## ball-select
+
+| finished (UTC) | commit | status | host | ball-rtdetr-link | ball-rtdetr-select |
+|---|---|---|---|---|---|
+| 2026-10-20 05:37 | 5ecca05 | complete | iec5090 | hota_jersey_off 51.12 | hota_jersey_off 51.12 |
+
 ## calib-tune
 
 | finished (UTC) | commit | status | host | tune-clip-every-10 | tune-clip-every-25 | tune-low-thresholds-refine | tune-pnl-thresholds | tune-pnl-thresholds-refine |

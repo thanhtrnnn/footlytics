@@ -47,3 +47,14 @@ tasks:
     every: 10
     detector: {ball_detector: rtdetr, ball_conf: 0.05}
     pipeline: {ball_link: true}
+  # Selector settings tuned offline on candidates of the six GSR train clips the detector held
+  # out (scripts/capture_ball_candidates.py, scripts/replay_ball_select.py), never on valid:
+  # a detector floor of 0.15 and a break cost of 3.0 (a stretch of the track must carry about
+  # 3 confidence-frames to stand on its own).
+  - id: ball-rtdetr-select
+    kind: gsr_pipeline
+    split: valid
+    clips: [SNGS-025, SNGS-028, SNGS-050, SNGS-056, SNGS-081, SNGS-086]
+    every: 10
+    detector: {ball_detector: rtdetr, ball_conf: 0.15}
+    pipeline: {ball_link: true, ball_link_break_cost: 3.0}
