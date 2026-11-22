@@ -369,7 +369,7 @@ class PitchTracker:
             return False
         src = P[[i for i, _ in pairs]]
         samples = det_xy[[j for _, j in pairs]] - src
-        if np.linalg.norm(np.median(samples, axis=0)) < 0.4 and np.abs(samples).max() < 1.5:
+        if np.linalg.norm(np.median(samples, axis=0)) < 0.4:
             self.last_reason = "nothing to correct"
             return False
         # smooth field: each track moves like its neighbours did

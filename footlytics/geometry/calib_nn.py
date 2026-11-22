@@ -33,6 +33,47 @@ class CameraFit:
     H_img_to_pitch: np.ndarray
 
 
+def valid_camera_fit(fit: Optional[CameraFit], width: int, height: int) -> bool:
+    """Reject physically impossible PnLCalib fits (e.g. 4-point overfitting behind the camera)."""
+    if fit is None or not np.isfinite(fit.rep_err):
+        return False
+    cam = fit.cam
+    if all(k in cam for k in ("x_focal_length", "position_meters", "tilt_degrees", "roll_degrees")):
+        fw = float(cam["x_focal_length"]) / max(width, 1)
+        z = float(cam["position_meters"][2])
+        tilt = float(cam["tilt_degrees"])
+        roll = float(cam["roll_degrees"])
+        if not (0.45 <= fw <= 5.0 and -100.0 <= z <= -2.0 and 20.0 <= tilt <= 89.5 and abs(roll) <= 10.0):
+            return False
+    H = np.asarray(fit.H_img_to_pitch, float)
+    if H.shape != (3, 3) or not np.isfinite(H).all():
+        return False
+    if float(H[2] @ np.array([width / 2.0, height / 2.0, 1.0])) < 0:
+        H = -H
+    for v in np.linspace(0.45 * height, 0.95 * height, 3):
+        for u in np.linspace(0.1 * width, 0.9 * width, 5):
+            p = H @ np.array([u, v, 1.0])
+            wv = float(p[2])
+            if not np.isfinite(wv) or wv <= 1e-9:
+                return False
+            J = np.array([
+                [(H[0, 0] * wv - p[0] * H[2, 0]) / wv ** 2,
+                 (H[0, 1] * wv - p[0] * H[2, 1]) / wv ** 2],
+                [(H[1, 0] * wv - p[1] * H[2, 0]) / wv ** 2,
+                 (H[1, 1] * wv - p[1] * H[2, 1]) / wv ** 2],
+            ])
+            if not np.isfinite(J).all():
+                return False
+            sv = np.linalg.svd(J, compute_uv=False)
+            if float(np.linalg.det(J)) <= 0 or float(sv[0] / max(sv[1], 1e-12)) > 25.0:
+                return False
+    cp = H @ np.array([width / 2.0, height / 2.0, 1.0])
+    if not np.isfinite(cp).all() or cp[2] <= 1e-9:
+        return False
+    cx, cy = cp[:2] / cp[2]
+    return bool(abs(cx) <= 150.0 and abs(cy) <= 100.0)
+
+
 def _plain(v):
     """numpy arrays and scalars -> nested lists of plain floats (a camera dict is JSON)."""
     if hasattr(v, "tolist"):
@@ -101,6 +142,14 @@ class PnlSolver:
         return [hm.complete_keypoints(k, l, w=side, h=side, normalize=True)
                 for k, l in zip(kp, ln)]
 
+    @staticmethod
+    def _fit_from_cam(cam, err) -> Optional[CameraFit]:
+        if cam is None or err is None or not np.isfinite(err):
+            return None
+        cam_p = {k: _plain(v) for k, v in cam.items() if k != "rotation_matrix"}
+        H = np.linalg.inv(ground_homography(cam_p))
+        return CameraFit(cam_p, float(err), H / H[2, 2])
+
     def solve(self, keypoints: dict, lines: dict, width: int, height: int, voting: bool = True,
               mode: str = "full", ransac: float = 0.0,
               refine_lines: bool = True) -> Optional[CameraFit]:
@@ -113,11 +162,23 @@ class PnlSolver:
             cam, err = (res["cam_params"], res["rep_err"]) if res else (None, None)
         else:
             cam, err = c.get_cam_params(mode=mode, use_ransac=ransac, refine_w_lines=refine_lines)
-        if cam is None or err is None or not np.isfinite(err):
+        fit = self._fit_from_cam(cam, err)
+        if not voting and mode == "full" and ransac > 0 and (
+            fit is None or fit.rep_err > 25.0 or not valid_camera_fit(fit, width, height)
+        ):
+            c2 = self._calib.FramebyFrameCalib(iwidth=width, iheight=height, denormalize=True)
+            c2.update(copy.deepcopy(keypoints), copy.deepcopy(lines))
+            try:
+                cam2, err2 = c2.get_cam_params(mode="ground_plane", use_ransac=0.0,
+                                              refine_w_lines=refine_lines)
+                fit2 = self._fit_from_cam(cam2, err2)
+                if fit2 is not None and fit2.rep_err <= 25.0 and valid_camera_fit(fit2, width, height):
+                    fit = fit2
+            except Exception:  # noqa: BLE001
+                pass
+        if fit is not None and not valid_camera_fit(fit, width, height):
             return None
-        cam = {k: _plain(v) for k, v in cam.items() if k != "rotation_matrix"}
-        H = np.linalg.inv(ground_homography(cam))
-        return CameraFit(cam, float(err), H / H[2, 2])
+        return fit
 
 
 _WORKER: dict = {}

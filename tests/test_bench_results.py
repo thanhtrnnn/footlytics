@@ -36,6 +36,8 @@ def test_headline_is_the_kinds_primary_metric_not_the_first_stored_key():
     assert headline(task("gsr_rescore", gsr)) == ("hota_jersey_on", 23.09, None)
     assert headline(task("sncalib", calib)) == ("score", 54.4, None)
     assert headline(task("gsr_calibration", calib)) == ("score", 54.4, None)
+    vl = {"failed": 0, "median_error_m": 0.63, "share_under_1m": 0.875}
+    assert headline(task("vleague", vl)) == ("share_under_1m", 0.875, None)
     assert headline(task("gsr_pipeline", gsr, {"metric": "assa_jersey_off", "passed": True})) \
         == ("assa_jersey_off", 45.77, True)                             # a check still wins
     assert headline(task("new_kind", {"b": 2.0, "a": 1.0})) == ("b", 2.0, None)

@@ -97,6 +97,9 @@ def run_video_cmd(
     away: str = typer.Option("AWAY"),
     capture: Optional[Path] = typer.Option(None, help="also pickle detections, pitch positions and kit descriptors here"),
     replay: Optional[Path] = typer.Option(None, help="run tracking onward from such a pickle: no GPU, no calibration"),
+    ball_link: bool = typer.Option(True, "--ball-link/--no-ball-link", help="link ball detections across frames into continuous tracks"),
+    ball_detector: str = typer.Option("yolo", help="ball detector backend: yolo | rtdetr"),
+    ball_weights_dir: Optional[str] = typer.Option(None, help="weights/ subdirectory for rtdetr ball detector, e.g. ball-rtdetrv2-vl/best"),
 ) -> None:
     """Per-frame calibration (SoccerMaster, CUDA host with the bench install) + full pipeline on a
     broadcast video; writes tracks.parquet, quality.json/md, sequences.csv for `review serve`."""
@@ -104,7 +107,8 @@ def run_video_cmd(
     from .pipeline.clip import run_video
 
     q = run_video(video, out, BenchPaths.from_env(), every, gate_px, home, away, log=typer.echo,
-                  capture=capture, replay=replay)
+                  capture=capture, replay=replay, ball_link=ball_link,
+                  ball_detector=ball_detector, ball_weights_dir=ball_weights_dir)
     typer.echo(json.dumps({k: q.get(k) for k in ("frames", "mean_players_per_frame", "ball_coverage",
                                                   "seconds_per_match_minute", "calib_success_rate")}, indent=2))
 

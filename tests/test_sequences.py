@@ -275,3 +275,27 @@ def test_a_loss_in_the_own_third_is_not_a_midfield_loss():
     deep = lambda f: (-35.0 + np.sin(f / FPS * 3.0), np.cos(f / FPS * 3.0))
     st, poss = _match(HOME_BUILD, AWAY_PRESS_3, ball=deep, status=status, seconds=10)
     assert (detect_sequences(st, poss)["label"] != "midfield_loss").all()
+
+
+def test_transitions_do_not_bridge_long_unknown_gaps_or_ballout():
+    from footlytics.analytics.tactics import transitions
+
+    def status_gap(f):
+        if f < 50:
+            return "HOME"
+        if f < 130:                                    # 3.2 s UNKNOWN stoppage (> 2.0 s)
+            return "UNKNOWN"
+        return "AWAY"
+
+    st, poss = _match(HOME_MID, AWAY_MID, ball=_ball_mid, status=status_gap, seconds=8)
+    assert transitions(st, poss).empty
+
+    def status_out(f):
+        if f < 50:
+            return "HOME"
+        if f < 60:                                     # brief BALLOUT dead-ball restart (0.4 s)
+            return "BALLOUT"
+        return "AWAY"
+
+    st2, poss2 = _match(HOME_MID, AWAY_MID, ball=_ball_mid, status=status_out, seconds=8)
+    assert transitions(st2, poss2).empty

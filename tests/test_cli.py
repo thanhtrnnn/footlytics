@@ -16,8 +16,17 @@ def test_help_lists_commands():
 
     r = CliRunner().invoke(app, ["--help"])
     assert r.exit_code == 0
-    for cmd in ("run", "calib-assist", "drift-check", "bench"):
+    for cmd in ("run", "run-video", "calib-assist", "drift-check", "bench"):
         assert cmd in r.output
+
+
+def test_run_video_help_exposes_ball_options():
+    from footlytics.cli import app
+
+    r = CliRunner().invoke(app, ["run-video", "--help"])
+    assert r.exit_code == 0
+    for opt in ("--ball-link", "--no-ball-link", "--ball-detector", "--ball-weights-dir"):
+        assert opt in r.output
 
 
 @pytest.mark.skipif(not CLIP.exists(), reason="clip missing")

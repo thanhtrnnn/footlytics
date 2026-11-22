@@ -17,7 +17,21 @@ import numpy as np
 
 from .calib_nn import CameraFit
 from .camera_motion import AnchoredCamera
+from .homography import apply_homography
 from .sn_camera import camera_from_homography
+
+
+def _pitch_disagreement_m(H1: np.ndarray, H2: np.ndarray, w: int, h: int) -> float:
+    """Median pitch-plane disagreement in metres across a 4x3 lower-image grid."""
+    us = np.linspace(0.2 * w, 0.8 * w, 4)
+    vs = np.linspace(0.5 * h, 0.9 * h, 3)
+    pts = np.array([(u, v) for v in vs for u in us], float)
+    p1 = apply_homography(H1, pts)
+    p2 = apply_homography(H2, pts)
+    ok = np.isfinite(p1).all(1) & np.isfinite(p2).all(1)
+    if not ok.any():
+        return float("inf")
+    return float(np.median(np.linalg.norm(p1[ok] - p2[ok], axis=1)))
 
 
 @dataclass
@@ -50,41 +64,58 @@ def static_overlay_mask(frames_bgr: list[np.ndarray], std_thresh: float = 3.0,
 class ClipCalibrator:
     def __init__(self, fit_keyframes: Callable[[list, list], dict[int, Optional[CameraFit]]],
                  every: int = 25, gate_px: float = 25.0,
-                 tracker_factory: Callable = AnchoredCamera, chunk: int = 30):
+                 tracker_factory: Callable = AnchoredCamera, chunk: int = 30,
+                 bridge_max_m: Optional[float] = 3.0):
         self.fit_keyframes, self.every, self.gate_px = fit_keyframes, every, gate_px
         self.tracker_factory, self.chunk = tracker_factory, chunk
+        self.bridge_max_m = bridge_max_m
         self.keyframes = self.keyframes_accepted = 0
 
     def run(self, frames_bgr: Iterable[np.ndarray],
             mask: Optional[np.ndarray] = None) -> list[FrameCalib]:
         out: list[FrameCalib] = []
         anchor = None                                   # (tracker, H_img_to_pitch at anchor)
+        pending_H: Optional[np.ndarray] = None
         buf: list[np.ndarray] = []
 
         def flush(start: int) -> None:
-            nonlocal anchor
+            nonlocal anchor, pending_H
             keys = [i for i in range(len(buf)) if (start + i) % self.every == 0]
             fits = self.fit_keyframes(buf, keys) if keys else {}
             self.keyframes += len(keys)
             for i, f in enumerate(buf):
                 idx = start + i
-                fit = fits.get(i)
-                if fit is not None and fit.rep_err <= self.gate_px:
-                    self.keyframes_accepted += 1
-                    anchor = (self.tracker_factory(f, mask), fit.H_img_to_pitch)
-                    out.append(FrameCalib(idx, fit.H_img_to_pitch, fit.cam, "keyframe",
-                                          fit.rep_err))
-                    continue
-                err = fit.rep_err if fit is not None else None
+                h, w = f.shape[:2]
+                bridged_H: Optional[np.ndarray] = None
                 if anchor is not None:
                     H_a_t = anchor[0].update(f, mask)
                     if H_a_t is not None:
-                        H = anchor[1] @ np.linalg.inv(H_a_t)
-                        H /= H[2, 2]
-                        h, w = f.shape[:2]
-                        cam = camera_from_homography(np.linalg.inv(H), w, h)
-                        out.append(FrameCalib(idx, H, cam, "bridged", err))
+                        H_b = anchor[1] @ np.linalg.inv(H_a_t)
+                        bridged_H = H_b / H_b[2, 2]
+                fit = fits.get(i)
+                if fit is not None and fit.rep_err <= self.gate_px:
+                    accept = True
+                    if self.bridge_max_m is not None and self.every > 1 and bridged_H is not None:
+                        dis = _pitch_disagreement_m(fit.H_img_to_pitch, bridged_H, w, h)
+                        if dis > self.bridge_max_m:
+                            accept = (
+                                pending_H is not None
+                                and _pitch_disagreement_m(fit.H_img_to_pitch, pending_H, w, h)
+                                <= self.bridge_max_m
+                            )
+                    if accept:
+                        pending_H = None
+                        self.keyframes_accepted += 1
+                        anchor = (self.tracker_factory(f, mask), fit.H_img_to_pitch)
+                        out.append(FrameCalib(idx, fit.H_img_to_pitch, fit.cam, "keyframe",
+                                              fit.rep_err))
                         continue
+                    pending_H = fit.H_img_to_pitch
+                err = fit.rep_err if fit is not None else None
+                if bridged_H is not None:
+                    cam = camera_from_homography(np.linalg.inv(bridged_H), w, h)
+                    out.append(FrameCalib(idx, bridged_H, cam, "bridged", err))
+                    continue
                 out.append(FrameCalib(idx, None, None, "none", err))
 
         start = 0

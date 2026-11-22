@@ -32,7 +32,8 @@ def append_result(path: str | Path, row: dict) -> bool:
 #: The number a task kind shows on the scoreboard when its suite gives it no check. `score` is
 #: JaC@5 x completeness.
 PRIMARY = {"gsr_pipeline": "hota_jersey_off", "gsr_gt_roundtrip": "hota_jersey_off",
-           "gsr_rescore": "hota_jersey_on", "sncalib": "score", "gsr_calibration": "score"}
+           "gsr_rescore": "hota_jersey_on", "sncalib": "score", "gsr_calibration": "score",
+           "vleague": "share_under_1m"}
 
 
 def headline(task: dict) -> tuple[str, float | None, bool | None]:

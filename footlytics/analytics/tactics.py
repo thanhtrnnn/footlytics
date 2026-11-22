@@ -329,33 +329,43 @@ def press_distance(state: MatchState, possession: pd.DataFrame,
 # --------------------------------------------------------------- transitions
 
 def transitions(state: MatchState, possession: pd.DataFrame,
-                min_hold_s: float = 1.5, window_s: float = 5.0) -> pd.DataFrame:
+                min_hold_s: float = 1.5, window_s: float = 5.0,
+                max_gap_s: float = 2.0) -> pd.DataFrame:
     """Turnovers, and what each team did in the seconds afterwards.
 
     A turnover only counts once the new team holds the ball for `min_hold_s`;
     without that, every deflection and contested touch registers as a transition
-    and the count balloons into noise.
+    and the count balloons into noise. Contiguous runs are split across long
+    tracking gaps (> `max_gap_s`), and a handoff across > `max_gap_s` or any
+    intervening BALLOUT dead-ball restart is not counted as a live turnover.
     """
     fps = state.meta.fps
     poss = possession.sort_values("frame_idx").reset_index(drop=True)
-    poss = poss[poss["ballStatus"].isin(["HOME", "AWAY"])].copy()
     if poss.empty:
         return pd.DataFrame()
 
-    poss["run"] = (poss["ballStatus"] != poss["ballStatus"].shift()).cumsum()
+    max_gap_f = max_gap_s * fps
+    poss["run"] = ((poss["ballStatus"] != poss["ballStatus"].shift())
+                   | (poss["period"] != poss["period"].shift())
+                   | (poss["frame_idx"].diff() > max_gap_f)).cumsum()
     runs = poss.groupby("run").agg(
         team=("ballStatus", "first"), start=("frame_idx", "min"),
         end=("frame_idx", "max"), period=("period", "first"),
         t0=("timestamp", "min")).reset_index(drop=True)
     runs["len_s"] = (runs["end"] - runs["start"]) / fps
-    runs = runs[runs["len_s"] >= min_hold_s].reset_index(drop=True)
+    runs = runs[runs["team"].isin(["HOME", "AWAY"]) & (runs["len_s"] >= min_hold_s)].reset_index(drop=True)
 
     ball = (state.ball.drop_duplicates("frame_idx")
                       .set_index("frame_idx")[["x", "y"]])
     rows = []
     for i in range(1, len(runs)):
         prev, cur = runs.iloc[i - 1], runs.iloc[i]
-        if prev["team"] == cur["team"]:
+        if prev["team"] == cur["team"] or prev["period"] != cur["period"]:
+            continue
+        if (cur["start"] - prev["end"]) / fps > max_gap_s:
+            continue
+        between = poss[(poss["frame_idx"] > prev["end"]) & (poss["frame_idx"] < cur["start"])]
+        if (between["ballStatus"] == "BALLOUT").any():
             continue
         f0 = int(cur["start"]); f1 = int(f0 + window_s * fps)
         if f0 not in ball.index:

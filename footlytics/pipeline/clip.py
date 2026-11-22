@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 
 import cv2
 import numpy as np
@@ -83,7 +83,9 @@ def calibrate_video(video: Path, calibrator, every: int = 10, gate_px: float = 2
 
 def run_video(video: Path, out: Path, paths, every: int = 10, gate_px: float = 25.0,
               home: str = "HOME", away: str = "AWAY", log=print,
-              capture: Path | None = None, replay: Path | None = None) -> dict:
+              capture: Path | None = None, replay: Path | None = None,
+              ball_link: bool = True, ball_detector: str = "yolo",
+              ball_weights_dir: Optional[str] = None) -> dict:
     """Calibrate, detect, track, then write tracks, quality and sequences into `out`.
 
     `capture` also pickles what the GPU half produced (detections, pitch positions, kit
@@ -97,7 +99,10 @@ def run_video(video: Path, out: Path, paths, every: int = 10, gate_px: float = 2
     cap.release()
     meta = MatchMeta(match_id=video.stem, fps=fps, source_type="broadcast",
                      home=TeamInfo(home, home[:3].upper()), away=TeamInfo(away, away[:3].upper()))
-    pcfg = PipelineConfig(verbose=False, montage=False)
+    pcfg = PipelineConfig(
+        verbose=False, montage=False, ball_link=ball_link,
+        ball_link_break_cost=3.0 if ball_detector == "rtdetr" else 0.25,
+    )
     if replay:
         obs, fps, has_ref = load_observations(replay)
         cstats = {"calib_seconds": 0.0, "keyframes": 0, "keyframes_accepted": 0,
@@ -108,7 +113,14 @@ def run_video(video: Path, out: Path, paths, every: int = 10, gate_px: float = 2
         state, report = run_observations(obs, fps, meta, pcfg, has_referee_class=has_ref)
     else:
         calibrator = runner._calibrator(paths)
-        det = runner._detector(paths, {})
+        det_cfg: dict = {}
+        if ball_detector == "rtdetr":
+            det_cfg = {"ball_detector": "rtdetr", "ball_conf": 0.15}
+            if ball_weights_dir:
+                det_cfg["ball_weights_dir"] = ball_weights_dir
+        elif ball_detector != "yolo":
+            raise ValueError(f"unknown ball_detector {ball_detector!r}; expected 'yolo' or 'rtdetr'")
+        det = runner._detector(paths, det_cfg)
         calib, cstats = calibrate_video(video, calibrator, every, gate_px, log)
 
         t0 = time.perf_counter()

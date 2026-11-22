@@ -94,3 +94,35 @@ def test_overlay_mask_on_a_static_camera_falls_back_to_a_top_band():
     f = np.random.default_rng(1).integers(0, 255, (100, 100, 3), np.uint8)
     m = static_overlay_mask([f] * 10)
     assert (m[:12] == 0).all() and (m[12:] == 255).all()
+
+
+def test_bridge_max_m_rejects_isolated_keyframe_spike_and_recovers_on_pair():
+    H_spike = H0.copy()
+    H_spike[0, 2] += 12.0                               # 12 m jump on one keyframe
+    H_new = H0.copy()
+    H_new[0, 2] += 8.0                                 # persistent new anchor (e.g. missed cut)
+
+    def mk_fits(by_idx):
+        def fit_kf(chunk, keys):
+            return {k: by_idx.get(int(chunk[k][0, 0, 0])) for k in keys}
+        return fit_kf
+
+    FakeTracker.LOST = set()
+    # Isolated spike at frame 25 is rejected in favour of the bridged camera
+    cc = ClipCalibrator(
+        mk_fits({0: CameraFit(CAM, 4.0, H0), 25: CameraFit(CAM, 4.0, H_spike), 50: CameraFit(CAM, 4.0, H0)}),
+        every=25, gate_px=25.0, tracker_factory=FakeTracker, chunk=30, bridge_max_m=3.0,
+    )
+    out = cc.run(frame(t) for t in range(55))
+    assert out[25].source == "bridged" and cc.keyframes_accepted == 2
+    assert np.allclose(out[25].H_img_to_pitch, H0 @ np.linalg.inv(shift(25)) / (H0 @ np.linalg.inv(shift(25)))[2, 2])
+
+    # Two consecutive keyframes at H_new agree with each other and replace a stale anchor
+    cc2 = ClipCalibrator(
+        mk_fits({0: CameraFit(CAM, 4.0, H0), 10: CameraFit(CAM, 4.0, H_new), 20: CameraFit(CAM, 4.0, H_new)}),
+        every=10, gate_px=25.0, tracker_factory=FakeTracker, chunk=30, bridge_max_m=3.0,
+    )
+    out2 = cc2.run(frame(t) for t in range(25))
+    assert out2[10].source == "bridged"
+    assert out2[20].source == "keyframe"
+    assert np.allclose(out2[20].H_img_to_pitch, H_new)

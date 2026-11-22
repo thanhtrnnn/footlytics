@@ -307,3 +307,58 @@ def test_fit_on_a_subset_equals_fit_restricted_to_it(calibrator):
     kp5, ln5 = calibrator.heatmaps(frames)
     assert torch.allclose(kp.cpu(), kp5[[0, 3]].cpu(), atol=1e-4)
     assert torch.allclose(ln.cpu(), ln5[[0, 3]].cpu(), atol=1e-4)
+
+
+def test_valid_camera_fit_and_ground_plane_fallback():
+    from footlytics.geometry.calib_nn import CameraFit, PnlSolver, valid_camera_fit
+    from footlytics.geometry.sn_camera import ground_homography
+
+    good_cam = make_camera(0, 78, 0.2, 1900, (0, 55, -14), 1920, 1080)
+    H_good = np.linalg.inv(ground_homography(good_cam))
+    H_good /= H_good[2, 2]
+    assert valid_camera_fit(CameraFit(good_cam, 3.0, H_good), 1920, 1080)
+
+    bad_cam = make_camera(0, 78, -60.0, 300, (0, 55, -14), 1920, 1080)
+    H_bad = np.linalg.inv(ground_homography(bad_cam))
+    H_bad /= H_bad[2, 2]
+    assert not valid_camera_fit(CameraFit(bad_cam, 3.0, H_bad), 1920, 1080)
+
+    # Inverted homography (det(J) < 0)
+    H_flip = H_good.copy()
+    H_flip[0, :] *= -1
+    assert not valid_camera_fit(CameraFit(good_cam, 3.0, H_flip), 1920, 1080)
+
+    # Mock PnLCalib solver: full+ransac=10 returns degenerate bad_cam, ground_plane+0 rescues it
+    calls = []
+
+    class FakeFrameCalib:
+        def __init__(self, iwidth, iheight, denormalize=True):
+            pass
+
+        def update(self, kp, ln):
+            pass
+
+        def get_cam_params(self, mode="full", use_ransac=0.0, refine_w_lines=True):
+            calls.append((mode, use_ransac))
+            if mode == "full" and use_ransac == 10.0:
+                return bad_cam, 4.0
+            if mode == "ground_plane" and use_ransac == 0.0:
+                return good_cam, 5.0
+            return None, None
+
+    class FakeCalibMod:
+        FramebyFrameCalib = FakeFrameCalib
+
+    solver = object.__new__(PnlSolver)
+    solver._calib = FakeCalibMod()
+    fit = solver.solve({}, {}, 1920, 1080, voting=False, mode="full", ransac=10.0)
+    assert fit is not None and fit.rep_err == 5.0
+    assert calls == [("full", 10.0), ("ground_plane", 0.0)]
+
+    # If fallback also stays invalid, solve returns None rather than a degenerate fit
+    class AlwaysBadCalib(FakeFrameCalib):
+        def get_cam_params(self, mode="full", use_ransac=0.0, refine_w_lines=True):
+            return bad_cam, 4.0
+
+    solver._calib = type("M", (), {"FramebyFrameCalib": AlwaysBadCalib})()
+    assert solver.solve({}, {}, 1920, 1080, voting=False, mode="full", ransac=10.0) is None
