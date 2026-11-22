@@ -1,6 +1,7 @@
 """sequences.py: rule-based tactical sequences (low block, high press) over a normalised Match State."""
 import numpy as np
 import pandas as pd
+import pytest
 
 from footlytics.analytics.sequences import detect_sequences
 from footlytics.state.schema import MatchMeta, MatchState, Role, Team, TeamInfo
@@ -15,23 +16,31 @@ def _shape(x0, x1, y0=-20.0, y1=20.0, n=10):
     return list(zip(xs, ys))
 
 
-def _match(home_shape, away_shape, ball, status, seconds):
-    """A normalised state (home attacks +x) held still for `seconds`, plus its possession table.
+def _at(v, f):
+    return v(f) if callable(v) else v
 
+
+def _match(home_shape, away_shape, ball, status, seconds):
+    """A normalised state (home attacks +x) for `seconds`, plus its possession table.
+
+    Shapes, ball and status are fixed values or functions of the frame index.
     Keepers stand on their goal lines so `goalkeepers()` finds them and the
     block metrics exclude them.
     """
     rows, poss = [], []
     for f in range(int(seconds * FPS)):
         t = f / FPS
-        people = [(1, (-50.0, 0.0), Team.HOME)] + [(2 + i, p, Team.HOME) for i, p in enumerate(home_shape)]
-        people += [(20, (50.0, 0.0), Team.AWAY)] + [(21 + i, p, Team.AWAY) for i, p in enumerate(away_shape)]
+        people = [(1, (-50.0, 0.0), Team.HOME)]
+        people += [(2 + i, p, Team.HOME) for i, p in enumerate(_at(home_shape, f))]
+        people += [(20, (50.0, 0.0), Team.AWAY)]
+        people += [(21 + i, p, Team.AWAY) for i, p in enumerate(_at(away_shape, f))]
         for tid, (x, y), team in people:
             rows.append(dict(frame_idx=f, period=1, timestamp=t, track_id=tid,
                              role=Role.PLAYER.value, team=team.value, x=x, y=y))
+        bx, by = _at(ball, f)
         rows.append(dict(frame_idx=f, period=1, timestamp=t, track_id=-1,
-                         role=Role.BALL.value, team=Team.UNKNOWN.value, x=ball[0], y=ball[1]))
-        poss.append(dict(frame_idx=f, period=1, timestamp=t, ballStatus=status))
+                         role=Role.BALL.value, team=Team.UNKNOWN.value, x=bx, y=by))
+        poss.append(dict(frame_idx=f, period=1, timestamp=t, ballStatus=_at(status, f)))
     meta = MatchMeta(match_id="S", fps=FPS, home=TeamInfo("H", "H"), away=TeamInfo("A", "A"))
     return MatchState(meta, pd.DataFrame(rows)), pd.DataFrame(poss)
 
@@ -157,3 +166,112 @@ def test_substitutes_on_the_touchline_are_not_attackers():
     st, poss = _match(home, AWAY_THIN_FLANK, ball=(28.0, 25.0), status="HOME", seconds=6)
     seq = detect_sequences(st, poss, overload_min_visible=5)
     assert (seq["label"] != "flank_overload").all() if len(seq) else True
+
+
+# Build-up: home plays it around its own third (x < -17.5) while three away players press there.
+HOME_BUILD = [(-40.0, -20.0), (-40.0, 20.0), (-35.0, -8.0), (-35.0, 8.0), (-15.0, -25.0),
+              (-15.0, 25.0), (-12.0, 0.0), (5.0, -10.0), (5.0, 10.0), (15.0, 0.0)]
+AWAY_PRESS_3 = [(-30.0, -10.0), (-30.0, 10.0), (-25.0, 0.0), (-5.0, -20.0), (-5.0, 0.0),
+                (-5.0, 20.0), (10.0, -15.0), (10.0, 15.0), (20.0, -5.0), (20.0, 5.0)]
+
+
+def _jog(shape):
+    """Every player circles his spot at about 2 m/s: play is on."""
+    return lambda f: [(x + 1.5 * np.sin(f / FPS * 1.5 + i), y + 1.5 * np.cos(f / FPS * 1.5 + i))
+                      for i, (x, y) in enumerate(shape)]
+
+
+def _passing(x0, dx=4.0):
+    """The ball moving between defenders: it never stands still for a second."""
+    return lambda f: (x0 + dx * np.sin(f / FPS * 2.0), 10.0 * np.cos(f / FPS * 2.0))
+
+
+def test_build_up_is_found_with_the_number_of_pressers():
+    st, poss = _match(_jog(HOME_BUILD), _jog(AWAY_PRESS_3), ball=_passing(-35.0), status="HOME",
+                      seconds=6)
+    bu = detect_sequences(st, poss).query("label == 'build_up'")
+    assert len(bu) == 1
+    assert bu.iloc[0]["team"] == Team.HOME.value and bu.iloc[0]["n_pressers"] == 3
+
+
+def test_build_up_uses_each_teams_own_third():
+    """Mirror the pitch: away builds up at +x and home presses there."""
+    mirror = lambda shape: [(-x, -y) for x, y in shape]
+    st, poss = _match(_jog(mirror(AWAY_PRESS_3)), _jog(mirror(HOME_BUILD)), ball=_passing(35.0),
+                      status="AWAY", seconds=6)
+    bu = detect_sequences(st, poss).query("label == 'build_up'")
+    assert len(bu) == 1
+    assert bu.iloc[0]["team"] == Team.AWAY.value and bu.iloc[0]["n_pressers"] == 3
+
+
+def test_no_build_up_while_the_ball_stands_still():
+    """A goal kick being placed: the players move but the ball does not."""
+    st, poss = _match(_jog(HOME_BUILD), _jog(AWAY_PRESS_3), ball=(-35.0, 0.0), status="HOME",
+                      seconds=6)
+    assert (detect_sequences(st, poss)["label"] != "build_up").all()
+
+
+def test_no_build_up_while_the_players_have_stopped():
+    """A foul: the ball rolls on, but every player stands."""
+    st, poss = _match(HOME_BUILD, AWAY_PRESS_3, ball=_passing(-35.0), status="HOME", seconds=6)
+    assert (detect_sequences(st, poss)["label"] != "build_up").all()
+
+
+def test_no_build_up_once_the_ball_leaves_the_own_third():
+    st, poss = _match(_jog(HOME_BUILD), _jog(AWAY_PRESS_3), ball=_passing(-5.0), status="HOME",
+                      seconds=6)
+    assert (detect_sequences(st, poss)["label"] != "build_up").all()
+
+
+# Midfield loss: home has the ball around the halfway line for 3 s, then away wins it there.
+LOSS_F = int(3 * FPS)
+HOME_MID = [(-20.0, -20.0), (-20.0, 0.0), (-20.0, 20.0), (-5.0, -15.0), (-5.0, 15.0),
+            (2.0, -6.0), (2.0, 6.0), (10.0, -20.0), (10.0, 20.0), (15.0, 0.0)]
+AWAY_MID = [(30.0, -20.0), (30.0, 0.0), (30.0, 20.0), (12.0, -10.0), (12.0, 10.0),
+            (5.0, 0.0), (0.0, -25.0), (0.0, 25.0), (-10.0, -8.0), (-10.0, 8.0)]
+
+
+def _ball_mid(f):
+    """Home moves it about the centre spot; after the loss away carries it slowly forward (-x)."""
+    if f < LOSS_F:
+        return (2.0 * np.sin(f / FPS * 3.0), 2.0 * np.cos(f / FPS * 3.0))
+    return (-1.5 * (f - LOSS_F) / FPS, 0.0)
+
+
+def _loss(home_shape):
+    status = lambda f: "HOME" if f < LOSS_F else "AWAY"
+    return _match(home_shape, AWAY_MID, ball=_ball_mid, status=status, seconds=10)
+
+
+def test_midfield_loss_followed_by_a_counter_press():
+    """Three home players close the new ball carrier down at once."""
+    def home(f):
+        if f < LOSS_F:
+            return HOME_MID
+        bx, by = _ball_mid(f)
+        chasers = [(bx + 2.0, by - 2.0), (bx + 2.0, by + 2.0), (bx + 3.5, by)]
+        return HOME_MID[:7] + chasers
+    seq = detect_sequences(*_loss(home)).query("label == 'midfield_loss'")
+    assert len(seq) == 1
+    row = seq.iloc[0]
+    assert row["team"] == Team.HOME.value and row["response"] == "counter_press"
+    assert row["ball_dist_m"] <= 5.0 and abs(row["start_s"] - 3.0) <= 0.5
+
+
+def test_midfield_loss_followed_by_a_retreat():
+    """Nobody goes to the ball; the whole block drops 2 m every second."""
+    far = [(x - 25.0, y) for x, y in HOME_MID]
+    def home(f):
+        drop = 2.0 * max(0.0, (f - LOSS_F) / FPS)
+        return far if f < LOSS_F else [(x - drop, y) for x, y in far]
+    seq = detect_sequences(*_loss(home)).query("label == 'midfield_loss'")
+    assert len(seq) == 1
+    row = seq.iloc[0]
+    assert row["response"] == "retreat" and row["retreat_mps"] == pytest.approx(-2.0, abs=0.3)
+
+
+def test_a_loss_in_the_own_third_is_not_a_midfield_loss():
+    status = lambda f: "HOME" if f < LOSS_F else "AWAY"
+    deep = lambda f: (-35.0 + np.sin(f / FPS * 3.0), np.cos(f / FPS * 3.0))
+    st, poss = _match(HOME_BUILD, AWAY_PRESS_3, ball=deep, status=status, seconds=10)
+    assert (detect_sequences(st, poss)["label"] != "midfield_loss").all()
