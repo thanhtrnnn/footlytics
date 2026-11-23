@@ -70,3 +70,53 @@ def test_split_officials_reports_why():
     info = {}
     split_officials(T, D, info=info)
     assert info["reason"] == "split" and info["tracks"] == 3
+
+
+def test_touchline_other_is_not_overridden_by_official_kit_split():
+    """Stationary touchline staff (`Role.OTHER`) keep `Role.OTHER` even when their
+    shirt falls into the third kit cluster alongside the referee."""
+    from footlytics.pipeline.radar import Observation, PipelineConfig, run_observations
+    from footlytics.state.schema import MatchMeta, Role, Team
+
+    desc_home = np.eye(1, 108, 0, dtype=np.float32)[0]
+    desc_away = np.eye(1, 108, 36, dtype=np.float32)[0]
+    desc_third = np.eye(1, 108, 72, dtype=np.float32)[0]
+
+    # 10 home, 10 away on pitch, 1 moving center ref on pitch, 1 stationary touchline staff at y=34.5
+    xy_base = (
+        [(-25.0 + 2.0 * i, -12.0 + 2.5 * (i % 5)) for i in range(10)]
+        + [(5.0 + 2.0 * i, -12.0 + 2.5 * (i % 5)) for i in range(10)]
+        + [(0.0, 2.0), (5.0, 34.5)]
+    )
+    descs = np.vstack([desc_home] * 10 + [desc_away] * 10 + [desc_third, desc_third])
+    roles = [Role.PLAYER.value] * 22
+    obs = []
+    for t in range(30):
+        xy = np.array(xy_base, dtype=float)
+        xy[20, 0] += 0.1 * t  # center referee moves on pitch; staff member stays still at (5.0, 34.5)
+        dets = np.column_stack([
+            100.0 + 40.0 * np.arange(22),
+            np.full(22, 300.0),
+            np.full(22, 20.0),
+            np.full(22, 60.0),
+            np.full(22, 0.9),
+            np.zeros(22),
+        ])
+        obs.append(Observation(dets, roles, xy, descs.copy()))
+
+    state, rep = run_observations(
+        obs, 25.0, MatchMeta(match_id="t", fps=25.0),
+        PipelineConfig(verbose=False, montage=False, stitch=False,
+                       goalkeepers=False, touchline_people=True, min_track_frames=5),
+        has_referee_class=False,
+    )
+    assert rep["officials_split"] == 2
+    assert rep["touchline_people"]["other"] == 1
+    staff = state.tracks[state.tracks["y"] > 30.0]
+    ref = state.tracks[state.tracks["track_id"].isin(
+        state.tracks.loc[state.tracks["role"] == Role.REFEREE.value, "track_id"]
+    )]
+    assert not staff.empty and (staff["role"] == Role.OTHER.value).all()
+    assert (staff["team"] == Team.UNKNOWN.value).all()
+    assert ref["track_id"].nunique() == 1
+    assert (ref["team"] == Team.OFFICIAL.value).all()

@@ -675,10 +675,10 @@ def run_observations(
         keepers = goalkeeper_tracklets(
             state.tracks, [t for t in tracklets if t.id not in on_line], pitch.half_l, pitch.half_w)
     official_tracklets = [t for t in tracklets if t.id not in keepers
+                          and on_line.get(t.id) != Role.OTHER.value
                           and (official_share(t) >= 0.5 or on_line.get(t.id) == Role.REFEREE.value)]
     other_tracklets = [t for t in tracklets
-                       if on_line.get(t.id) == Role.OTHER.value and t.id not in keepers
-                       and official_share(t) < 0.5]
+                       if on_line.get(t.id) == Role.OTHER.value and t.id not in keepers]
     side = {id(t) for t in official_tracklets} | {id(t) for t in other_tracklets}
     player_tracklets = [t for t in tracklets if id(t) not in side]
     if scores:
