@@ -36,6 +36,11 @@ first guesses to be tuned per club against those marks, not settled definitions.
     Dead-ball samples are skipped: the ball has not moved for `still_s` (a goal
     kick being placed), or the players have stopped, their median speed over the
     last second under `stopped_mps` (a foul, an injury). Play is not on then.
+    A team whose centroid sits deeper than `build_up_min_centroid_x` is defending
+    its box, not building up. Build-up from the keeper is often filmed tight, with
+    too few outfielders in view for a team shape; those samples still count, on
+    possession and ball position alone (no centroid gate), as long as the ball is
+    seen and play is on.
 
 `midfield_loss`
     A turnover won in the middle third (`tactics.transitions`, so both teams held
@@ -84,19 +89,29 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
                      still_s: float = 2.0, still_m: float = 1.0,
                      stopped_mps: float = 1.0,
                      loss_window_s: float = 6.0, counter_press_s: float = 3.0,
-                     counter_press_m: float = 6.0, retreat_mps: float = -1.0) -> pd.DataFrame:
+                     counter_press_m: float = 6.0, retreat_mps: float = -1.0,
+                     bridge_s: float = 1.0) -> pd.DataFrame:
     """One row per sequence: label, team, period, start/end, and mean evidence over it."""
     fps = state.meta.fps
     frames = state.tracks[["frame_idx", "live_wide", "shot"]].drop_duplicates("frame_idx").sort_values("frame_idx")
     shot_of = frames.set_index("frame_idx")["shot"]
     if not state.tracks["live_wide"].all():
         state = MatchState(state.meta, state.tracks[state.tracks["live_wide"]])
+    status = possession.drop_duplicates("frame_idx").set_index("frame_idx")["ballStatus"]
+    ball_x = state.ball.drop_duplicates("frame_idx").set_index("frame_idx")["x"]
+    opp_third = state.meta.pitch_length / 2 - state.meta.pitch_length / 3
+    still = ball_still(state, still_s, still_m)
+    stopped = play_stopped(state, sample_every, stopped_mps)
+    pressers = own_third_pressers(state, sample_every, opp_third)
+
     blk = team_block(state, sample_every=sample_every)
     if blk.empty:
-        return pd.DataFrame(columns=COLUMNS)
+        sparse = _sparse_build_up(state, status, pd.DataFrame(columns=["frame_idx", "team"]),
+                                  ball_x, shot_of, sample_every, opp_third, still, stopped, pressers)
+        rows = _runs(sparse, "build_up", build_up_min_s, sample_every, fps, max_gap_s=bridge_s)
+        return pd.DataFrame(rows, columns=COLUMNS)
     blk["shot"] = blk["frame_idx"].map(shot_of).astype(int)
 
-    status = possession.drop_duplicates("frame_idx").set_index("frame_idx")["ballStatus"]
     blk["out_of_possession"] = blk["frame_idx"].map(status) == blk["team"].map(_OPPONENT_STATUS)
     blk["in_possession"] = blk["frame_idx"].map(status) == blk["team"].map(_OWN_STATUS)
 
@@ -109,15 +124,11 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
         blk["n_within_10m"] = pd.NA
     blk["n_within_10m"] = blk["n_within_10m"].fillna(0).astype(int)
 
-    ball_x = state.ball.drop_duplicates("frame_idx").set_index("frame_idx")["x"]
     blk["ball_x_own"] = blk["frame_idx"].map(ball_x) * blk["team"].map(attacking_sign)
-    opp_third = state.meta.pitch_length / 2 - state.meta.pitch_length / 3
-    blk["ball_still"] = blk["frame_idx"].map(ball_still(state, still_s, still_m)).fillna(False).astype(bool)
+    blk["ball_still"] = blk["frame_idx"].map(still).fillna(False).astype(bool)
     blk["dead_ball"] = (blk["ball_still"]
-                        | blk["frame_idx"].map(play_stopped(state, sample_every, stopped_mps))
-                                          .fillna(False).astype(bool))
-    blk = blk.merge(own_third_pressers(state, sample_every, opp_third),
-                    on=["frame_idx", "team"], how="left")
+                        | blk["frame_idx"].map(stopped).fillna(False).astype(bool))
+    blk = blk.merge(pressers, on=["frame_idx", "team"], how="left")
     blk["n_pressers"] = blk["n_pressers"].fillna(0).astype(int)
 
     flanks = flank_counts(state, sample_every=sample_every,
@@ -143,9 +154,14 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
                      & (blk["centroid_x"] >= build_up_min_centroid_x)
                      & ~blk["dead_ball"], build_up_min_s),
     }
+    hits = {label: blk[mask] for label, (mask, _) in rules.items()}
+    sparse = _sparse_build_up(state, status, blk, ball_x, shot_of, sample_every, opp_third,
+                              still, stopped, pressers)
+    if len(sparse):
+        hits["build_up"] = pd.concat([hits["build_up"], sparse], ignore_index=True)
     rows = []
-    for label, (mask, min_s) in rules.items():
-        rows += _runs(blk[mask], label, min_s, sample_every, fps)
+    for label, (_, min_s) in rules.items():
+        rows += _runs(hits[label], label, min_s, sample_every, fps, max_gap_s=bridge_s)
     rows += _midfield_losses(state, possession, blk, pressure, opp_third, loss_window_s,
                              counter_press_s, counter_press_m, retreat_mps, frames,
                              stopped_mps=stopped_mps)
@@ -240,6 +256,36 @@ def own_third_pressers(state: MatchState, sample_every: int, third_x: float) -> 
     return pd.concat(out, ignore_index=True)
 
 
+def _sparse_build_up(state: MatchState, status: pd.Series, blk: pd.DataFrame, ball_x: pd.Series,
+                     shot_of: pd.Series, sample_every: int, third_x: float, still: pd.Series,
+                     stopped: pd.Series, pressers: pd.DataFrame) -> pd.DataFrame:
+    """Build-up samples for frames where the team in possession has no `team_block` row.
+
+    `team_block` needs six outfielders in view, and a keeper playing out is often
+    filmed tighter than that. Such a sample is a build-up hit on possession and ball
+    position alone: the team holds the ball in its own third, play is on, and the ball
+    has not sat still. Rows carry the columns `_runs` reads, with no shape evidence.
+    """
+    frames = (state.tracks[["frame_idx", "period", "timestamp"]].drop_duplicates("frame_idx")
+              .set_index("frame_idx").sort_index())
+    frames = frames[(frames.index % sample_every == 0) & frames.index.isin(ball_x.index)]
+    team = frames.index.map(status).map({"HOME": Team.HOME.value, "AWAY": Team.AWAY.value})
+    s = frames.assign(team=team).dropna(subset=["team"]).reset_index()
+    if s.empty:
+        return s
+    covered = pd.MultiIndex.from_frame(blk[["frame_idx", "team"]])
+    s = s[~pd.MultiIndex.from_frame(s[["frame_idx", "team"]]).isin(covered)]
+    sign = np.where(s["team"] == Team.HOME.value, 1.0, -1.0)  # attacking_sign, vectorised
+    s = s[s["frame_idx"].map(ball_x).to_numpy(float) * sign <= -third_x]
+    s = s[~s["frame_idx"].map(still).fillna(False).astype(bool)
+          & ~s["frame_idx"].map(stopped).fillna(False).astype(bool)]
+    s = s.merge(pressers, on=["frame_idx", "team"], how="left")
+    return s.assign(shot=s["frame_idx"].map(shot_of).astype(int),
+                    n_pressers=s["n_pressers"].fillna(0).astype(int),
+                    def_line_x=np.nan, compactness_m=np.nan, n_within_10m=0,
+                    n_attackers=0, n_defenders=0, in_possession=True)
+
+
 def _midfield_losses(state: MatchState, possession: pd.DataFrame, blk: pd.DataFrame,
                      pressure: pd.DataFrame, third_x: float, window_s: float,
                      counter_press_s: float, counter_press_m: float,
@@ -309,17 +355,23 @@ def _midfield_losses(state: MatchState, possession: pd.DataFrame, blk: pd.DataFr
     return out
 
 
-def _runs(hits: pd.DataFrame, label: str, min_s: float, step: int, fps: float) -> list[dict]:
+def _runs(hits: pd.DataFrame, label: str, min_s: float, step: int, fps: float,
+          max_gap_s: float = 0.0) -> list[dict]:
     """Group consecutive samples per team and period into sequences of at least `min_s`.
 
-    One missing sample is tolerated, so a single noisy frame does not split a block in two.
-    A flank overload is also split by flank: a switch of play is two sequences, not one.
+    Gaps of up to `max_gap_s` between hits are bridged (at least one missing sample
+    always is), so a possession blip -- the ball nudged a metre over the touchline by
+    calibration error, a tight-marking defender briefly nearest the ball -- or a
+    zoomed-in second with too few players in view does not split a block in two.
+    The bridged time counts towards `min_s`. A run never spans a camera cut, and a
+    flank overload is also split by flank: a switch of play is two sequences, not one.
     """
     out = []
     keys = ["team", "period"] + (["flank"] if label == "flank_overload" else [])
+    max_gap_frames = max(2 * step, int(round(max_gap_s * fps)) + step)
     for key, g in hits.sort_values("frame_idx").groupby(keys):
         team, period = key[0], key[1]
-        run_id = ((g["frame_idx"].diff() > 2 * step) | (g["shot"].diff() != 0)).cumsum()
+        run_id = ((g["frame_idx"].diff() > max_gap_frames) | (g["shot"].diff() != 0)).cumsum()
         for _, r in g.groupby(run_id):
             duration = (r["frame_idx"].iloc[-1] - r["frame_idx"].iloc[0] + step) / fps
             if duration < min_s:
