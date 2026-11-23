@@ -8,7 +8,8 @@ first guesses to be tuned per club against those marks, not settled definitions.
 `low_block`
     Out of possession, the four deepest outfielders at or behind `low_block_line`
     in the team's own attacking frame (-22.5 m: about the edge of their own
-    third), compact, for `low_block_min_s`. Needs positions and possession only.
+    third), compact, for `low_block_min_s`. Still-ball set-piece samples are
+    skipped (`ball_still`). Needs positions and possession only.
 
 `high_press`
     Out of possession, the ball in the opponent's defensive third, the back line
@@ -79,7 +80,8 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
                      flank_y: float | None = None, overload_n: int = 4,
                      overload_max_defenders: int = 3, overload_min_visible: int = 7,
                      overload_min_s: float = 3.0,
-                     build_up_min_s: float = 4.0, still_s: float = 2.0, still_m: float = 1.0,
+                     build_up_min_s: float = 4.0, build_up_min_centroid_x: float = -25.0,
+                     still_s: float = 2.0, still_m: float = 1.0,
                      stopped_mps: float = 1.0,
                      loss_window_s: float = 6.0, counter_press_s: float = 3.0,
                      counter_press_m: float = 6.0, retreat_mps: float = -1.0) -> pd.DataFrame:
@@ -110,9 +112,10 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
     ball_x = state.ball.drop_duplicates("frame_idx").set_index("frame_idx")["x"]
     blk["ball_x_own"] = blk["frame_idx"].map(ball_x) * blk["team"].map(attacking_sign)
     opp_third = state.meta.pitch_length / 2 - state.meta.pitch_length / 3
-    blk["dead_ball"] = (blk["frame_idx"].map(ball_still(state, still_s, still_m)).fillna(False)
+    blk["ball_still"] = blk["frame_idx"].map(ball_still(state, still_s, still_m)).fillna(False).astype(bool)
+    blk["dead_ball"] = (blk["ball_still"]
                         | blk["frame_idx"].map(play_stopped(state, sample_every, stopped_mps))
-                                          .fillna(False))
+                                          .fillna(False).astype(bool))
     blk = blk.merge(own_third_pressers(state, sample_every, opp_third),
                     on=["frame_idx", "team"], how="left")
     blk["n_pressers"] = blk["n_pressers"].fillna(0).astype(int)
@@ -127,7 +130,8 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
     oop = blk["out_of_possession"]
     rules = {
         "low_block": (oop & (blk["def_line_x"] <= low_block_line)
-                      & (blk["compactness_m"] <= low_block_compact_m), low_block_min_s),
+                      & (blk["compactness_m"] <= low_block_compact_m)
+                      & ~blk["ball_still"], low_block_min_s),
         "high_press": (oop & (blk["def_line_x"] >= high_press_line)
                        & (blk["ball_x_own"] >= opp_third)
                        & (blk["n_within_10m"] >= high_press_n), high_press_min_s),
@@ -136,13 +140,15 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
                            & (blk["n_visible"] >= overload_min_visible)
                            & (blk["n_visible_opp"] >= overload_min_visible), overload_min_s),
         "build_up": (blk["in_possession"] & (blk["ball_x_own"] <= -opp_third)
+                     & (blk["centroid_x"] >= build_up_min_centroid_x)
                      & ~blk["dead_ball"], build_up_min_s),
     }
     rows = []
     for label, (mask, min_s) in rules.items():
         rows += _runs(blk[mask], label, min_s, sample_every, fps)
     rows += _midfield_losses(state, possession, blk, pressure, opp_third, loss_window_s,
-                             counter_press_s, counter_press_m, retreat_mps, frames)
+                             counter_press_s, counter_press_m, retreat_mps, frames,
+                             stopped_mps=stopped_mps)
     out = pd.DataFrame(rows, columns=COLUMNS)
     return out.sort_values(["start_s", "label"]).reset_index(drop=True)
 
@@ -237,7 +243,8 @@ def own_third_pressers(state: MatchState, sample_every: int, third_x: float) -> 
 def _midfield_losses(state: MatchState, possession: pd.DataFrame, blk: pd.DataFrame,
                      pressure: pd.DataFrame, third_x: float, window_s: float,
                      counter_press_s: float, counter_press_m: float,
-                     retreat_mps: float, frames: pd.DataFrame) -> list[dict]:
+                     retreat_mps: float, frames: pd.DataFrame,
+                     stopped_mps: float = 1.0) -> list[dict]:
     """One sequence per turnover in the middle third, for the team that lost the ball."""
     fps = state.meta.fps
     turnovers = transitions(state, possession)
@@ -246,6 +253,7 @@ def _midfield_losses(state: MatchState, possession: pd.DataFrame, blk: pd.DataFr
     last_frame = int(state.tracks["frame_idx"].max())
     has_cuts = (~frames["live_wide"]).any() or frames["shot"].nunique() > 1
     shot_of = frames.set_index("frame_idx")["shot"] if has_cuts else None
+    ball_df = state.ball.drop_duplicates("frame_idx").set_index("frame_idx")
     out = []
     for t in turnovers.itertuples():
         if abs(t.won_at_x) > third_x:
@@ -259,10 +267,21 @@ def _midfield_losses(state: MatchState, possession: pd.DataFrame, blk: pd.DataFr
                              "frame_idx"]
             if len(bad):
                 end_bound = min(end_bound, int(bad.iloc[0]) - 1)
+            in_shot = frames.loc[(frames["frame_idx"] >= f0) & (frames["frame_idx"] <= end_bound)
+                                 & frames["live_wide"] & (frames["shot"] == s0), "frame_idx"]
+            if len(in_shot):
+                end_bound = min(end_bound, int(in_shot.max()))
         f1 = min(end_bound, f0 + int(round(window_s * fps)) - 1)
         if f1 - f0 + 1 < counter_press_s * fps:
             continue  # cut off before the response can be judged
         b = blk[(blk["team"] == team) & blk["frame_idx"].between(f0, f1)]
+        if len(b) and b["ball_still"].any():
+            continue
+        b_late = ball_df[(ball_df.index >= f0 + int(counter_press_s * fps)) & (ball_df.index <= f1)]
+        if len(b_late) >= 5 and "speed" in b_late.columns:
+            sp = b_late["speed"].dropna()
+            if len(sp) >= 5 and float(sp.median()) < stopped_mps:
+                continue
         pr = (pressure[(pressure["team"] == team) & pressure["frame_idx"].between(f0, f1)]
               if not pressure.empty else pressure)
         early = (pr[pr["frame_idx"].between(f0 + fps, f0 + counter_press_s * fps - 1)]

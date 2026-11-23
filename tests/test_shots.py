@@ -144,7 +144,8 @@ def _state_with_low_block(live_wide, shot, seconds=30):
             rows.append(dict(frame_idx=f, period=1, timestamp=t, track_id=tid, role=Role.PLAYER.value,
                              team=team.value, x=x, y=y, live_wide=live_wide[f], shot=shot[f]))
         rows.append(dict(frame_idx=f, period=1, timestamp=t, track_id=-1, role=Role.BALL.value,
-                         team=Team.UNKNOWN.value, x=-15.0, y=0.0, live_wide=live_wide[f], shot=shot[f]))
+                         team=Team.UNKNOWN.value, x=-15.0 + 4.0 * np.sin(t * 2.0),
+                         y=10.0 * np.cos(t * 2.0), live_wide=live_wide[f], shot=shot[f]))
     meta = MatchMeta(match_id="S", fps=FPS, home=TeamInfo("H", "H"), away=TeamInfo("A", "A"))
     poss = pd.DataFrame([dict(frame_idx=f, period=1, timestamp=f / FPS, ballStatus="AWAY")
                          for f in range(int(seconds * FPS))])

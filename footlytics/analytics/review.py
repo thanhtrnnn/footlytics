@@ -96,18 +96,46 @@ def write_marks(path, doc: dict) -> None:
         raise
 
 
-def score_marks(marks: dict, sequences: pd.DataFrame) -> dict:
+def score_marks(marks: dict, sequences: pd.DataFrame, max_shift_frames: int = 50) -> dict:
     """Per label: counts of verdicts, precision = right / (right + wrong), and missed entries.
 
-    Marks for ids that are not in `sequences` (a stale file) are ignored.
+    Exact IDs match first; unused marks for the same ``(label, team, period)`` whose start
+    frame falls inside a sequence or within `max_shift_frames` match as a boundary-shifted
+    fallback. Stale marks outside those bounds are ignored.
     """
     labels = dict.fromkeys(list(sequences["label"]) + [m["label"] for m in marks.get("missed", [])])
     out = {l: {"n": 0, "marked": 0, "right": 0, "wrong": 0, "unsure": 0,
                "precision": None, "missed": 0} for l in labels}
-    for sid, label in zip(sequence_ids(sequences), sequences["label"]):
-        s = out[label]
+    seq_marks = marks.get("sequences", {})
+    sids = sequence_ids(sequences)
+    used = set(sids) & set(seq_marks)
+    parsed: list[tuple[str, str, str, int, int]] = []
+    for k in seq_marks:
+        if k in used:
+            continue
+        parts = k.rsplit("-", 3)
+        if len(parts) == 4:
+            try:
+                parsed.append((k, parts[0], parts[1], int(parts[2]), int(parts[3])))
+            except ValueError:
+                pass
+
+    for sid, r in zip(sids, sequences.itertuples()):
+        s = out[r.label]
         s["n"] += 1
-        m = marks.get("sequences", {}).get(sid)
+        m = seq_marks.get(sid)
+        if m is None:
+            r_start, r_end = int(r.start_frame), int(r.end_frame)
+            cands = [
+                (abs(mf - r_start), k)
+                for k, lbl, tm, per, mf in parsed
+                if k not in used and lbl == r.label and tm == str(r.team) and per == int(r.period)
+                and (r_start <= mf <= r_end or abs(mf - r_start) <= max_shift_frames)
+            ]
+            if cands:
+                _, k = min(cands)
+                used.add(k)
+                m = seq_marks[k]
         if m:
             s["marked"] += 1
             s[m["verdict"]] += 1

@@ -51,7 +51,7 @@ AWAY_SPREAD = _shape(-20.0, 10.0, -30.0, 30.0)
 
 
 def test_low_block_is_found_for_the_team_out_of_possession():
-    st, poss = _match(LOW_HOME, AWAY_SPREAD, ball=(-15.0, 0.0), status="AWAY", seconds=12)
+    st, poss = _match(LOW_HOME, AWAY_SPREAD, ball=_passing(-15.0), status="AWAY", seconds=12)
     seq = detect_sequences(st, poss)
     lb = seq[seq["label"] == "low_block"]
     assert len(lb) == 1
@@ -59,6 +59,12 @@ def test_low_block_is_found_for_the_team_out_of_possession():
     assert row["team"] == Team.HOME.value
     assert row["start_s"] <= 1.0 and row["end_s"] >= 11.0
     assert row["def_line_x"] <= -22.5          # evidence travels with the sequence
+
+
+def test_no_low_block_while_the_ball_stands_still():
+    """A set-piece free kick: defenders hold a compact line, but the ball is dead still."""
+    st, poss = _match(LOW_HOME, AWAY_SPREAD, ball=(-15.0, 0.0), status="AWAY", seconds=12)
+    assert (detect_sequences(st, poss)["label"] != "low_block").all()
 
 
 def test_no_low_block_while_the_team_has_the_ball():
@@ -96,7 +102,7 @@ def test_no_high_press_when_the_ball_is_in_midfield():
 
 
 def test_sequence_columns():
-    st, poss = _match(LOW_HOME, AWAY_SPREAD, ball=(-15.0, 0.0), status="AWAY", seconds=12)
+    st, poss = _match(LOW_HOME, AWAY_SPREAD, ball=_passing(-15.0), status="AWAY", seconds=12)
     seq = detect_sequences(st, poss)
     assert {"label", "team", "period", "start_s", "end_s", "start_frame", "end_frame",
             "def_line_x", "compactness_m", "n_within_10m"} <= set(seq.columns)
@@ -299,3 +305,24 @@ def test_transitions_do_not_bridge_long_unknown_gaps_or_ballout():
 
     st2, poss2 = _match(HOME_MID, AWAY_MID, ball=_ball_mid, status=status_out, seconds=8)
     assert transitions(st2, poss2).empty
+
+
+def test_no_build_up_when_team_centroid_is_pinned_in_own_box():
+    pinned_home = _shape(-42.0, -28.0, -15.0, 15.0)
+    st, poss = _match(_jog(pinned_home), _jog(AWAY_PRESS_3), ball=_passing(-35.0), status="HOME",
+                      seconds=6)
+    assert (detect_sequences(st, poss)["label"] != "build_up").all()
+
+
+def test_no_midfield_loss_when_ball_stops_after_foul():
+    def stopped_ball(f):
+        if f < LOSS_F:
+            return (2.0 * np.sin(f / FPS * 3.0), 2.0 * np.cos(f / FPS * 3.0))
+        if f < LOSS_F + 25:
+            return (-1.5 * (f - LOSS_F) / FPS, 0.0)
+        return (-1.5, 0.0)
+    st, poss = _match(HOME_MID, AWAY_MID, ball=stopped_ball,
+                      status=lambda f: "HOME" if f < LOSS_F else "AWAY", seconds=10)
+    from footlytics.analytics.kinematics import add_kinematics
+    st = MatchState(st.meta, add_kinematics(st.tracks, FPS))
+    assert (detect_sequences(st, poss)["label"] != "midfield_loss").all()

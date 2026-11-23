@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from footlytics.perception.identity import Tracklet, merge_same_role, stitch_tracklets
+from footlytics.perception.identity import (Tracklet, assign_teams_with_roster,
+                                           merge_same_role, stitch_tracklets)
 from footlytics.perception.track import PitchTracker, TrackerConfig
 from footlytics.pipeline.quality import segment_identity
 from footlytics.pipeline.radar import (Observation, PipelineConfig, homography_mapper,
@@ -180,3 +181,14 @@ def test_one_frame_false_alarms_do_not_become_track_ids():
                                                 touchline_people=False, goalkeepers=False,
                                                 min_track_frames=keep))
         assert st.tracks["track_id"].nunique() == expect
+
+
+def test_roster_quota_does_not_flip_confident_kit_scores():
+    tracklets = [_tl(i, 0, 100, float(i), float(i)) for i in range(13)]
+    for t in tracklets[:12]:
+        t.team_score = -0.35
+    tracklets[11].team_score = -0.25                   # over quota, still confident -> stays home
+    tracklets[12].team_score = -0.05                   # over quota and ambiguous -> flips to away
+    assign_teams_with_roster(tracklets, team_size=11, max_flip_score=0.20)
+    assert tracklets[11].team == "home"
+    assert tracklets[12].team == "away"

@@ -422,6 +422,7 @@ def assign_teams_with_roster(
     tracklets: list[Tracklet],
     team_size: int = 11,
     min_frames: int = 25,
+    max_flip_score: float = 0.20,
 ) -> list[Tracklet]:
     """Assign teams so that ~`team_size` players are on each side at any moment.
 
@@ -429,7 +430,9 @@ def assign_teams_with_roster(
     *time*. A global split balances the whole clip and can still leave a given
     minute at 14 v 8; this fills each side up to its quota as tracklets appear,
     resolving the confident ones first so the ambiguous ones inherit whatever
-    slot is actually free.
+    slot is actually free. Tracklets with a clear appearance preference
+    (`|team_score| >= max_flip_score`) are never flipped to the opposing team
+    just because unmerged fragments temporarily exceed `team_size` in `[start, end]`.
 
     `team_score` must already be populated (signed appearance preference:
     negative leans home, positive leans away).
@@ -451,10 +454,10 @@ def assign_teams_with_roster(
         pref = Team.AWAY.value if t.team_score > 0 else Team.HOME.value
         other = Team.HOME.value if pref == Team.AWAY.value else Team.AWAY.value
         # Would preferring `pref` push that side past its quota for most of the
-        # tracklet's life? If so, and the other side has room, put it there.
+        # tracklet's life? Only flip genuinely ambiguous kits (`|team_score| < max_flip_score`).
         over_pref = float((load[pref][s:e] >= team_size).mean())
         over_other = float((load[other][s:e] >= team_size).mean())
-        chosen = pref if over_pref <= over_other else other
+        chosen = pref if (abs(t.team_score) >= max_flip_score or over_pref <= over_other) else other
         t.team = chosen
         load[chosen][s:e] += 1
 

@@ -185,3 +185,17 @@ def test_cli_score_prints_the_table(files):
     assert lb == ["low_block", "3", "2", "1", "1", "0", "0.500", "0"]
     hp = next(l for l in r.output.splitlines() if l.startswith("high_press")).split()
     assert hp[-2:] == ["n/a", "0"]
+
+
+def test_score_marks_matches_shifted_start_frame_within_tolerance():
+    marks = review.new_marks("ana", "match.mp4")
+    # Retuned sequence shifted from 2500 to 2485 (within window / max_shift_frames=50);
+    # faraway stale mark at 9000 must still be ignored.
+    marks["sequences"] = {
+        "low_block-HOME-1-2515": {"verdict": "right", "note": "shifted boundary"},
+        "low_block-HOME-1-9000": {"verdict": "wrong", "note": "far stale sequence"},
+    }
+    s = review.score_marks(marks, _seqs())
+    assert s["low_block"] == {"n": 3, "marked": 1, "right": 1, "wrong": 0, "unsure": 0,
+                              "precision": 1.0, "missed": 0}
+    assert s["high_press"]["marked"] == 0
