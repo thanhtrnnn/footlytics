@@ -20,6 +20,7 @@ dependencies = [
     "scikit-learn>=1.5",
     "lap>=0.5.12",
     "pyyaml>=6",
+    "duckdb>=2.0.1",
 ]
 
 [project.optional-dependencies]

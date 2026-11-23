@@ -274,5 +274,94 @@ def review_score(
         typer.echo(f"{label:<12}" + "".join(f"{c:>10}" for c in cells))
 
 
+query_app = typer.Typer(help="Query tactical sequences across one or more match outputs (L5)")
+app.add_typer(query_app, name="query")
+
+
+@query_app.command("summary")
+def query_summary(
+    paths: list[Path] = typer.Argument(..., exists=True, help="Match directory or parent output root."),
+    match: Optional[str] = typer.Option(None, help="Filter by match_id."),
+    team: Optional[str] = typer.Option(None, help="Filter by team (home | away)."),
+    label: Optional[str] = typer.Option(None, help="Filter by sequence label."),
+    period: Optional[int] = typer.Option(None, help="Filter by period."),
+    min_duration: Optional[float] = typer.Option(None, help="Minimum duration in seconds."),
+    by_match: bool = typer.Option(True, "--by-match/--overall", help="Group per match or across all matches."),
+    as_json: bool = typer.Option(False, "--json", help="Print JSON output."),
+) -> None:
+    """Summarize sequence counts and durations across matches."""
+    from .analytics.query import summarize_sequences
+
+    df = summarize_sequences(
+        paths, match=match, team=team, label=label, period=period,
+        min_duration=min_duration, by_match=by_match,
+    )
+    if as_json:
+        typer.echo(df.to_json(orient="records", indent=2))
+        return
+    if df.empty:
+        typer.echo("No matching sequences.")
+        return
+    typer.echo(df.to_string(index=False))
+
+
+@query_app.command("search")
+def query_search(
+    paths: list[Path] = typer.Argument(..., exists=True, help="Match directory or parent output root."),
+    match: Optional[str] = typer.Option(None, help="Filter by match_id."),
+    team: Optional[str] = typer.Option(None, help="Filter by team (home | away)."),
+    label: Optional[str] = typer.Option(None, help="Filter by sequence label."),
+    period: Optional[int] = typer.Option(None, help="Filter by period."),
+    min_duration: Optional[float] = typer.Option(None, help="Minimum duration in seconds."),
+    start_s: Optional[float] = typer.Option(None, help="Sequences overlapping [start_s, end_s]."),
+    end_s: Optional[float] = typer.Option(None, help="Sequences overlapping [start_s, end_s]."),
+    response: Optional[str] = typer.Option(None, help="Filter midfield_loss response."),
+    flank: Optional[str] = typer.Option(None, help="Filter flank_overload flank (left | right)."),
+    min_pressers: Optional[int] = typer.Option(None, help="Minimum opponent pressers."),
+    sort_by: str = typer.Option("start_s", help="Sort column."),
+    desc: bool = typer.Option(False, "--desc/--asc", help="Sort order."),
+    limit: Optional[int] = typer.Option(None, help="Maximum rows to return."),
+    out: Optional[Path] = typer.Option(None, help="Optional export file (.csv or .json)."),
+    as_json: bool = typer.Option(False, "--json", help="Print JSON output."),
+) -> None:
+    """Filter and export tactical sequences across one or more match outputs."""
+    from .analytics.query import search_sequences
+
+    try:
+        df = search_sequences(
+            paths, match=match, team=team, label=label, period=period,
+            min_duration=min_duration, start_s=start_s, end_s=end_s,
+            response=response, flank=flank, min_pressers=min_pressers,
+            sort_by=sort_by, descending=desc, limit=limit,
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+
+    if out is not None:
+        ext = out.suffix.lower()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if ext == ".csv":
+            df.to_csv(out, index=False)
+        elif ext == ".json":
+            out.write_text(df.to_json(orient="records", indent=2))
+        else:
+            raise typer.BadParameter(f"unsupported output extension {out.suffix!r}; use .csv or .json")
+
+    if as_json:
+        typer.echo(df.to_json(orient="records", indent=2))
+        return
+    if df.empty:
+        typer.echo("No matching sequences.")
+        return
+    view_cols = [
+        "match_id", "label", "team", "period", "start_s", "end_s", "duration_s",
+        "def_line_x", "compactness_m", "flank", "n_pressers", "response",
+    ]
+    view = df[view_cols].copy()
+    for c in ("start_s", "end_s", "duration_s", "def_line_x", "compactness_m"):
+        view[c] = view[c].round(2)
+    typer.echo(view.to_string(index=False))
+
+
 if __name__ == "__main__":
     app()
