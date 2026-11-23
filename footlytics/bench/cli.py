@@ -61,6 +61,13 @@ def _remote(host: str):
     return Remote(host)
 
 
+def _connect(host: str, root: Optional[str] = None):
+    r = _remote(host)
+    if root is not None:
+        r.bench_root = root
+    return r
+
+
 def _guard(fn):
     """Turn a dropped ssh session into its recovery instructions and exit code 2."""
     from .remote import RemoteError, SshDown
@@ -78,6 +85,9 @@ def _guard(fn):
 @bench_app.command("run")
 def run(suite: str = typer.Option("harness"),
         remote: Optional[str] = typer.Option(None, help="ssh alias of the host, e.g. iec4090_2"),
+        root: Optional[str] = typer.Option(
+            None, envvar="FOOTLYTICS_BENCH_ROOT",
+            help="remote bench root directory (default: ~/footlytics-bench)"),
         interval: int = typer.Option(30, help="seconds between polls")) -> None:
     """Run a suite (on the host with --remote) and append its row to bench/results."""
     from .remote import env_fingerprint, follow, make_run_id
@@ -97,7 +107,7 @@ def run(suite: str = typer.Option("harness"),
         return
 
     def go():
-        r = _remote(remote)
+        r = _connect(remote, root)
         r.ship(sha, _git("archive", "--format=tar", sha))
         deps = env_fingerprint(_git("show", f"{sha}:pyproject.toml"),
                                _git("show", f"{sha}:footlytics/bench/host_setup.sh"))
@@ -113,17 +123,23 @@ def run(suite: str = typer.Option("harness"),
 
 @bench_app.command("resume")
 def resume(run_id: str, remote: str = typer.Option(...),
+           root: Optional[str] = typer.Option(
+               None, envvar="FOOTLYTICS_BENCH_ROOT",
+               help="remote bench root directory (default: ~/footlytics-bench)"),
            interval: int = typer.Option(30)) -> None:
     """Re-attach to a run after an ssh drop: poll, then pull its row."""
     from .remote import follow
     from .results import RESULTS_DIR
 
-    _guard(lambda: typer.echo(follow(_remote(remote), run_id, RESULTS_DIR, interval,
+    _guard(lambda: typer.echo(follow(_connect(remote, root), run_id, RESULTS_DIR, interval,
                                      echo=typer.echo)["status"]))
 
 
 @bench_app.command("setup")
 def setup(remote: str = typer.Option(...),
+          root: Optional[str] = typer.Option(
+              None, envvar="FOOTLYTICS_BENCH_ROOT",
+              help="remote bench root directory (default: ~/footlytics-bench)"),
           soccermaster_code: Path = typer.Option(
               SOCCERMASTER_CODE,
               help="SoccerMaster checkout to ship (internal R&D, no licence)")) -> None:
@@ -131,7 +147,7 @@ def setup(remote: str = typer.Option(...),
     sha = _clean_sha()
 
     def go():
-        r = _remote(remote)
+        r = _connect(remote, root)
         r.ship(sha, _git("archive", "--format=tar", sha))
         if soccermaster_code.exists():
             r.ship_dir("SoccerMaster", _tar_dir(soccermaster_code))
@@ -144,7 +160,10 @@ def setup(remote: str = typer.Option(...),
 
 @bench_app.command("ship-data")
 def ship_data(name: str = typer.Argument(..., help="a folder of data/ in the repo, e.g. vleague"),
-              remote: str = typer.Option(...)) -> None:
+              remote: str = typer.Option(...),
+              root: Optional[str] = typer.Option(
+                  None, envvar="FOOTLYTICS_BENCH_ROOT",
+                  help="remote bench root directory (default: ~/footlytics-bench)")) -> None:
     """Copy data/<name> (the jitter-window JPEGs only) to the host's data directory."""
     import io
     import tarfile
@@ -158,21 +177,24 @@ def ship_data(name: str = typer.Argument(..., help="a folder of data/ in the rep
             if p.name.startswith("."):     # .tmp-* leftovers of an interrupted extract
                 continue
             t.add(str(p), arcname=str(p.relative_to(src)), recursive=False)
-    _guard(lambda: typer.echo(_remote(remote).ship_data(name, buf.getvalue())))
+    _guard(lambda: typer.echo(_connect(remote, root).ship_data(name, buf.getvalue())))
 
 
 @bench_app.command("fetch")
 def fetch(what: list[str] = typer.Argument(
               ..., help="gsr-valid gsr-test calib-valid calib-test baseline"),
           remote: Optional[str] = typer.Option(
-              None, help="start the download on this host in tmux")) -> None:
+              None, help="start the download on this host in tmux"),
+          root: Optional[str] = typer.Option(
+              None, envvar="FOOTLYTICS_BENCH_ROOT",
+              help="remote bench root directory (default: ~/footlytics-bench)")) -> None:
     """Download pinned datasets (on the host; with --remote, start that in tmux and return)."""
     _fetchable(what)
     if remote:
         sha = _clean_sha()
 
         def go():
-            r = _remote(remote)
+            r = _connect(remote, root)
             r.ship(sha, _git("archive", "--format=tar", sha))
             typer.echo(f"fetching in tmux on {remote}; log: {r.start_fetch(sha, what)}")
         _guard(go)

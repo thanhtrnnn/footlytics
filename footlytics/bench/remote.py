@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -30,6 +31,7 @@ class RemoteError(RuntimeError):
 
 
 _SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
+_SAFE_ROOT = re.compile(r"^[A-Za-z0-9._/~-]+$")
 #: Fail fast instead of hanging on a dead ControlMaster (laptop sleep, network change).
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3"]
@@ -56,6 +58,7 @@ def make_run_id(suite: str, sha: str, now: Optional[datetime] = None) -> str:
 class Remote:
     host: str
     runner: Callable = subprocess.run
+    bench_root: Optional[str] = None
     _root: Optional[str] = field(default=None, repr=False)
 
     def _down(self, why: str) -> SshDown:
@@ -80,7 +83,13 @@ class Remote:
     @property
     def root(self) -> str:
         if self._root is None:
-            self._root = self.sh(f"echo {DEFAULT_ROOT}").strip()
+            raw = self.bench_root or os.getenv("FOOTLYTICS_BENCH_ROOT") or DEFAULT_ROOT
+            if not _SAFE_ROOT.match(raw):
+                raise ValueError(f"refusing bench root {raw!r}: unsafe characters")
+            if raw.startswith("~"):
+                self._root = self.sh(f"echo {raw}").strip()
+            else:
+                self._root = raw.rstrip("/") or "/"
         return self._root
 
     def ship(self, sha: str, archive: bytes) -> str:

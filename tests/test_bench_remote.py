@@ -120,6 +120,23 @@ def test_ssh_has_keepalives_and_a_hung_session_is_sshdown():
     assert "ConnectTimeout=" in opts and "ServerAliveInterval=" in opts
 
 
+def test_custom_bench_root_and_env_override(monkeypatch):
+    ssh = FakeSsh([])
+    r = rm.Remote("iec5090", runner=ssh, bench_root="/home/iec/bela/footlytics-bench/")
+    assert r.root == "/home/iec/bela/footlytics-bench"
+    assert not any("echo" in c for c in ssh.calls)
+    r.start("20261124-010000-quick-abc1234", "quick", "abc")
+    cmd = next(c for c in ssh.calls if "tmux new-session" in c)
+    assert "FOOTLYTICS_BENCH_ROOT=/home/iec/bela/footlytics-bench" in cmd
+
+    monkeypatch.setenv("FOOTLYTICS_BENCH_ROOT", "/home/iec/bela/alt-root")
+    r_env = rm.Remote("iec5090", runner=FakeSsh([]))
+    assert r_env.root == "/home/iec/bela/alt-root"
+
+    with pytest.raises(ValueError, match="unsafe"):
+        _ = rm.Remote("h", runner=FakeSsh([]), bench_root="/tmp/x;id").root
+
+
 def test_env_fingerprint_matches_the_host_script():
     import hashlib
     from pathlib import Path
