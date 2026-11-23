@@ -15,6 +15,7 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 
 | finished (UTC) | commit | status | host | ball-rtdetr-link | ball-rtdetr-select |
 |---|---|---|---|---|---|
+| 2026-11-23 23:12 | 7250ffa | complete | colab-t4 | hota_jersey_off 63.10 | hota_jersey_off 63.10 |
 | 2026-10-20 05:37 | 5ecca05 | complete | iec5090 | hota_jersey_off 51.12 | hota_jersey_off 51.12 |
 
 ## calib-tune
@@ -54,6 +55,7 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 
 | finished (UTC) | commit | status | host | gsr-calibration-valid-6 | gsr-pipeline-valid-6 | sncalib-valid-60 | vleague-dev |
 |---|---|---|---|---|---|---|---|
+| 2026-11-23 21:17 | 7250ffa | complete | colab-t4 | score 58.85 | hota_jersey_off 63.10 | score 54.50 | share_under_1m 0.83 |
 | 2026-10-18 19:04 | c25af7f | complete | iec5090 | score 56.85 | hota_jersey_off 49.52 | score 54.66 | share_under_1m 0.83 |
 | 2026-10-18 18:51 | 3642c2c | complete | iec5090 | score 56.85 | hota_jersey_off 49.04 | score 54.66 | share_under_1m 0.83 |
 | 2026-10-18 18:38 | 792ccda | complete | iec5090 | score 56.85 | hota_jersey_off 51.12 | score 54.66 | share_under_1m 0.83 |
