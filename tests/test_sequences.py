@@ -326,3 +326,59 @@ def test_no_midfield_loss_when_ball_stops_after_foul():
     from footlytics.analytics.kinematics import add_kinematics
     st = MatchState(st.meta, add_kinematics(st.tracks, FPS))
     assert (detect_sequences(st, poss)["label"] != "midfield_loss").all()
+
+
+def _blip(start_s, length_s, base="AWAY", blip="BALLOUT"):
+    """`base` possession with a `blip` from `start_s` lasting `length_s`."""
+    lo, hi = int(start_s * FPS), int((start_s + length_s) * FPS)
+    return lambda f: blip if lo <= f < hi else base
+
+
+def test_a_short_possession_blip_does_not_split_a_low_block():
+    """The ball nudged over the touchline by calibration error for 0.6 s mid-attack."""
+    st, poss = _match(LOW_HOME, AWAY_SPREAD, ball=_passing(-15.0), status=_blip(5.0, 0.6),
+                      seconds=12)
+    lb = detect_sequences(st, poss).query("label == 'low_block'")
+    assert len(lb) == 1
+    assert lb.iloc[0]["start_s"] <= 1.0 and lb.iloc[0]["end_s"] >= 11.0
+    # Without the bridge the block falls apart into two pieces under the 8 s minimum.
+    assert (detect_sequences(st, poss, bridge_s=0.0)["label"] != "low_block").all()
+
+
+def test_a_long_possession_change_still_splits_a_low_block():
+    st, poss = _match(LOW_HOME, AWAY_SPREAD, ball=_passing(-15.0),
+                      status=_blip(4.0, 3.0, blip="HOME"), seconds=12)
+    assert (detect_sequences(st, poss)["label"] != "low_block").all()
+
+
+def test_a_low_block_is_not_bridged_across_a_camera_cut():
+    st, poss = _match(LOW_HOME, AWAY_SPREAD, ball=_passing(-15.0), status=_blip(5.0, 0.6),
+                      seconds=12)
+    tracks = st.tracks.assign(shot=np.where(st.tracks["frame_idx"] < int(5.2 * FPS), 1, 2),
+                              live_wide=True)
+    seq = detect_sequences(MatchState(st.meta, tracks), poss)
+    assert (seq["label"] != "low_block").all()
+
+
+# A keeper playing out, filmed tight: three home outfielders and two away forwards in view.
+HOME_FEW = [(-40.0, -10.0), (-38.0, 10.0), (-30.0, 0.0)]
+AWAY_FEW = [(-28.0, -5.0), (-26.0, 8.0)]
+
+
+def test_build_up_is_found_with_only_a_few_players_in_view():
+    st, poss = _match(_jog(HOME_FEW), _jog(AWAY_FEW), ball=_passing(-35.0), status="HOME",
+                      seconds=6)
+    bu = detect_sequences(st, poss).query("label == 'build_up'")
+    assert len(bu) == 1
+    assert bu.iloc[0]["team"] == Team.HOME.value and bu.iloc[0]["n_pressers"] == 2
+
+
+def test_no_sparse_build_up_while_the_ball_stands_still():
+    st, poss = _match(_jog(HOME_FEW), _jog(AWAY_FEW), ball=(-35.0, 0.0), status="HOME",
+                      seconds=6)
+    assert (detect_sequences(st, poss)["label"] != "build_up").all()
+
+
+def test_no_sparse_build_up_while_the_players_have_stopped():
+    st, poss = _match(HOME_FEW, AWAY_FEW, ball=_passing(-35.0), status="HOME", seconds=6)
+    assert (detect_sequences(st, poss)["label"] != "build_up").all()
