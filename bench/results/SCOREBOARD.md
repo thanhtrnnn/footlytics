@@ -67,6 +67,7 @@ Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 
 | finished (UTC) | commit | status | host | vleague-dev | vleague-frozen |
 |---|---|---|---|---|---|
+| 2026-11-23 11:01 | 51eb76d | complete | iec5090 | share_under_1m 0.88 | share_under_1m 0.76 |
 | 2026-10-13 05:07 | edbbaa2 | complete | iec5090 | share_under_1m 0.83 | share_under_1m 0.71 |
 | 2026-10-12 22:52 | fccd3d4 | complete | iec4090 | share_under_1m 0.83 | share_under_1m 0.71 |
 | 2026-10-12 19:51 | fccd3d4 | failed | iec4090 | error | error |
