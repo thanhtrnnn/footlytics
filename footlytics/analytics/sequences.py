@@ -91,7 +91,7 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
     shot_of = frames.set_index("frame_idx")["shot"]
     if not state.tracks["live_wide"].all():
         state = MatchState(state.meta, state.tracks[state.tracks["live_wide"]])
-    blk = team_block(state, sample_every=sample_every)
+    blk = team_block(state, sample_every=sample_every, min_outfield=4)
     if blk.empty:
         return pd.DataFrame(columns=COLUMNS)
     blk["shot"] = blk["frame_idx"].map(shot_of).astype(int)
@@ -112,7 +112,8 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
     ball_x = state.ball.drop_duplicates("frame_idx").set_index("frame_idx")["x"]
     blk["ball_x_own"] = blk["frame_idx"].map(ball_x) * blk["team"].map(attacking_sign)
     opp_third = state.meta.pitch_length / 2 - state.meta.pitch_length / 3
-    blk["ball_still"] = blk["frame_idx"].map(ball_still(state, still_s, still_m)).fillna(False).astype(bool)
+    bs = ball_still(state, still_s, still_m)
+    blk["ball_still"] = blk["frame_idx"].map(bs).fillna(False).astype(bool)
     blk["dead_ball"] = (blk["ball_still"]
                         | blk["frame_idx"].map(play_stopped(state, sample_every, stopped_mps))
                                           .fillna(False).astype(bool))
@@ -128,27 +129,34 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
         blk[c] = blk[c].fillna(0).astype(int)
 
     oop = blk["out_of_possession"]
+    deep_scramble = (
+        (~blk["in_possession"] & (blk["ball_x_own"] <= -opp_third))
+        | (blk["in_possession"] & (blk["ball_x_own"] <= -25.0)
+           & (blk["centroid_x"] < build_up_min_centroid_x) & (blk["def_line_x"] <= -30.0))
+    )
+    lb_gap = max(2 * sample_every, int(round(1.0 * fps)))
     rules = {
-        "low_block": (oop & (blk["def_line_x"] <= low_block_line)
+        "low_block": ((oop | deep_scramble) & (blk["def_line_x"] <= low_block_line)
                       & (blk["compactness_m"] <= low_block_compact_m)
-                      & ~blk["ball_still"], low_block_min_s),
+                      & ~blk["ball_still"], low_block_min_s, lb_gap),
         "high_press": (oop & (blk["def_line_x"] >= high_press_line)
                        & (blk["ball_x_own"] >= opp_third)
-                       & (blk["n_within_10m"] >= high_press_n), high_press_min_s),
+                       & (blk["n_within_10m"] >= high_press_n), high_press_min_s, 2 * sample_every),
         "flank_overload": ((blk["n_attackers"] >= overload_n)
                            & (blk["n_defenders"] <= overload_max_defenders)
                            & (blk["n_visible"] >= overload_min_visible)
-                           & (blk["n_visible_opp"] >= overload_min_visible), overload_min_s),
+                           & (blk["n_visible_opp"] >= overload_min_visible),
+                           overload_min_s, 2 * sample_every),
         "build_up": (blk["in_possession"] & (blk["ball_x_own"] <= -opp_third)
                      & (blk["centroid_x"] >= build_up_min_centroid_x)
-                     & ~blk["dead_ball"], build_up_min_s),
+                     & ~blk["dead_ball"], build_up_min_s, 2 * sample_every),
     }
     rows = []
-    for label, (mask, min_s) in rules.items():
-        rows += _runs(blk[mask], label, min_s, sample_every, fps)
+    for label, (mask, min_s, gap_f) in rules.items():
+        rows += _runs(blk[mask], label, min_s, sample_every, fps, max_gap_frames=gap_f)
     rows += _midfield_losses(state, possession, blk, pressure, opp_third, loss_window_s,
                              counter_press_s, counter_press_m, retreat_mps, frames,
-                             stopped_mps=stopped_mps)
+                             stopped_mps=stopped_mps, ball_still_s=bs)
     out = pd.DataFrame(rows, columns=COLUMNS)
     return out.sort_values(["start_s", "label"]).reset_index(drop=True)
 
@@ -244,7 +252,8 @@ def _midfield_losses(state: MatchState, possession: pd.DataFrame, blk: pd.DataFr
                      pressure: pd.DataFrame, third_x: float, window_s: float,
                      counter_press_s: float, counter_press_m: float,
                      retreat_mps: float, frames: pd.DataFrame,
-                     stopped_mps: float = 1.0) -> list[dict]:
+                     stopped_mps: float = 1.0,
+                     ball_still_s: pd.Series | None = None) -> list[dict]:
     """One sequence per turnover in the middle third, for the team that lost the ball."""
     fps = state.meta.fps
     turnovers = transitions(state, possession)
@@ -276,6 +285,8 @@ def _midfield_losses(state: MatchState, possession: pd.DataFrame, blk: pd.DataFr
             continue  # cut off before the response can be judged
         b = blk[(blk["team"] == team) & blk["frame_idx"].between(f0, f1)]
         if len(b) and b["ball_still"].any():
+            continue
+        if ball_still_s is not None and bool(ball_still_s.loc[f0:f1].any()):
             continue
         b_late = ball_df[(ball_df.index >= f0 + int(counter_press_s * fps)) & (ball_df.index <= f1)]
         if len(b_late) >= 5 and "speed" in b_late.columns:
@@ -309,20 +320,27 @@ def _midfield_losses(state: MatchState, possession: pd.DataFrame, blk: pd.DataFr
     return out
 
 
-def _runs(hits: pd.DataFrame, label: str, min_s: float, step: int, fps: float) -> list[dict]:
+def _runs(hits: pd.DataFrame, label: str, min_s: float, step: int, fps: float,
+          max_gap_frames: int | None = None) -> list[dict]:
     """Group consecutive samples per team and period into sequences of at least `min_s`.
 
-    One missing sample is tolerated, so a single noisy frame does not split a block in two.
+    One missing sample is tolerated by default (`2 * step`), so a single noisy frame does not
+    split a run in two. `max_gap_frames` overrides that gap budget within the same shot.
     A flank overload is also split by flank: a switch of play is two sequences, not one.
     """
     out = []
+    gap = 2 * step if max_gap_frames is None else max_gap_frames
     keys = ["team", "period"] + (["flank"] if label == "flank_overload" else [])
     for key, g in hits.sort_values("frame_idx").groupby(keys):
         team, period = key[0], key[1]
-        run_id = ((g["frame_idx"].diff() > 2 * step) | (g["shot"].diff() != 0)).cumsum()
+        run_id = ((g["frame_idx"].diff() > gap) | (g["shot"].diff() != 0)).cumsum()
         for _, r in g.groupby(run_id):
             duration = (r["frame_idx"].iloc[-1] - r["frame_idx"].iloc[0] + step) / fps
             if duration < min_s:
+                continue
+            if label == "low_block" and (
+                not bool(r["out_of_possession"].any()) or float(r["in_possession"].mean()) > 0.65
+            ):
                 continue
             out.append({
                 "label": label, "team": team, "period": int(period),

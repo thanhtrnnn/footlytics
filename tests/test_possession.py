@@ -114,3 +114,11 @@ def test_deep_box_1v1_mark_does_not_flip_possession_to_defender():
                     pd.DataFrame(rows))
     s = _status(infer_possession(st))
     assert (s == "HOME").all()
+
+
+def test_touchline_dribble_within_two_metre_margin_is_not_ballout():
+    # Far-touchline homography compression places an on-line ball ~1.5 m past y = -34 m
+    # (kept by PipelineConfig.ball_margin_m = 2.0); it must remain in play rather than BALLOUT.
+    path = [H1] * 25 + [(-10.0, -35.5)] * 25 + [H1] * 25
+    s = _status(infer_possession(_state(path)))
+    assert (s == "HOME").all()

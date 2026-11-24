@@ -135,7 +135,7 @@ def goalkeepers(state: MatchState) -> dict[str, int]:
 # --------------------------------------------------------------------- block
 
 def team_block(state: MatchState, exclude_gk: bool = True,
-               sample_every: int = 25) -> pd.DataFrame:
+               sample_every: int = 25, min_outfield: int = 6) -> pd.DataFrame:
     """Per-frame shape of each team: line height, width, depth, compactness.
 
     `sample_every` frames, because these move on the scale of seconds and a
@@ -150,7 +150,7 @@ def team_block(state: MatchState, exclude_gk: bool = True,
             continue
         gk = gks.get(str(team))
         outfield = g[g["track_id"] != gk] if gk is not None else g
-        if len(outfield) < 6:
+        if len(outfield) < min_outfield:
             continue
         sign = attacking_sign(team)
         # Own attacking frame, so "defensive line" means the same for both teams.

@@ -29,9 +29,11 @@ from ..geometry.pitch import Pitch
 from ..perception.detect import Detector, DetectorConfig
 from ..perception.teams import (split_officials, TeamClassifier, kit_descriptor,
                                 team_scores_by_track)
-from ..perception.identity import (apply_to_state, assign_teams_with_roster,
+from ..perception.identity import (add_jersey_reads, apply_to_state, assign_teams_with_roster,
                                    build_tracklets, goalkeeper_teams, goalkeeper_tracklets,
-                                   merge_same_role, stitch_tracklets, touchline_people)
+                                   merge_by_jersey, merge_same_role, stitch_tracklets,
+                                   touchline_people)
+from ..perception.jersey import crop_sharpness, extract_jersey_crop, read_track_jerseys
 from ..perception.shots import (ShotConfig, frame_signals, live_wide_segments,
                                 stinger_and_replay)
 from ..perception.track import PitchTracker, TrackerConfig
@@ -137,6 +139,14 @@ class PipelineConfig:
     #: grass-share test would only add ways to be wrong. Rows are never dropped, only flagged.
     shot_filter: Optional[bool] = None
     shot: ShotConfig = field(default_factory=ShotConfig)
+    jersey_ocr: bool = False
+    jersey_model: str = "microsoft/trocr-small-str"
+    jersey_stride: int = 3
+    jersey_min_box_h: int = 36
+    jersey_max_samples: int = 12
+    jersey_min_conf: float = 0.4
+    jersey_min_share: float = 0.6
+    jersey_min_reads: int = 2
     verbose: bool = True
 
 
@@ -309,6 +319,8 @@ class Observation:
     desc: Optional[np.ndarray] = None   # (N, D) kit descriptor per detection; zeros for the ball
     signal: Optional[object] = None     # shots.FrameSignals, when the shot filter is on
     frame: Optional[np.ndarray] = field(default=None, repr=False)   # RGB, only for the montage
+    jersey_crops: list[tuple[np.ndarray, float] | None] | None = field(
+        default=None, repr=False)
 
 
 def save_observations(path: str | Path, obs: Sequence[Observation], fps: float,
@@ -378,7 +390,25 @@ def observe_frames(
             dim = next((d.shape for d in rows if d is not None), None) \
                 or kit_descriptor(frame, dets[0, :4]).shape
             desc = np.stack([np.zeros(dim, np.float32) if d is None else d for d in rows])
-        yield Observation(dets, roles, xy, desc, signal, frame if cfg.montage else None)
+        jersey_crops = None
+        if (cfg.jersey_ocr and len(dets) and xy is not None
+                and out_idx % max(cfg.jersey_stride, 1) == 0):
+            jersey_crops = []
+            for b, r in zip(dets[:, :4], roles):
+                if r != Role.PLAYER.value:
+                    jersey_crops.append(None)
+                    continue
+                crop = extract_jersey_crop(frame, b, min_box_h=cfg.jersey_min_box_h)
+                if crop is None:
+                    jersey_crops.append(None)
+                else:
+                    q = float(b[3]) * float(np.sqrt(max(crop_sharpness(crop), 1.0)))
+                    jersey_crops.append((crop, q))
+        yield Observation(
+            dets, roles, xy, desc, signal,
+            frame if cfg.montage else None,
+            jersey_crops=jersey_crops,
+        )
         src_idx += 1
         out_idx += 1
 
@@ -399,6 +429,7 @@ def run_frames(
     tracker_cfg: TrackerConfig | None = None,
     source: str = "frames",
     capture: Optional[list] = None,
+    jersey_reader=None,
 ) -> tuple[MatchState, dict]:
     """Process BGR frames into a MatchState. Returns (state, report).
 
@@ -415,7 +446,8 @@ def run_frames(
     if capture is not None:
         obs = _tee(obs, capture)
     return run_observations(obs, fps, meta, cfg, tracker_cfg,
-                            has_referee_class=Role.REFEREE.value in set(detector.roles.values()))
+                            has_referee_class=Role.REFEREE.value in set(detector.roles.values()),
+                            jersey_reader=jersey_reader)
 
 
 def run_observations(
@@ -425,6 +457,7 @@ def run_observations(
     cfg: PipelineConfig | None = None,
     tracker_cfg: TrackerConfig | None = None,
     has_referee_class: bool = False,
+    jersey_reader=None,
 ) -> tuple[MatchState, dict]:
     """Track, stitch and decide identity over pre-computed `Observation`s. `fps` is the
     *source* rate; observations are already strided."""
@@ -456,10 +489,12 @@ def run_observations(
                             cfg.ball_reacquire_s, still_s=cfg.ball_still_s)
     ball_cands: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     link_log: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
+    jersey_samples: list[tuple[int, int, np.ndarray, float]] = []
     t0 = time.time()
 
     for ob in observations:
         dets, xy_all, roles_all, desc_all = ob.dets, ob.xy, ob.roles, ob.desc
+        jcrops = ob.jersey_crops
         n_det_total += len(dets)
         if shots_on:
             signals.append(ob.signal)
@@ -485,6 +520,8 @@ def run_observations(
             dets, xy = dets[keep], xy[keep]
             roles = [r for r, k in zip(roles, keep) if k]
             desc = None if desc_all is None else desc_all[keep]
+            if jcrops is not None:
+                jcrops = [c for c, k in zip(jcrops, keep) if k]
 
             # One ball per frame, chosen for continuity and against still decoys.
             bi = np.flatnonzero([r == Role.BALL.value for r in roles])
@@ -505,6 +542,8 @@ def run_observations(
                 roles = [r for r, k in zip(roles, sel) if k]
                 if desc is not None:
                     desc = desc[sel]
+                if jcrops is not None:
+                    jcrops = [c for c, k in zip(jcrops, sel) if k]
 
             embeddings = desc if (len(dets) and cfg.use_appearance) else None
             if len(dets):
@@ -523,6 +562,9 @@ def run_observations(
                         x=xy[di, 0], y=xy[di, 1],
                         z=0.0 if roles[di] == Role.BALL.value else np.nan,
                     ))
+                    if (cfg.jersey_ocr and jcrops is not None and jcrops[di] is not None
+                            and roles[di] == Role.PLAYER.value):
+                        jersey_samples.append((int(tid), out_idx, jcrops[di][0], jcrops[di][1]))
                     if embeddings is not None and roles[di] != Role.BALL.value:
                         desc_rows.append(embeddings[di])
                         desc_track.append(tid)
@@ -563,6 +605,7 @@ def run_observations(
         desc_rows = [desc_rows[i] for i in sel]
         desc_role = [desc_role[i] for i in sel]
         desc_track = [desc_track[i] for i in sel]
+        jersey_samples = [s for s in jersey_samples if s[0] in alive]
     shot_report: dict = {}
     if shots_on:
         live, shot = live_wide_segments(signals, eff_fps, cfg.shot)
@@ -648,6 +691,17 @@ def run_observations(
     report["officials_split"] = len(officials)
 
     tracklets = build_tracklets(state, embeddings=track_emb or None, team_scores=scores or None)
+    if cfg.jersey_ocr:
+        if jersey_samples:
+            if jersey_reader is None:
+                from ..perception.jersey import TrOCRJerseyReader
+                jersey_reader = TrOCRJerseyReader(cfg.jersey_model, min_conf=cfg.jersey_min_conf)
+            jdf = read_track_jerseys(
+                jersey_samples, jersey_reader, max_per_track=cfg.jersey_max_samples)
+            add_jersey_reads(tracklets, jdf)
+            report["jersey_reads"] = len(jdf)
+        else:
+            report["jersey_reads"] = 0
     n_before = len(tracklets)
     if cfg.stitch:
         tracklets = stitch_tracklets(tracklets, eff_fps, **cfg.stitch_args)
@@ -701,6 +755,13 @@ def run_observations(
     for t in other_tracklets:
         t.team = Team.UNKNOWN.value
         t.role = Role.OTHER.value
+    if cfg.jersey_ocr:
+        outfield = [t for t in player_tracklets if t.role == Role.PLAYER.value]
+        non_outfield = [t for t in player_tracklets if t.role != Role.PLAYER.value]
+        outfield = merge_by_jersey(outfield, min_share=cfg.jersey_min_share,
+                                   min_reads=cfg.jersey_min_reads)
+        player_tracklets = outfield + non_outfield
+        report["jersey_tracklets_labelled"] = sum(t.jersey is not None for t in player_tracklets)
     tracklets = player_tracklets + official_tracklets + other_tracklets
     state = apply_to_state(state, tracklets)
     report["tracklets_before_stitch"] = n_before

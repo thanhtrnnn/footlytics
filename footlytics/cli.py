@@ -113,6 +113,65 @@ def run_video_cmd(
                                                   "seconds_per_match_minute", "calib_success_rate")}, indent=2))
 
 
+@app.command("match-run")
+def match_run_cmd(
+    video: Path = typer.Argument(..., exists=True, dir_okay=False, help="full-match broadcast video"),
+    out: Path = typer.Option(..., help="output match directory (writes chunks/ + MatchState + sequences.csv)"),
+    first_half: Optional[str] = typer.Option(None, help="1st half window START-END (e.g. '04:30-51:30' or '270-3090')"),
+    second_half: Optional[str] = typer.Option(None, help="2nd half window START-END (e.g. '1:07:00-1:56:00')"),
+    chunk_minutes: float = typer.Option(10.0, help="checkpoint chunk size in minutes"),
+    target_fps: float = typer.Option(25.0, help="target processing fps (thins 50/60 fps broadcasts automatically)"),
+    stride: Optional[int] = typer.Option(None, help="explicit frame stride override"),
+    every: int = typer.Option(10, help="calibrate every Nth processed frame, bridge the rest"),
+    gate_px: float = typer.Option(25.0),
+    home: str = typer.Option("HOME"),
+    away: str = typer.Option("AWAY"),
+    ball_link: bool = typer.Option(True, "--ball-link/--no-ball-link"),
+    ball_detector: str = typer.Option("rtdetr", help="ball detector backend: rtdetr | yolo"),
+    ball_weights_dir: Optional[str] = typer.Option(None, help="weights/ subdirectory for rtdetr ball detector"),
+    save_obs: bool = typer.Option(True, "--save-obs/--no-save-obs", help="save per-chunk obs.pkl for fast CPU replay"),
+    replay_only: bool = typer.Option(False, "--replay-only", help="re-run tracking and sequences from saved chunk obs.pkl on CPU"),
+) -> None:
+    """Chunked, resumable 90-minute broadcast match runner with 1st/2nd half periods."""
+    from .bench.paths import BenchPaths
+    from .pipeline.match import parse_window, run_match
+
+    windows: list[tuple[int, float, float]] = []
+    try:
+        if first_half is not None:
+            s0, s1 = parse_window(first_half)
+            windows.append((1, s0, s1))
+        if second_half is not None:
+            s0, s1 = parse_window(second_half)
+            windows.append((2, s0, s1))
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+
+    q = run_match(
+        video, out, BenchPaths.from_env(),
+        period_windows=windows or None,
+        chunk_minutes=chunk_minutes,
+        target_fps=target_fps,
+        stride=stride,
+        every=every,
+        gate_px=gate_px,
+        home=home,
+        away=away,
+        ball_link=ball_link,
+        ball_detector=ball_detector,
+        ball_weights_dir=ball_weights_dir,
+        save_obs=save_obs,
+        replay_only=replay_only,
+        log=typer.echo,
+    )
+    typer.echo(json.dumps({
+        k: q.get(k) for k in (
+            "frames", "chunks_total", "chunks_reused", "mean_players_per_frame",
+            "ball_coverage", "calib_success_rate", "compute_seconds", "wall_seconds",
+        )
+    }, indent=2))
+
+
 @app.command("calib-assist")
 def calib_assist(
     video: Path = typer.Argument(..., exists=True),

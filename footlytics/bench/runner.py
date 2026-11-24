@@ -612,6 +612,18 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
 
 PIPELINE_VRAM_MIB = 14_000
 _DETECTORS: dict = {}
+_JERSEY_READERS: dict = {}
+
+
+def _jersey_reader(pcfg: PipelineConfig):
+    """One TrOCR jersey reader per model and confidence threshold."""
+    key = (pcfg.jersey_model, pcfg.jersey_min_conf)
+    if key not in _JERSEY_READERS:
+        from ..perception.jersey import TrOCRJerseyReader
+
+        _JERSEY_READERS[key] = TrOCRJerseyReader(
+            pcfg.jersey_model, device="cuda", min_conf=pcfg.jersey_min_conf)
+    return _JERSEY_READERS[key]
 
 
 def _ball_weights(paths: BenchPaths, det_cfg: dict) -> str:
@@ -713,17 +725,20 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                     calib = res
                     t0 = time.perf_counter()
                     captured = [] if capture_dir else None
+                    jreader = _jersey_reader(pcfg) if pcfg.jersey_ocr else None
                     state, report = run_frames(
                         (_imread(z.read(n)) for n in names), 25.0,
                         homography_mapper([fc.H_img_to_pitch for fc in calib]), det,
-                        meta, pcfg, tcfg, **({"capture": captured} if capture_dir else {}))
+                        meta, pcfg, tcfg,
+                        **({"capture": captured} if capture_dir else {}),
+                        **({"jersey_reader": jreader} if jreader is not None else {}))
                     if capture_dir:
                         Path(capture_dir).mkdir(parents=True, exist_ok=True)
                         save_observations(Path(capture_dir) / f"{seq}.pkl", captured, 25.0,
                                           Role.REFEREE.value in set(det.roles.values()))
                 run_s = time.perf_counter() - t0
                 (out_dir / f"{seq}.json").write_text(json.dumps(
-                    state_to_predictions(state, split)))
+                    state_to_predictions(state, split, use_jersey=pcfg.jersey_ocr)))
             except Exception as e:  # noqa: BLE001 - the pipeline gave nothing: score it as misses
                 (out_dir / f"{seq}.json").write_text(json.dumps({"predictions": []}))
                 scored.append(seq)

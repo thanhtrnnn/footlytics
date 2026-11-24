@@ -326,3 +326,26 @@ def test_no_midfield_loss_when_ball_stops_after_foul():
     from footlytics.analytics.kinematics import add_kinematics
     st = MatchState(st.meta, add_kinematics(st.tracks, FPS))
     assert (detect_sequences(st, poss)["label"] != "midfield_loss").all()
+
+
+def test_low_block_survives_brief_box_scramble_and_bridges_short_gap():
+    def status(f):
+        # Away attacks home's box; a 2 s defender touch / UNKNOWN scramble in the middle
+        # must not split a 12 s low block into two pieces under 8 s.
+        if 100 <= f < 130:
+            return "HOME"
+        if 130 <= f < 150:
+            return "UNKNOWN"
+        return "AWAY"
+
+    st, poss = _match(LOW_HOME, AWAY_SPREAD, ball=_passing(-35.0), status=status, seconds=12)
+    lb = detect_sequences(st, poss).query("label == 'low_block'")
+    assert len(lb) == 1 and lb.iloc[0]["team"] == Team.HOME.value
+
+
+def test_build_up_works_when_broadcast_zoom_shows_four_outfielders():
+    zoom_home = HOME_BUILD[3:7]   # 4 outfielders + goalkeeper in view (centroid >= -25 m)
+    st, poss = _match(_jog(zoom_home), _jog(AWAY_PRESS_3), ball=_passing(-22.0), status="HOME",
+                      seconds=6)
+    bu = detect_sequences(st, poss).query("label == 'build_up'")
+    assert len(bu) == 1 and bu.iloc[0]["team"] == Team.HOME.value

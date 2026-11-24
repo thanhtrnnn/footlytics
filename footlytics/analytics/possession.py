@@ -62,7 +62,7 @@ def _control(state: MatchState, radius_m: float, out_margin_m: float) -> pd.Seri
 
 
 def infer_possession(state: MatchState, radius_m: float = 2.0, min_hold_s: float = 0.5,
-                     max_gap_s: float = 2.0, out_margin_m: float = 1.0,
+                     max_gap_s: float = 2.0, out_margin_m: float = 2.0,
                      box_contest_x: float = -30.0, box_contest_m: float = 3.8) -> pd.DataFrame:
     """Per-frame possession: frame_idx, period, timestamp, ballStatus.
 

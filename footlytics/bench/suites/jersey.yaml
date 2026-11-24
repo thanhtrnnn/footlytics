@@ -1,0 +1,9 @@
+name: jersey
+tasks:
+  - id: gsr-jersey-valid-6
+    kind: gsr_pipeline
+    split: valid
+    clips: [SNGS-025, SNGS-028, SNGS-050, SNGS-056, SNGS-081, SNGS-086]
+    every: 10
+    pipeline:
+      jersey_ocr: true
