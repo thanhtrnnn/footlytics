@@ -126,3 +126,27 @@ def test_bridge_max_m_rejects_isolated_keyframe_spike_and_recovers_on_pair():
     assert out2[10].source == "bridged"
     assert out2[20].source == "keyframe"
     assert np.allclose(out2[20].H_img_to_pitch, H_new)
+
+
+def test_singular_tracker_homography_marks_frame_uncalibrated_without_crashing():
+    """Graphic wipes / blurs can make RANSAC return a singular 3x3 matrix; ClipCalibrator
+    must treat the frame as uncalibrated ('none') instead of raising LinAlgError."""
+
+    class SingularTracker:
+        def __init__(self, anchor, mask=None):
+            self.t0 = int(anchor[0, 0, 0])
+
+        def update(self, f, mask=None):
+            t = int(f[0, 0, 0])
+            if t == 5:
+                return np.zeros((3, 3), dtype=float)   # singular (det == 0)
+            return shift(t - self.t0)
+
+    cc = ClipCalibrator(fits({0: 4.0, 10: 5.0}), every=10, gate_px=25.0,
+                        tracker_factory=SingularTracker, chunk=30)
+    out = cc.run(frame(t) for t in range(15))
+    assert out[0].source == "keyframe"
+    assert out[4].source == "bridged"
+    assert out[5].source == "none" and out[5].H_img_to_pitch is None
+    assert out[6].source == "bridged"
+    assert out[10].source == "keyframe"

@@ -147,7 +147,12 @@ class PnlSolver:
         if cam is None or err is None or not np.isfinite(err):
             return None
         cam_p = {k: _plain(v) for k, v in cam.items() if k != "rotation_matrix"}
-        H = np.linalg.inv(ground_homography(cam_p))
+        try:
+            H = np.linalg.inv(ground_homography(cam_p))
+        except np.linalg.LinAlgError:
+            return None
+        if not np.isfinite(H).all() or abs(float(H[2, 2])) < 1e-12:
+            return None
         return CameraFit(cam_p, float(err), H / H[2, 2])
 
     def solve(self, keypoints: dict, lines: dict, width: int, height: int, voting: bool = True,

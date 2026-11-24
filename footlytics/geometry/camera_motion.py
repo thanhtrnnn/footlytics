@@ -18,6 +18,12 @@ _FEATURE_PARAMS = dict(maxCorners=600, qualityLevel=0.01, minDistance=8, blockSi
 _LK_PARAMS = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
 
 
+def _invertible(H: np.ndarray | None, min_det: float = 1e-9) -> bool:
+    if H is None or not np.isfinite(H).all():
+        return False
+    return abs(float(np.linalg.det(H))) > min_det
+
+
 class AnchoredCamera:
     """Camera motion relative to one anchor frame, robust to shot cuts.
 
@@ -75,7 +81,7 @@ class AnchoredCamera:
         step, inl = cv2.findHomography(q0, q1, cv2.RANSAC, 2.0)
         n = int(inl.sum()) if inl is not None else 0
         self.n_tracked = n
-        if step is None or n < self._min_klt or n / len(q0) < self._min_klt_ratio:
+        if step is None or n < self._min_klt or n / len(q0) < self._min_klt_ratio or not _invertible(step):
             return None
         return step
 
@@ -93,7 +99,8 @@ class AnchoredCamera:
         n = int(inl.sum()) if inl is not None else 0
         if H is None or n < self._min_glob or n / len(good) < self._min_glob_ratio:
             return None
-        return self._Sinv @ H @ self._S  # back to full-resolution pixels
+        full_H = self._Sinv @ H @ self._S  # back to full-resolution pixels
+        return full_H if _invertible(full_H) else None
 
     def _scene_changed(self, gray: np.ndarray) -> bool:
         a, b = self._small(self._prev_gray), self._small(gray)

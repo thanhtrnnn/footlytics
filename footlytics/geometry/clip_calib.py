@@ -21,6 +21,17 @@ from .homography import apply_homography
 from .sn_camera import camera_from_homography
 
 
+def _safe_inv(H: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    """Matrix inverse returning None on singular, non-finite, or ill-conditioned homographies."""
+    if H is None or not np.isfinite(H).all():
+        return None
+    try:
+        inv = np.linalg.inv(H)
+    except np.linalg.LinAlgError:
+        return None
+    return inv if np.isfinite(inv).all() else None
+
+
 def _pitch_disagreement_m(H1: np.ndarray, H2: np.ndarray, w: int, h: int) -> float:
     """Median pitch-plane disagreement in metres across a 4x3 lower-image grid."""
     us = np.linspace(0.2 * w, 0.8 * w, 4)
@@ -89,9 +100,13 @@ class ClipCalibrator:
                 bridged_H: Optional[np.ndarray] = None
                 if anchor is not None:
                     H_a_t = anchor[0].update(f, mask)
-                    if H_a_t is not None:
-                        H_b = anchor[1] @ np.linalg.inv(H_a_t)
-                        bridged_H = H_b / H_b[2, 2]
+                    inv_a_t = _safe_inv(H_a_t)
+                    if inv_a_t is not None:
+                        H_b = anchor[1] @ inv_a_t
+                        if np.isfinite(H_b).all() and abs(float(H_b[2, 2])) > 1e-12:
+                            cand = H_b / H_b[2, 2]
+                            if _safe_inv(cand) is not None:
+                                bridged_H = cand
                 fit = fits.get(i)
                 if fit is not None and fit.rep_err <= self.gate_px:
                     accept = True
@@ -113,9 +128,11 @@ class ClipCalibrator:
                     pending_H = fit.H_img_to_pitch
                 err = fit.rep_err if fit is not None else None
                 if bridged_H is not None:
-                    cam = camera_from_homography(np.linalg.inv(bridged_H), w, h)
-                    out.append(FrameCalib(idx, bridged_H, cam, "bridged", err))
-                    continue
+                    inv_b = _safe_inv(bridged_H)
+                    if inv_b is not None:
+                        cam = camera_from_homography(inv_b, w, h)
+                        out.append(FrameCalib(idx, bridged_H, cam, "bridged", err))
+                        continue
                 out.append(FrameCalib(idx, None, None, "none", err))
 
         start = 0
