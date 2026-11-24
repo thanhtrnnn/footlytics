@@ -52,9 +52,11 @@ def test_start_runs_in_a_named_tmux_session():
     cmd = next(c for c in ssh.calls if "tmux new-session" in c)
     assert "-s footlytics-20261012-100000-harness-abc1234" in cmd
     assert "bench local --suite harness" in cmd and "FOOTLYTICS_BENCH_ROOT=" in cmd
-    # shared account: ultralytics must not touch ~/.config, HF must not touch ~/.cache
+    # shared account: ultralytics must not touch ~/.config, HF must not touch ~/.cache,
+    # and orphaned /tmp/nvidia-mps servers from other users must not block Default compute mode
     assert "YOLO_CONFIG_DIR=/home/iec/footlytics-bench/cache/ultralytics" in cmd
     assert "HF_HOME=/home/iec/footlytics-bench/cache/hf" in cmd
+    assert "CUDA_MPS_PIPE_DIRECTORY=/home/iec/footlytics-bench/cache/no-mps" in cmd
 
 
 def test_status_reports_a_dead_session_with_its_log():

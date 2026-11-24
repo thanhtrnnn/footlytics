@@ -8,8 +8,9 @@ TORCHVISION_PIN="0.22.1"
 TRACKEVAL_SHA=9c25232f6f2b56c9f203f1eb55784ff1e97df683
 CALIB_SHA=ab38f461bec729fead86b6986839de1bb826f16d
 export UV_CACHE_DIR="$ROOT/cache/uv" PIP_CACHE_DIR="$ROOT/cache/pip" HF_HOME="$ROOT/cache/hf" \
-  YOLO_CONFIG_DIR="$ROOT/cache/ultralytics" HF_HUB_DISABLE_XET=1
-mkdir -p "$ROOT"/{bin,cache,data,runs,src,ext}
+  YOLO_CONFIG_DIR="$ROOT/cache/ultralytics" HF_HUB_DISABLE_XET=1 \
+  CUDA_MPS_PIPE_DIRECTORY="${CUDA_MPS_PIPE_DIRECTORY:-$ROOT/cache/no-mps}"
+mkdir -p "$ROOT"/{bin,cache,cache/no-mps,data,runs,src,ext}
 
 # Unmanaged install: no receipt in the shared ~/.config/uv, no PATH edits.
 [ -x "$ROOT/bin/uv" ] || curl -LsSf https://astral.sh/uv/0.13.0/install.sh \
