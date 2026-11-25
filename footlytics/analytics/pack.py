@@ -13,6 +13,7 @@ Turns one or more processed match directories (`sequences.csv`, optional `marks.
 """
 from __future__ import annotations
 
+import contextlib
 import html
 import json
 import shutil
@@ -30,6 +31,41 @@ from ..state.schema import MatchState, Role
 from ..viz.radar import hold_gaps
 from .query import MatchEntry, discover_matches
 from .review import load_marks, sequence_ids
+
+_FFMPEG_CHECKED = False
+_FFMPEG_LIBX264: str | None = None
+
+
+def _find_libx264_ffmpeg() -> str | None:
+    """Return an ffmpeg binary supporting `libx264` (preferring bundled `imageio_ffmpeg`), else None."""
+    global _FFMPEG_CHECKED, _FFMPEG_LIBX264
+    if _FFMPEG_CHECKED:
+        return _FFMPEG_LIBX264
+    _FFMPEG_CHECKED = True
+    cands: list[str] = []
+    with contextlib.suppress(ImportError, RuntimeError, OSError):
+        import imageio_ffmpeg
+
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe:
+            cands.append(exe)
+    sys_ff = shutil.which("ffmpeg")
+    if sys_ff and sys_ff not in cands:
+        cands.append(sys_ff)
+    for exe in cands:
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            res = subprocess.run(
+                [exe, "-hide_banner", "-encoders"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if res.returncode == 0 and "libx264" in res.stdout:
+                _FFMPEG_LIBX264 = exe
+                return exe
+    return None
+
 
 PACK_FOLDERS: dict[str, str] = {
     "high_press": "01_high_press",
@@ -366,7 +402,7 @@ def export_sequence_clip(
             by_frame = {int(f): g for f, g in held.groupby("frame_idx", observed=True)}
             slice_people = held[held["role"].isin([Role.PLAYER.value, Role.GOALKEEPER.value])]
 
-    ffmpeg_bin = shutil.which("ffmpeg")
+    ffmpeg_bin = _find_libx264_ffmpeg()
     proc: subprocess.Popen[bytes] | None = None
     writer: cv2.VideoWriter | None = None
     try:
