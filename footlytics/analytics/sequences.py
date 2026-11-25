@@ -145,7 +145,8 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
         "flank_overload": ((blk["n_attackers"] >= overload_n)
                            & (blk["n_defenders"] <= overload_max_defenders)
                            & (blk["n_visible"] >= overload_min_visible)
-                           & (blk["n_visible_opp"] >= overload_min_visible),
+                           & (blk["n_visible_opp"] >= overload_min_visible)
+                           & ~blk["dead_ball"],
                            overload_min_s, 2 * sample_every),
         "build_up": (blk["in_possession"] & (blk["ball_x_own"] <= -opp_third)
                      & (blk["centroid_x"] >= build_up_min_centroid_x)
@@ -341,6 +342,8 @@ def _runs(hits: pd.DataFrame, label: str, min_s: float, step: int, fps: float,
             if label == "low_block" and (
                 not bool(r["out_of_possession"].any()) or float(r["in_possession"].mean()) > 0.65
             ):
+                continue
+            if label == "flank_overload" and bool(r["out_of_possession"].all()):
                 continue
             out.append({
                 "label": label, "team": team, "period": int(period),

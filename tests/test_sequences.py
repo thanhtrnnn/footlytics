@@ -117,7 +117,8 @@ AWAY_THIN_FLANK = [(30.0, 22.0), (35.0, 18.0), (35.0, -15.0), (35.0, -5.0), (35.
 
 
 def test_flank_overload_is_found_with_its_side_and_counts():
-    st, poss = _match(HOME_OVERLOAD, AWAY_THIN_FLANK, ball=(28.0, 25.0), status="HOME", seconds=6)
+    st, poss = _match(_jog(HOME_OVERLOAD), _jog(AWAY_THIN_FLANK), ball=_passing(28.0),
+                      status="HOME", seconds=6)
     seq = detect_sequences(st, poss)
     ov = seq[seq["label"] == "flank_overload"]
     assert len(ov) == 1
@@ -130,11 +131,23 @@ def test_flank_overload_is_found_with_its_side_and_counts():
 def test_flank_overload_uses_each_teams_own_attacking_frame():
     # Mirror the whole picture: away now attacks -x, so its right flank is y < 0.
     mirror = lambda ps: [(-x, -y) for x, y in ps]
-    st, poss = _match(mirror(AWAY_THIN_FLANK), mirror(HOME_OVERLOAD), ball=(-28.0, -25.0),
-                      status="AWAY", seconds=6)
+    st, poss = _match(_jog(mirror(AWAY_THIN_FLANK)), _jog(mirror(HOME_OVERLOAD)),
+                      ball=_passing(-28.0), status="AWAY", seconds=6)
     ov = detect_sequences(st, poss).query("label == 'flank_overload'")
     assert len(ov) == 1
     assert ov.iloc[0]["team"] == Team.AWAY.value and ov.iloc[0]["flank"] == "right"
+
+
+def test_no_flank_overload_during_stoppage_or_out_of_possession():
+    # Injury/foul stoppage: players stand still around a downed player on the wing.
+    st_stop, poss_stop = _match(HOME_OVERLOAD, AWAY_THIN_FLANK, ball=(28.0, 25.0),
+                                status="HOME", seconds=6)
+    assert (detect_sequences(st_stop, poss_stop)["label"] != "flank_overload").all()
+
+    # Pressing trap: opponent holds possession 100% of the window (not an attacking overload).
+    st_oop, poss_oop = _match(_jog(HOME_OVERLOAD), _jog(AWAY_THIN_FLANK), ball=_passing(28.0),
+                              status="AWAY", seconds=6)
+    assert (detect_sequences(st_oop, poss_oop)["label"] != "flank_overload").all()
 
 
 def test_no_flank_overload_when_the_defence_matches_the_numbers():
