@@ -248,17 +248,26 @@ def assemble_match_states(
     home: str = "HOME",
     away: str = "AWAY",
     align_teams: bool = True,
+    home_defends: str | None = None,
 ) -> MatchState:
     """Concatenate per-chunk MatchStates into one monotonic, multi-period MatchState.
 
     When `align_teams=True`, resolves per-chunk k-means HOME/AWAY label flips so `HOME` attacks
     the same direction throughout each half and switches ends across odd/even periods.
+    Pass `home_defends='left'` or `'right'` (Period 1 defending goal) to pin `HOME` to the
+    physical club defending that side at 1st-half kickoff instead of k-means cluster 0.
     """
     if not chunk_states:
         raise ValueError("no chunk states to assemble")
 
     anchor_period: int | None = None
     anchor_dir: int | None = None
+    if home_defends is not None:
+        side = home_defends.strip().lower()
+        if side not in ("left", "right"):
+            raise ValueError(f"home_defends must be 'left' or 'right', got {home_defends!r}")
+        anchor_period = 1
+        anchor_dir = 1 if side == "left" else -1
     swap_map = {Team.HOME.value: Team.AWAY.value, Team.AWAY.value: Team.HOME.value}
 
     parts: list[pd.DataFrame] = []
@@ -329,6 +338,7 @@ def run_match(
     gate_px: float = 25.0,
     home: str = "HOME",
     away: str = "AWAY",
+    home_defends: str | None = None,
     ball_link: bool = True,
     ball_detector: str = "rtdetr",
     ball_weights_dir: str | None = None,
@@ -505,7 +515,12 @@ def run_match(
         )
 
     full_state = assemble_match_states(
-        chunk_states, eff_fps=eff_fps, match_id=video.stem, home=home, away=away
+        chunk_states,
+        eff_fps=eff_fps,
+        match_id=video.stem,
+        home=home,
+        away=away,
+        home_defends=home_defends,
     )
     full_state.save(out)
     if all_calib_sources:

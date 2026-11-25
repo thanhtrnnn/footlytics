@@ -154,6 +154,20 @@ def test_assemble_match_states_offsets_ids_frames_and_aligns_teams():
     assert set(p1["track_id"]).isdisjoint(set(p2["track_id"]))
     assert int(p1["shot"].iloc[0]) != int(p2["shot"].iloc[0])
 
+    # Explicit `--home-defends right` pins HOME to the club defending +50 in Period 1 (-50 in P2)
+    pinned = assemble_match_states(
+        [
+            (s1a, _chunk_state(-50.0, 50.0)),
+            (s1b, _chunk_state(50.0, -50.0)),
+            (s2a, _chunk_state(-50.0, 50.0)),
+        ],
+        25.0, "M", "PVFCAND", "HANOI", home_defends="right",
+    )
+    assert (pinned.tracks[pinned.tracks["period"] == 1].query("team == 'home'")["x"] == 50.0).all()
+    assert (pinned.tracks[pinned.tracks["period"] == 2].query("team == 'home'")["x"] == -50.0).all()
+    with pytest.raises(ValueError, match="home_defends"):
+        assemble_match_states([(s1a, _chunk_state(-50.0, 50.0))], 25.0, "M", home_defends="north")
+
 
 def test_run_match_checkpoints_resumes_and_replays_cpu(tmp_path: Path, monkeypatch):
     from footlytics.bench import runner
