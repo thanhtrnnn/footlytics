@@ -36,7 +36,7 @@ _FLOAT_COLS = (
     "ball_dist_m",
     "retreat_mps",
 )
-SEARCH_COLUMNS = ("match_id", "home_team", "away_team", *SEQUENCE_COLUMNS)
+SEARCH_COLUMNS = ("match_id", "home_team", "away_team", "club", "opponent", *SEQUENCE_COLUMNS)
 SORTABLE_COLUMNS = frozenset(SEARCH_COLUMNS)
 
 
@@ -118,6 +118,16 @@ def _read_sequences_df(entry: MatchEntry) -> pd.DataFrame:
     df.insert(0, "match_id", entry.match_id)
     df.insert(1, "home_team", entry.home)
     df.insert(2, "away_team", entry.away)
+    clubs = [
+        entry.home if t == "home" else (entry.away if t == "away" else "")
+        for t in df["team"]
+    ]
+    opponents = [
+        entry.away if t == "home" else (entry.home if t == "away" else "")
+        for t in df["team"]
+    ]
+    df.insert(3, "club", clubs)
+    df.insert(4, "opponent", opponents)
     return df[list(SEARCH_COLUMNS)]
 
 
@@ -126,6 +136,8 @@ def _empty_sequences_df() -> pd.DataFrame:
         "match_id": pd.Series(dtype="object"),
         "home_team": pd.Series(dtype="object"),
         "away_team": pd.Series(dtype="object"),
+        "club": pd.Series(dtype="object"),
+        "opponent": pd.Series(dtype="object"),
     }
     for col in SEQUENCE_COLUMNS:
         if col in _STRING_COLS:
@@ -178,6 +190,7 @@ def _build_where(
     *,
     match: Optional[str] = None,
     team: Optional[str] = None,
+    club: Optional[str] = None,
     label: Optional[str] = None,
     period: Optional[int] = None,
     min_duration: Optional[float] = None,
@@ -195,6 +208,9 @@ def _build_where(
     if team is not None:
         clauses.append("team = ?")
         params.append(team)
+    if club is not None:
+        clauses.append("LOWER(club) = LOWER(?)")
+        params.append(club)
     if label is not None:
         clauses.append("label = ?")
         params.append(label)
@@ -228,18 +244,22 @@ def summarize_sequences(
     *,
     match: Optional[str] = None,
     team: Optional[str] = None,
+    club: Optional[str] = None,
     label: Optional[str] = None,
     period: Optional[int] = None,
     min_duration: Optional[float] = None,
     by_match: bool = True,
 ) -> pd.DataFrame:
-    """Aggregate count, total duration, and mean duration per tactical label and team."""
+    """Aggregate count, total duration, and mean duration per tactical label and team/club."""
     con = build_query_db(roots)
     try:
         where_sql, params = _build_where(
-            match=match, team=team, label=label, period=period, min_duration=min_duration
+            match=match, team=team, club=club, label=label, period=period, min_duration=min_duration
         )
-        group_cols = ["match_id", "team", "label"] if by_match else ["team", "label"]
+        if club is not None:
+            group_cols = ["match_id", "club", "label"] if by_match else ["club", "label"]
+        else:
+            group_cols = ["match_id", "team", "label"] if by_match else ["team", "label"]
         group_expr = ", ".join(group_cols)
         sql = (
             f"SELECT {group_expr}, "
@@ -260,6 +280,7 @@ def search_sequences(
     *,
     match: Optional[str] = None,
     team: Optional[str] = None,
+    club: Optional[str] = None,
     label: Optional[str] = None,
     period: Optional[int] = None,
     min_duration: Optional[float] = None,
@@ -283,6 +304,7 @@ def search_sequences(
         where_sql, params = _build_where(
             match=match,
             team=team,
+            club=club,
             label=label,
             period=period,
             min_duration=min_duration,

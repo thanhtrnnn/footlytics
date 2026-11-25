@@ -344,6 +344,7 @@ def query_summary(
     paths: list[Path] = typer.Argument(..., exists=True, help="Match directory or parent output root."),
     match: Optional[str] = typer.Option(None, help="Filter by match_id."),
     team: Optional[str] = typer.Option(None, help="Filter by team (home | away)."),
+    club: Optional[str] = typer.Option(None, help="Filter by club name across home and away fixtures."),
     label: Optional[str] = typer.Option(None, help="Filter by sequence label."),
     period: Optional[int] = typer.Option(None, help="Filter by period."),
     min_duration: Optional[float] = typer.Option(None, help="Minimum duration in seconds."),
@@ -354,7 +355,7 @@ def query_summary(
     from .analytics.query import summarize_sequences
 
     df = summarize_sequences(
-        paths, match=match, team=team, label=label, period=period,
+        paths, match=match, team=team, club=club, label=label, period=period,
         min_duration=min_duration, by_match=by_match,
     )
     if as_json:
@@ -371,6 +372,7 @@ def query_search(
     paths: list[Path] = typer.Argument(..., exists=True, help="Match directory or parent output root."),
     match: Optional[str] = typer.Option(None, help="Filter by match_id."),
     team: Optional[str] = typer.Option(None, help="Filter by team (home | away)."),
+    club: Optional[str] = typer.Option(None, help="Filter by club name across home and away fixtures."),
     label: Optional[str] = typer.Option(None, help="Filter by sequence label."),
     period: Optional[int] = typer.Option(None, help="Filter by period."),
     min_duration: Optional[float] = typer.Option(None, help="Minimum duration in seconds."),
@@ -390,7 +392,7 @@ def query_search(
 
     try:
         df = search_sequences(
-            paths, match=match, team=team, label=label, period=period,
+            paths, match=match, team=team, club=club, label=label, period=period,
             min_duration=min_duration, start_s=start_s, end_s=end_s,
             response=response, flank=flank, min_pressers=min_pressers,
             sort_by=sort_by, descending=desc, limit=limit,
@@ -415,13 +417,59 @@ def query_search(
         typer.echo("No matching sequences.")
         return
     view_cols = [
-        "match_id", "label", "team", "period", "start_s", "end_s", "duration_s",
+        "match_id", "club", "label", "team", "period", "start_s", "end_s", "duration_s",
         "def_line_x", "compactness_m", "flank", "n_pressers", "response",
     ]
     view = df[view_cols].copy()
     for c in ("start_s", "end_s", "duration_s", "def_line_x", "compactness_m"):
         view[c] = view[c].round(2)
     typer.echo(view.to_string(index=False))
+
+
+pack_app = typer.Typer(help="Export club-ready Opposition & Match Packs (clips, Sportscode XML, dossier)")
+app.add_typer(pack_app, name="pack")
+
+
+@pack_app.command("export")
+def pack_export_cmd(
+    paths: list[Path] = typer.Argument(..., exists=True, help="Match output directory or parent root."),
+    out: Path = typer.Option(..., help="Destination directory for the exported pack."),
+    club: Optional[str] = typer.Option(None, help="Scouted club name across home/away fixtures (e.g. PVFCAND)."),
+    team: Optional[str] = typer.Option(None, help="Side filter for single-match packs (home | away)."),
+    label: Optional[str] = typer.Option(None, help="Single tactical label filter."),
+    verified_only: bool = typer.Option(False, "--verified-only", help="Export only sequences marked 'right' in marks.json."),
+    video: Optional[Path] = typer.Option(None, exists=True, dir_okay=False, help="Source match video (single match)."),
+    video_dir: Optional[Path] = typer.Option(None, exists=True, file_okay=False, help="Folder of <match_id>.mp4 videos."),
+    clips: bool = typer.Option(True, "--clips/--no-clips", help="Cut H.264 MP4 clips with 2D radar PiP when video is available."),
+    pre_roll_s: float = typer.Option(3.0, help="Seconds of pre-roll context before sequence start."),
+    post_roll_s: float = typer.Option(2.0, help="Seconds of post-roll context after sequence end."),
+    max_clips: Optional[int] = typer.Option(None, help="Optional cap on exported sequences/clips."),
+    gpu_hourly_usd: float = typer.Option(0.80, help="Cloud GPU hourly USD rate for unit-economics reporting."),
+    operator_minutes: Optional[float] = typer.Option(None, help="Logged internal operator QA minutes."),
+) -> None:
+    """Export playlist.csv, sportscode.xml, dossier.md/html, and optional radar-PiP MP4 clips."""
+    from .analytics.pack import export_pack
+
+    try:
+        manifest = export_pack(
+            paths,
+            out,
+            club=club,
+            team=team,
+            label=label,
+            verified_only=verified_only,
+            video=video,
+            video_dir=video_dir,
+            export_clips=clips,
+            pre_roll_s=pre_roll_s,
+            post_roll_s=post_roll_s,
+            max_clips=max_clips,
+            gpu_hourly_usd=gpu_hourly_usd,
+            operator_minutes=operator_minutes,
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    typer.echo(json.dumps(manifest["economics"], indent=2))
 
 
 if __name__ == "__main__":
