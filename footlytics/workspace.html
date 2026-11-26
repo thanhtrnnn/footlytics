@@ -1,0 +1,1184 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Footlytics — Tactical Query Workspace</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0e1318;
+    --surface: #151c24;
+    --surface-2: #1b242f;
+    --line: #273342;
+    --line-strong: #37475b;
+    --text: #e6edf5;
+    --muted: #93a3b5;
+    --accent: #22c55e;
+    --accent-soft: rgba(34, 197, 94, 0.14);
+    --amber: #f59e0b;
+    --coral: #fb7185;
+    --info: #38bdf8;
+    --danger: #ef4444;
+    --pitch-dark: #153822;
+    --pitch-line: #a7cbb2;
+  }
+  * { box-sizing: border-box; }
+  ::selection { background: rgba(34, 197, 94, 0.28); color: #fff; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    caret-color: var(--accent);
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 4px; }
+  :focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+
+  header.topbar {
+    flex: none;
+    height: 48px;
+    padding: 0 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .brand { font-size: 14px; font-weight: 700; letter-spacing: -0.02em; color: var(--text); }
+  .brand span { color: var(--accent); font-weight: 600; margin-left: 6px; font-size: 12px; }
+  .summary-stat {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .summary-stat strong { color: var(--text); font-weight: 600; }
+  .save-pill {
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    background: var(--bg);
+    user-select: none;
+  }
+  .save-pill[data-state="saved"] { color: var(--accent); border-color: rgba(34, 197, 94, 0.35); }
+  .save-pill[data-state="saving"] { color: var(--amber); border-color: rgba(245, 158, 11, 0.45); }
+  .save-pill[data-state="failed"] { color: #fff; background: #7f1d1d; border-color: var(--danger); cursor: pointer; }
+
+  section.filters {
+    flex: none;
+    padding: 8px 16px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    align-items: end;
+  }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .field label { font-size: 11px; font-weight: 600; color: var(--muted); }
+  select, input, button, textarea {
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 9px;
+    transition: border-color 160ms ease, background-color 160ms ease;
+  }
+  select:hover, input:hover, button:hover { border-color: var(--line-strong); }
+  button { cursor: pointer; background: var(--surface); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+  button:hover { background: var(--surface-2); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button.primary { background: #14532d; border-color: #22c55e; color: #f0fdf4; }
+  button.primary:hover { background: #166534; }
+  input.num-in { width: 86px; font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  main.workspace {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 440px minmax(0, 1fr);
+  }
+  @media (max-width: 980px) {
+    body { overflow: auto; }
+    main.workspace { grid-template-columns: 1fr; height: auto; }
+  }
+
+  aside.playlist-pane {
+    background: var(--surface);
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .label-strip {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .lbl-chip {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .lbl-chip[data-active="true"] {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--text);
+  }
+
+  ul.seq-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    flex: 1;
+  }
+  ul.seq-list li {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 3px 10px;
+    transition: background-color 140ms ease;
+  }
+  ul.seq-list li:hover { background: var(--surface-2); }
+  ul.seq-list li[data-current="true"] {
+    background: #1b2b24;
+    box-shadow: inset 1px 0 0 var(--accent);
+  }
+  .seq-top { display: flex; align-items: center; gap: 7px; font-weight: 600; }
+  .clock-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    color: var(--text);
+  }
+  .club-tag { font-weight: 700; color: #f8fafc; }
+  .vs-dim { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .seq-sub {
+    color: var(--muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .tag-pill {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+  }
+  .mp4-badge { color: var(--info); font-size: 11px; font-weight: 600; }
+  .verdict-dot {
+    grid-row: 1 / span 2;
+    grid-column: 2;
+    align-self: center;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  li[data-v="right"] .verdict-dot { color: var(--accent); }
+  li[data-v="wrong"] .verdict-dot { color: var(--danger); }
+  li[data-v="unsure"] .verdict-dot { color: var(--info); }
+
+  .empty-state {
+    padding: 28px 18px;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.6;
+  }
+
+  section.stage-pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px 16px;
+    gap: 12px;
+  }
+  .stage-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .stage-title { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+  .stage-meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .view-modes { display: flex; gap: 6px; }
+  .view-modes button[data-on="true"] { border-color: var(--info); color: var(--info); background: rgba(56, 189, 248, 0.1); }
+
+  .media-grid {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    gap: 12px;
+    align-items: stretch;
+  }
+  .media-grid[data-mode="radar"] { grid-template-columns: 1fr; }
+  .media-grid[data-mode="radar"] .video-box { display: none; }
+  .media-grid[data-mode="video"] { grid-template-columns: 1fr; }
+  .media-grid[data-mode="video"] .radar-box { display: none; }
+  @media (max-width: 1220px) { .media-grid { grid-template-columns: 1fr; } }
+
+  .video-box, .radar-box {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  video#player { width: 100%; max-height: 46vh; aspect-ratio: 16 / 9; background: #000; display: block; margin: 0 auto; }
+  .no-video-banner {
+    aspect-ratio: 16 / 9;
+    max-height: 46vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    color: var(--muted);
+    text-align: center;
+    background: #0b0f14;
+  }
+  canvas#radar { width: 100%; max-height: 46vh; aspect-ratio: 105 / 74; object-fit: contain; background: var(--pitch-dark); display: block; margin: 0 auto; }
+  .media-grid[data-mode="radar"] canvas#radar,
+  .media-grid[data-mode="video"] video#player { width: auto; max-width: 100%; height: 46vh; }
+
+  .transport {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+  input#scrubber { flex: 1; accent-color: var(--accent); padding: 0; }
+  .mono-readout {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    color: var(--muted);
+    min-width: 155px;
+    text-align: right;
+  }
+
+  .metrics-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .metric-item span { color: var(--muted); font-size: 11px; display: block; }
+  .metric-item strong { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+
+  .review-box {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .verdict-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button.v-btn { min-width: 108px; justify-content: center; }
+  button.v-btn[data-v="right"][data-on="true"] { background: #14532d; border-color: var(--accent); color: #fff; }
+  button.v-btn[data-v="wrong"][data-on="true"] { background: #7f1d1d; border-color: var(--danger); color: #fff; }
+  button.v-btn[data-v="unsure"][data-on="true"] { background: #0c4a6e; border-color: var(--info); color: #fff; }
+  textarea#note { width: 100%; min-height: 54px; resize: vertical; background: var(--bg); }
+  .shortcut-hint { color: var(--muted); font-size: 11px; }
+  kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    border: 1px solid var(--line-strong);
+    background: var(--bg);
+  }
+  #err-msg { color: var(--danger); font-size: 12px; min-height: 16px; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">FOOTLYTICS <span>TACTICAL WORKSPACE</span></div>
+  <div class="summary-stat" id="summary-stat">Loading sequences...</div>
+  <button id="btn-xml" title="Download Hudl Sportscode / LongoMatch XML for current filter">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    Sportscode XML
+  </button>
+  <button id="btn-csv" title="Download CSV playlist for current filter">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+    Playlist CSV
+  </button>
+  <div class="save-pill" id="save-pill" data-state="saved">Saved</div>
+</header>
+
+<section class="filters" aria-label="Tactical filters">
+  <div class="field"><label for="f-club">CLB (Club)</label><select id="f-club"></select></div>
+  <div class="field"><label for="f-opp">Đối thủ (Opponent)</label><select id="f-opp"></select></div>
+  <div class="field"><label for="f-match">Trận (Match)</label><select id="f-match"></select></div>
+  <div class="field"><label for="f-label">Mẫu chiến thuật (Pattern)</label><select id="f-label"></select></div>
+  <div class="field"><label for="f-period">Hiệp</label>
+    <select id="f-period"><option value="all">Tất cả</option><option value="1">Hiệp 1</option><option value="2">Hiệp 2</option></select>
+  </div>
+  <div class="field"><label for="f-verdict">Trạng thái</label>
+    <select id="f-verdict">
+      <option value="all">Tất cả (trừ Sai)</option>
+      <option value="has_clip">Có sẵn MP4</option>
+      <option value="right">Đã duyệt Đúng</option>
+      <option value="unmarked">Chưa duyệt</option>
+      <option value="unsure">Chưa chắc</option>
+      <option value="wrong">Đã đánh dấu Sai</option>
+    </select>
+  </div>
+  <div class="field"><label for="f-def">Line max (m)</label><input class="num-in" id="f-def" type="number" step="1" placeholder="-22.5"></div>
+  <div class="field"><label for="f-comp">Compact max (m)</label><input class="num-in" id="f-comp" type="number" step="0.5" placeholder="14.0"></div>
+  <div class="field"><label for="f-press">Pressers &gt;=</label><input class="num-in" id="f-press" type="number" min="0" max="11" step="1" placeholder="0"></div>
+  <div class="field"><label for="f-resp">Phản ứng mất bóng</label>
+    <select id="f-resp">
+      <option value="all">Tất cả</option>
+      <option value="counter_press">Counter-press</option>
+      <option value="retreat">Lùi khối (Retreat)</option>
+      <option value="hold">Giữ cự ly (Hold)</option>
+    </select>
+  </div>
+  <div class="field"><label for="f-flank">Hành lang</label>
+    <select id="f-flank"><option value="all">Tất cả</option><option value="right">Cánh phải</option><option value="left">Cánh trái</option></select>
+  </div>
+  <div class="field"><label for="f-dur">Thời lượng &gt;= (s)</label><input class="num-in" id="f-dur" type="number" min="0" step="1" placeholder="0"></div>
+  <button id="btn-reset">Reset</button>
+</section>
+
+<main class="workspace">
+  <aside class="playlist-pane">
+    <div class="label-strip" id="label-strip"></div>
+    <ul class="seq-list" id="seq-list"></ul>
+  </aside>
+
+  <section class="stage-pane">
+    <div class="stage-header">
+      <div>
+        <div class="stage-title" id="stage-title">Chọn một tình huống chiến thuật</div>
+        <div class="stage-meta" id="stage-meta"></div>
+      </div>
+      <div class="view-modes">
+        <button id="vm-split" data-on="true">Video + Radar 2D</button>
+        <button id="vm-radar" data-on="false">Radar 2D</button>
+        <button id="vm-video" data-on="false">Video</button>
+      </div>
+    </div>
+
+    <div class="media-grid" id="media-grid" data-mode="split">
+      <div class="video-box">
+        <video id="player" controls preload="metadata"></video>
+        <div class="no-video-banner" id="no-video" style="display:none">
+          Chưa cắt sẵn file MP4 cho tình huống này — đang phát trực tiếp quỹ đạo 2D Radar từ dữ liệu Match State.
+        </div>
+      </div>
+      <div class="radar-box">
+        <canvas id="radar" width="840" height="592"></canvas>
+      </div>
+    </div>
+
+    <div class="transport">
+      <button id="btn-play" class="primary">Play / Pause</button>
+      <button id="btn-prev">Prev</button>
+      <button id="btn-next">Next</button>
+      <input id="scrubber" type="range" min="0" max="1000" value="0">
+      <select id="speed-sel" aria-label="Playback speed">
+        <option value="0.5">0.5x</option>
+        <option value="1" selected>1.0x</option>
+        <option value="1.5">1.5x</option>
+      </select>
+      <div class="mono-readout" id="time-readout">00:00 / 00:00</div>
+    </div>
+
+    <div class="metrics-bar" id="metrics-bar"></div>
+
+    <div class="review-box">
+      <div class="verdict-row">
+        <button class="v-btn" data-v="right" id="b-right">Đúng · Right (R)</button>
+        <button class="v-btn" data-v="wrong" id="b-wrong">Sai · Wrong (W)</button>
+        <button class="v-btn" data-v="unsure" id="b-unsure">Chưa chắc · Unsure (U)</button>
+        <span class="shortcut-hint">Phím tắt: <kbd>R</kbd> Đúng &middot; <kbd>W</kbd> Sai &middot; <kbd>U</kbd> Chưa chắc &middot; <kbd>Space</kbd> Phát/Dừng &middot; <kbd>Up</kbd>/<kbd>Down</kbd> Chuyển pha</span>
+      </div>
+      <textarea id="note" placeholder="Ghi chú chuyên môn của Ban Huấn luyện / Analyst (tự động lưu vào marks.json)..."></textarea>
+      <div id="err-msg"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const DATA = /*WORKSPACE_DATA*/null;
+const $ = (id) => document.getElementById(id);
+const player = $("player");
+const canvas = $("radar");
+const ctx = canvas.getContext("2d");
+
+const state = {
+  sequences: DATA.sequences || [],
+  curUid: null,
+  viewMode: "split",
+  userPickedMode: false,
+  radarData: null,
+  radarCache: new Map(),
+  radarLoadingUid: null,
+  simPlaying: false,
+  simTimeS: 0,
+  lastTickMs: 0,
+  speed: 1.0,
+  fullVideoStopS: null,
+  drafts: {},
+};
+
+function fmtClock(sec) {
+  const s = Math.max(0, Math.round(sec));
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  return hh > 0
+    ? `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
+    : `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
+
+function fmtMatchClock(stateS, period, pStart) {
+  const p = Math.max(1, Number(period) || 1);
+  const half = 2700;
+  const elapsed = pStart !== null && pStart !== undefined
+    ? Math.max(0, stateS - Number(pStart))
+    : (p >= 2 && stateS >= (p - 1) * half ? stateS - (p - 1) * half : Math.max(0, stateS));
+  const s = Math.round(elapsed);
+  if (p === 1) {
+    if (s <= half) return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+    const ex = s - half;
+    return `45+${String(Math.floor(ex / 60)).padStart(2, "0")}:${String(ex % 60).padStart(2, "0")}`;
+  }
+  if (p === 2) {
+    if (s <= half) {
+      const tot = half + s;
+      return `${String(Math.floor(tot / 60)).padStart(2, "0")}:${String(tot % 60).padStart(2, "0")}`;
+    }
+    const ex = s - half;
+    return `90+${String(Math.floor(ex / 60)).padStart(2, "0")}:${String(ex % 60).padStart(2, "0")}`;
+  }
+  const tot = (p - 1) * half + s;
+  return `${String(Math.floor(tot / 60)).padStart(2, "0")}:${String(tot % 60).padStart(2, "0")}`;
+}
+
+function queryParamsObject() {
+  return {
+    club: $("f-club").value,
+    opponent: $("f-opp").value,
+    match_id: $("f-match").value,
+    label: $("f-label").value,
+    period: $("f-period").value,
+    verdict: $("f-verdict").value,
+    max_def_line: $("f-def").value.trim(),
+    max_compactness: $("f-comp").value.trim(),
+    min_pressers: $("f-press").value.trim(),
+    response: $("f-resp").value,
+    flank: $("f-flank").value,
+    min_duration: $("f-dur").value.trim(),
+  };
+}
+
+function filteredSequences() {
+  const q = queryParamsObject();
+  return state.sequences.filter((r) => {
+    if (q.club !== "all" && r.club.toLowerCase() !== q.club.toLowerCase()) return false;
+    if (q.opponent !== "all" && r.opponent.toLowerCase() !== q.opponent.toLowerCase()) return false;
+    if (q.match_id !== "all" && r.match_id !== q.match_id) return false;
+    if (q.label !== "all" && r.label !== q.label) return false;
+    if (q.period !== "all" && String(r.period) !== q.period) return false;
+    if (q.verdict === "all") {
+      if (r.verdict === "wrong") return false;
+    } else if (q.verdict === "has_clip") {
+      if (!r.has_clip) return false;
+    } else if (q.verdict === "unmarked") {
+      if (r.verdict !== "") return false;
+    } else if (r.verdict !== q.verdict) {
+      return false;
+    }
+    if (q.response !== "all" && r.response !== q.response) return false;
+    if (q.flank !== "all" && r.flank !== q.flank) return false;
+    if (q.min_duration !== "" && r.duration_s < Number(q.min_duration)) return false;
+    if (q.min_pressers !== "" && (r.n_pressers === null || r.n_pressers < Number(q.min_pressers))) return false;
+    if (q.max_def_line !== "" && (r.def_line_x === null || r.def_line_x > Number(q.max_def_line))) return false;
+    if (q.max_compactness !== "" && (r.compactness_m === null || r.compactness_m > Number(q.max_compactness))) return false;
+    return true;
+  });
+}
+
+function currentSeq() {
+  return state.sequences.find((s) => s.uid === state.curUid) || null;
+}
+
+function hasPlayableVideo(s) {
+  return Boolean(s && (s.clip_url || s.video_url));
+}
+
+function applyViewMode(mode, byUser = false) {
+  state.viewMode = mode;
+  if (byUser) state.userPickedMode = true;
+  $("media-grid").dataset.mode = mode;
+  $("vm-split").dataset.on = String(mode === "split");
+  $("vm-radar").dataset.on = String(mode === "radar");
+  $("vm-video").dataset.on = String(mode === "video");
+}
+
+// ---- Persistence queue ----
+let saveChain = Promise.resolve();
+let inflight = 0;
+let failedOps = [];
+function setSavePill(st) {
+  const el = $("save-pill");
+  el.dataset.state = st;
+  el.textContent = st === "failed" ? "Save failed (retry)" : st === "saving" ? "Saving..." : "Saved";
+}
+function postJson(url, body) {
+  inflight++;
+  setSavePill("saving");
+  saveChain = saveChain.then(async () => {
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      $("err-msg").textContent = "";
+    } catch (e) {
+      failedOps.push([url, body]);
+      $("err-msg").textContent = "Lỗi lưu dữ liệu: " + e.message;
+    } finally {
+      inflight--;
+      if (!inflight) setSavePill(failedOps.length ? "failed" : "saved");
+    }
+  });
+}
+$("save-pill").addEventListener("click", () => {
+  if ($("save-pill").dataset.state !== "failed") return;
+  const retry = failedOps.slice();
+  failedOps = [];
+  retry.forEach(([u, b]) => postJson(u, b));
+});
+
+function markVerdict(v) {
+  const s = currentSeq();
+  if (!s) return;
+  const note = $("note").value;
+  s.verdict = v;
+  s.note = note;
+  delete state.drafts[s.uid];
+  postJson("/api/verdict", { uid: s.uid, verdict: v, note });
+  renderPlaylist();
+  renderSummary();
+  renderReviewControls(false);
+}
+
+let noteDebounce = null;
+function flushNote() {
+  clearTimeout(noteDebounce);
+  noteDebounce = null;
+  const s = currentSeq();
+  if (!s) return;
+  const txt = $("note").value;
+  if (!s.verdict) {
+    state.drafts[s.uid] = txt;
+    return;
+  }
+  if (s.note === txt) return;
+  s.note = txt;
+  postJson("/api/note", { uid: s.uid, note: txt });
+}
+$("note").addEventListener("input", () => {
+  const s = currentSeq();
+  if (!s) return;
+  if (!s.verdict) state.drafts[s.uid] = $("note").value;
+  clearTimeout(noteDebounce);
+  noteDebounce = setTimeout(flushNote, 450);
+});
+$("note").addEventListener("blur", flushNote);
+
+// ---- Radar fetching & Canvas drawing ----
+async function loadRadarFor(s) {
+  if (!s || !s.has_radar) {
+    state.radarData = null;
+    drawRadarFrame(s ? s.start_s : 0);
+    return;
+  }
+  if (state.radarCache.has(s.uid)) {
+    state.radarData = state.radarCache.get(s.uid);
+    drawRadarFrame(state.simTimeS);
+    return;
+  }
+  state.radarLoadingUid = s.uid;
+  try {
+    const qs = new URLSearchParams({
+      match_id: s.match_id,
+      start_s: String(s.start_s),
+      end_s: String(s.end_s),
+    });
+    const res = await fetch("/api/radar?" + qs.toString());
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    if (state.radarCache.size >= 40) {
+      const oldest = state.radarCache.keys().next().value;
+      state.radarCache.delete(oldest);
+    }
+    state.radarCache.set(s.uid, data);
+    if (state.curUid === s.uid) {
+      state.radarData = data;
+      drawRadarFrame(state.simTimeS);
+    }
+  } catch (e) {
+    $("err-msg").textContent = "Radar load warning: " + e.message;
+  }
+}
+
+function interpolateFrame(frames, t) {
+  if (!frames || !frames.length) return null;
+  if (t <= frames[0].t) return frames[0];
+  if (t >= frames[frames.length - 1].t) return frames[frames.length - 1];
+  let lo = 0, hi = frames.length - 1;
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    if (frames[mid].t <= t) lo = mid;
+    else hi = mid;
+  }
+  const f0 = frames[lo], f1 = frames[hi];
+  const dt = f1.t - f0.t;
+  const alpha = dt > 1e-4 ? Math.min(1, Math.max(0, (t - f0.t) / dt)) : 0;
+  const map1 = new Map();
+  for (const p of f1.p) map1.set(p[0], p);
+  const blended = [];
+  for (const p0 of f0.p) {
+    const p1 = map1.get(p0[0]);
+    if (p1 && Math.hypot(p1[3] - p0[3], p1[4] - p0[4]) < 6.0) {
+      blended.push([p0[0], p0[1], p0[2], p0[3] + alpha * (p1[3] - p0[3]), p0[4] + alpha * (p1[4] - p0[4])]);
+    } else if (alpha < 0.5) {
+      blended.push(p0);
+    }
+  }
+  let ball = f0.b;
+  if (f0.b && f1.b && Math.hypot(f1.b[0] - f0.b[0], f1.b[1] - f0.b[1]) < 15.0) {
+    ball = [f0.b[0] + alpha * (f1.b[0] - f0.b[0]), f0.b[1] + alpha * (f1.b[1] - f0.b[1])];
+  } else if (alpha >= 0.5) {
+    ball = f1.b;
+  }
+  return { t, p: blended, b: ball, loIdx: lo };
+}
+
+function drawRadarFrame(curMatchS) {
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = "#12311e";
+  ctx.fillRect(0, 0, W, H);
+
+  const s = currentSeq();
+  const rd = state.radarData;
+  const pitchL = rd ? rd.pitch_length : 105.0;
+  const pitchW = rd ? rd.pitch_width : 68.0;
+  const topBar = 42;
+  const padX = 34, padY = 24;
+  const pw = W - 2 * padX;
+  const ph = H - topBar - 2 * padY;
+  const toX = (xm) => padX + ((xm + pitchL / 2) / pitchL) * pw;
+  const toY = (ym) => topBar + padY + ((ym + pitchW / 2) / pitchW) * ph;
+
+  // Header bar
+  ctx.fillStyle = "#0b1117";
+  ctx.fillRect(0, 0, W, topBar);
+  const inLive = s ? curMatchS >= s.start_s && curMatchS <= s.end_s : false;
+  ctx.fillStyle = inLive ? "#16a34a" : "#334155";
+  ctx.fillRect(14, 9, 86, 24);
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "700 12px -apple-system, BlinkMacSystemFont, sans-serif";
+  ctx.fillText(inLive ? "LIVE SEQ" : "CONTEXT", 25, 25);
+
+  if (s) {
+    const mClk = fmtMatchClock(curMatchS, s.period, s.period_start_s);
+    ctx.fillStyle = "#e2e8f0";
+    ctx.font = "600 13px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.fillText(`H${s.period} ${mClk}  |  ${s.home_team} (cyan) vs ${s.away_team} (coral)  |  ${s.label_vi}`, 112, 25);
+  }
+
+  // Subtle turf mow bands (world-grounded pitch geometry)
+  for (let i = 0; i < 10; i++) {
+    if (i % 2 === 0) {
+      ctx.fillStyle = "rgba(255,255,255,0.022)";
+      ctx.fillRect(padX + (i * pw) / 10, topBar + padY, pw / 10, ph);
+    }
+  }
+
+  // Pitch markings
+  ctx.strokeStyle = "rgba(210, 232, 215, 0.72)";
+  ctx.lineWidth = 1.6;
+  ctx.strokeRect(padX, topBar + padY, pw, ph);
+  const midX = toX(0);
+  ctx.beginPath();
+  ctx.moveTo(midX, topBar + padY);
+  ctx.lineTo(midX, topBar + padY + ph);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(midX, toY(0), (9.15 / pitchL) * pw, 0, Math.PI * 2);
+  ctx.stroke();
+
+  for (const sign of [-1, 1]) {
+    const gx = toX(sign * (pitchL / 2));
+    const px = toX(sign * (pitchL / 2 - 16.5));
+    const sx = toX(sign * (pitchL / 2 - 5.5));
+    ctx.strokeRect(Math.min(gx, px), toY(-20.16), Math.abs(px - gx), toY(20.16) - toY(-20.16));
+    ctx.strokeRect(Math.min(gx, sx), toY(-9.16), Math.abs(sx - gx), toY(9.16) - toY(-9.16));
+  }
+
+  if (!rd || !rd.frames || !rd.frames.length) {
+    ctx.fillStyle = "rgba(226, 232, 240, 0.75)";
+    ctx.font = "500 13px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.fillText(s && s.has_radar ? "Đang tải quỹ đạo 2D Radar..." : "Không có dữ liệu quỹ đạo cho trận này.", padX + 18, topBar + padY + 30);
+    return;
+  }
+
+  const snap = interpolateFrame(rd.frames, curMatchS);
+  if (!snap) return;
+
+  // Short 1.0s motion trails
+  const trailStartIdx = Math.max(0, (snap.loIdx || 0) - 15);
+  const byTrack = new Map();
+  for (let k = trailStartIdx; k <= (snap.loIdx || 0); k++) {
+    for (const p of rd.frames[k].p) {
+      if (p[1] > 1) continue;
+      if (!byTrack.has(p[0])) byTrack.set(p[0], []);
+      byTrack.get(p[0]).push(p);
+    }
+  }
+  byTrack.forEach((pts) => {
+    if (pts.length < 2) return;
+    const tm = pts[pts.length - 1][1];
+    ctx.strokeStyle = tm === 0 ? "rgba(56, 189, 248, 0.42)" : "rgba(251, 113, 133, 0.42)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    pts.forEach((pt, idx) => {
+      const ux = toX(pt[3]), uy = toY(pt[4]);
+      if (idx === 0) ctx.moveTo(ux, uy);
+      else ctx.lineTo(ux, uy);
+    });
+    ctx.stroke();
+  });
+
+  // Players
+  for (const p of snap.p) {
+    const [, tm, role, xm, ym] = p;
+    const ux = toX(xm), uy = toY(ym);
+    if (role === 2 || tm === 2) {
+      ctx.fillStyle = "#cbd5e1";
+      ctx.beginPath();
+      ctx.arc(ux, uy, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
+    ctx.fillStyle = tm === 0 ? "#38bdf8" : tm === 1 ? "#fb7185" : "#94a3b8";
+    ctx.beginPath();
+    ctx.arc(ux, uy, role === 1 ? 8.0 : 7.0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = role === 1 ? 2.2 : 1.5;
+    ctx.strokeStyle = role === 1 ? "#fde047" : "#ffffff";
+    ctx.stroke();
+  }
+
+  // Ball
+  if (snap.b) {
+    const bx = toX(snap.b[0]), by = toY(snap.b[1]);
+    ctx.fillStyle = "#facc15";
+    ctx.beginPath();
+    ctx.arc(bx, by, 6.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = "#0f172a";
+    ctx.stroke();
+  }
+}
+
+// ---- Synchronized playback loop ----
+function syncBounds(s) {
+  return s ? [s.clip_start_s, s.clip_end_s] : [0, 1];
+}
+
+function currentMatchTimeFromVideo(s) {
+  if (!s) return 0;
+  if (s.clip_url) return s.clip_start_s + player.currentTime;
+  if (s.video_url) return player.currentTime - (s.video_offset_s || 0);
+  return state.simTimeS;
+}
+
+function seekMatchTime(targetMatchS) {
+  const s = currentSeq();
+  if (!s) return;
+  const [c0, c1] = syncBounds(s);
+  const clamped = Math.min(c1, Math.max(c0, targetMatchS));
+  state.simTimeS = clamped;
+  if (s.clip_url) {
+    player.currentTime = Math.max(0, clamped - c0);
+  } else if (s.video_url) {
+    player.currentTime = Math.max(0, clamped + (s.video_offset_s || 0));
+  }
+  updateTransportUI(clamped);
+  drawRadarFrame(clamped);
+}
+
+function updateTransportUI(curMatchS) {
+  const s = currentSeq();
+  if (!s) return;
+  const [c0, c1] = syncBounds(s);
+  const dur = Math.max(0.1, c1 - c0);
+  const rel = Math.min(dur, Math.max(0, curMatchS - c0));
+  $("scrubber").value = String(Math.round((rel / dur) * 1000));
+  const mClk = fmtMatchClock(curMatchS, s.period, s.period_start_s);
+  $("time-readout").textContent = `H${s.period} ${mClk} (${rel.toFixed(1)}s / ${dur.toFixed(1)}s)`;
+}
+
+function togglePlay() {
+  const s = currentSeq();
+  if (!s) return;
+  if (hasPlayableVideo(s) && state.viewMode !== "radar") {
+    if (player.paused) player.play().catch(() => {});
+    else player.pause();
+  } else {
+    const [, c1] = syncBounds(s);
+    if (!state.simPlaying && state.simTimeS >= c1 - 0.05) {
+      state.simTimeS = s.clip_start_s;
+    }
+    state.simPlaying = !state.simPlaying;
+    state.lastTickMs = performance.now();
+  }
+}
+
+function animLoop(nowMs) {
+  const s = currentSeq();
+  if (s) {
+    if (hasPlayableVideo(s) && state.viewMode !== "radar" && !player.paused) {
+      const curMatchS = currentMatchTimeFromVideo(s);
+      if (s.video_url && !s.clip_url && state.fullVideoStopS !== null && !player.paused && curMatchS >= state.fullVideoStopS) {
+        player.pause();
+      }
+      state.simTimeS = curMatchS;
+      updateTransportUI(curMatchS);
+      drawRadarFrame(curMatchS);
+    } else if (state.simPlaying) {
+      const dt = Math.min(0.1, Math.max(0, (nowMs - state.lastTickMs) / 1000)) * state.speed;
+      state.lastTickMs = nowMs;
+      state.simTimeS += dt;
+      if (state.simTimeS >= s.clip_end_s) {
+        state.simTimeS = s.clip_end_s;
+        state.simPlaying = false;
+      }
+      updateTransportUI(state.simTimeS);
+      drawRadarFrame(state.simTimeS);
+    }
+  }
+  requestAnimationFrame(animLoop);
+}
+
+// ---- Selection & UI rendering ----
+function selectSequence(uid, autoplay = false) {
+  flushNote();
+  state.curUid = uid;
+  state.simPlaying = false;
+  const s = currentSeq();
+  renderPlaylist();
+  renderStageHeader();
+  renderMetrics();
+  renderReviewControls(true);
+  if (!s) return;
+
+  state.simTimeS = autoplay ? s.clip_start_s : s.start_s;
+  if (!state.userPickedMode) {
+    applyViewMode(hasPlayableVideo(s) ? "split" : "radar", false);
+  }
+
+  if (s.clip_url) {
+    $("no-video").style.display = "none";
+    player.style.display = "block";
+    player.src = s.clip_url;
+    player.playbackRate = state.speed;
+    state.fullVideoStopS = null;
+    if (!autoplay) {
+      const lead = Math.max(0, s.start_s - s.clip_start_s);
+      player.addEventListener("loadedmetadata", () => { player.currentTime = lead; }, { once: true });
+    } else {
+      player.play().catch(() => {});
+    }
+  } else if (s.video_url) {
+    $("no-video").style.display = "none";
+    player.style.display = "block";
+    const wantSrc = location.origin + s.video_url;
+    if (player.src !== wantSrc) player.src = s.video_url;
+    player.playbackRate = state.speed;
+    player.currentTime = Math.max(0, s.clip_start_s + (s.video_offset_s || 0));
+    state.fullVideoStopS = s.clip_end_s;
+    if (autoplay) player.play().catch(() => {});
+  } else {
+    player.pause();
+    player.removeAttribute("src");
+    player.style.display = "none";
+    $("no-video").style.display = "flex";
+    if (autoplay) {
+      state.simPlaying = true;
+      state.lastTickMs = performance.now();
+    }
+  }
+
+  updateTransportUI(state.simTimeS);
+  loadRadarFor(s);
+  document.querySelector(`#seq-list li[data-uid="${CSS.escape(uid)}"]`)?.scrollIntoView({ block: "nearest" });
+}
+
+function stepSelection(delta) {
+  const list = filteredSequences();
+  if (!list.length) return;
+  const idx = list.findIndex((x) => x.uid === state.curUid);
+  const nextIdx = Math.min(list.length - 1, Math.max(0, idx < 0 ? 0 : idx + delta));
+  selectSequence(list[nextIdx].uid, true);
+}
+
+function renderSummary() {
+  const list = filteredSequences();
+  const totalMin = (list.reduce((a, b) => a + b.duration_s, 0) / 60).toFixed(1);
+  const rightCount = list.filter((x) => x.verdict === "right").length;
+  const clipCount = list.filter((x) => x.has_clip).length;
+  $("summary-stat").innerHTML =
+    `<strong>${list.length}</strong> tình huống (<strong>${totalMin}</strong> phút) &middot; ` +
+    `MP4 sẵn có: <strong>${clipCount}</strong> &middot; Đã xác thực Đúng: <strong>${rightCount}</strong>`;
+
+  const strip = $("label-strip");
+  strip.textContent = "";
+  const activeLbl = $("f-label").value;
+  const counts = {};
+  for (const s of list) counts[s.label] = (counts[s.label] || 0) + 1;
+  for (const lbl of DATA.labels) {
+    const chip = document.createElement("button");
+    chip.className = "lbl-chip";
+    chip.dataset.active = String(activeLbl === lbl);
+    chip.textContent = `${lbl}: ${counts[lbl] || 0}`;
+    chip.addEventListener("click", () => {
+      $("f-label").value = $("f-label").value === lbl ? "all" : lbl;
+      onFilterChanged();
+    });
+    strip.append(chip);
+  }
+}
+
+function renderPlaylist() {
+  const ul = $("seq-list");
+  ul.textContent = "";
+  const list = filteredSequences();
+  if (!list.length) {
+    const div = document.createElement("div");
+    div.className = "empty-state";
+    div.textContent = "Không có tình huống nào khớp bộ lọc hiện tại. Bấm Reset để mở lại toàn bộ danh sách.";
+    ul.append(div);
+    return;
+  }
+  for (const s of list) {
+    const li = document.createElement("li");
+    li.dataset.uid = s.uid;
+    li.dataset.current = String(s.uid === state.curUid);
+    li.dataset.v = s.verdict || "";
+
+    const top = document.createElement("div");
+    top.className = "seq-top";
+    top.innerHTML =
+      `<span class="clock-code">H${s.period} ${s.match_clock}</span>` +
+      `<span class="club-tag">${s.club}</span>` +
+      `<span class="vs-dim">vs ${s.opponent}</span>`;
+
+    const sub = document.createElement("div");
+    sub.className = "seq-sub";
+    const mp4Html = s.has_clip ? `<span class="mp4-badge">MP4</span>` : "";
+    sub.innerHTML =
+      `<span class="tag-pill">${s.label}</span>` +
+      `<span>${s.duration_s.toFixed(1)}s</span>` +
+      `<span>${s.evidence_summary || ""}</span>` +
+      mp4Html;
+
+    const vd = document.createElement("div");
+    vd.className = "verdict-dot";
+    vd.textContent = s.verdict || "—";
+
+    li.append(top, sub, vd);
+    li.addEventListener("click", () => selectSequence(s.uid, true));
+    ul.append(li);
+  }
+}
+
+function renderStageHeader() {
+  const s = currentSeq();
+  if (!s) {
+    $("stage-title").textContent = "Không có tình huống được chọn";
+    $("stage-meta").textContent = "";
+    return;
+  }
+  $("stage-title").textContent = `${s.club} vs ${s.opponent} — ${s.label_vi}`;
+  $("stage-meta").textContent =
+    `Trận: ${s.match_id}  |  Hiệp ${s.period} đồng hồ trận ${s.match_clock} (video ${s.clock})  |  Thời lượng ${s.duration_s.toFixed(1)}s`;
+}
+
+function renderMetrics() {
+  const bar = $("metrics-bar");
+  bar.textContent = "";
+  const s = currentSeq();
+  if (!s) return;
+  const items = [
+    ["Chiều cao hàng thủ", s.def_line_x !== null ? `${s.def_line_x >= 0 ? "+" : ""}${s.def_line_x.toFixed(1)} m` : "n/a"],
+    ["Độ cô đặc (Compactness)", s.compactness_m !== null ? `${s.compactness_m.toFixed(1)} m` : "n/a"],
+    ["Áp sát bóng <= 10m", s.n_within_10m !== null ? `${s.n_within_10m} người` : "n/a"],
+    ["Đối phương pressing 1/3 sân", s.n_pressers !== null ? `${s.n_pressers} người` : "n/a"],
+    ["Phản ứng sau mất bóng", s.response || "—"],
+    ["Hành lang biên", s.flank ? `${s.flank} (${s.n_attackers || 0}v${s.n_defenders || 0})` : "—"],
+  ];
+  for (const [k, v] of items) {
+    const d = document.createElement("div");
+    d.className = "metric-item";
+    d.innerHTML = `<span>${k}</span><strong>${v}</strong>`;
+    bar.append(d);
+  }
+}
+
+function renderReviewControls(resetNote) {
+  const s = currentSeq();
+  const v = s ? s.verdict : "";
+  for (const k of ["right", "wrong", "unsure"]) {
+    $("b-" + k).dataset.on = String(v === k);
+  }
+  if (resetNote) {
+    $("note").value = s ? (s.verdict ? s.note || "" : state.drafts[s.uid] || "") : "";
+  }
+}
+
+function onFilterChanged() {
+  renderSummary();
+  renderPlaylist();
+  const list = filteredSequences();
+  if (list.length && !list.some((x) => x.uid === state.curUid)) {
+    selectSequence(list[0].uid, false);
+  }
+}
+
+function exportUrl(endpoint) {
+  const qs = new URLSearchParams(queryParamsObject());
+  window.location.href = `${endpoint}?${qs.toString()}`;
+}
+
+function init() {
+  const clubSel = $("f-club");
+  clubSel.add(new Option("Tất cả CLB", "all"));
+  DATA.clubs.forEach((c) => clubSel.add(new Option(c, c)));
+
+  const oppSel = $("f-opp");
+  oppSel.add(new Option("Tất cả đối thủ", "all"));
+  DATA.clubs.forEach((c) => oppSel.add(new Option(c, c)));
+
+  const matchSel = $("f-match");
+  matchSel.add(new Option("Tất cả trận (" + DATA.matches.length + ")", "all"));
+  DATA.matches.forEach((m) => matchSel.add(new Option(`${m.home} vs ${m.away} (${m.match_id})`, m.match_id)));
+
+  const lblSel = $("f-label");
+  lblSel.add(new Option("Tất cả 5 mẫu V1", "all"));
+  DATA.labels.forEach((l) => lblSel.add(new Option(DATA.label_vi[l] || l, l)));
+
+  ["f-club", "f-opp", "f-match", "f-label", "f-period", "f-verdict", "f-resp", "f-flank"].forEach((id) =>
+    $(id).addEventListener("change", onFilterChanged)
+  );
+  ["f-def", "f-comp", "f-press", "f-dur"].forEach((id) =>
+    $(id).addEventListener("input", onFilterChanged)
+  );
+
+  $("btn-reset").addEventListener("click", () => {
+    ["f-club", "f-opp", "f-match", "f-label", "f-period", "f-verdict", "f-resp", "f-flank"].forEach((id) => {
+      $(id).value = "all";
+    });
+    ["f-def", "f-comp", "f-press", "f-dur"].forEach((id) => { $(id).value = ""; });
+    onFilterChanged();
+  });
+
+  $("vm-split").addEventListener("click", () => applyViewMode("split", true));
+  $("vm-radar").addEventListener("click", () => applyViewMode("radar", true));
+  $("vm-video").addEventListener("click", () => applyViewMode("video", true));
+
+  $("btn-play").addEventListener("click", togglePlay);
+  $("btn-prev").addEventListener("click", () => stepSelection(-1));
+  $("btn-next").addEventListener("click", () => stepSelection(1));
+  $("speed-sel").addEventListener("change", () => {
+    state.speed = Number($("speed-sel").value) || 1.0;
+    player.playbackRate = state.speed;
+  });
+  $("scrubber").addEventListener("input", () => {
+    const s = currentSeq();
+    if (!s) return;
+    const [c0, c1] = syncBounds(s);
+    const frac = Number($("scrubber").value) / 1000;
+    seekMatchTime(c0 + frac * (c1 - c0));
+  });
+
+  ["right", "wrong", "unsure"].forEach((v) =>
+    $("b-" + v).addEventListener("click", () => markVerdict(v))
+  );
+  $("btn-xml").addEventListener("click", () => exportUrl("/api/export/sportscode.xml"));
+  $("btn-csv").addEventListener("click", () => exportUrl("/api/export/playlist.csv"));
+
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = e.target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+      if (e.key === "Escape") e.target.blur();
+      return;
+    }
+    const k = e.key.toLowerCase();
+    if (k === "r") { e.preventDefault(); markVerdict("right"); }
+    else if (k === "w") { e.preventDefault(); markVerdict("wrong"); }
+    else if (k === "u") { e.preventDefault(); markVerdict("unsure"); }
+    else if (k === "n" || k === "arrowdown") { e.preventDefault(); stepSelection(1); }
+    else if (k === "arrowup") { e.preventDefault(); stepSelection(-1); }
+    else if (k === " ") { e.preventDefault(); togglePlay(); }
+  });
+
+  renderSummary();
+  renderPlaylist();
+  const list = filteredSequences();
+  const initial = list.find((x) => x.has_clip) || list[0];
+  if (initial) selectSequence(initial.uid, false);
+  requestAnimationFrame(animLoop);
+}
+
+init();
+</script>
+</body>
+</html>

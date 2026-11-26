@@ -1,0 +1,18 @@
+# Commercial license-clean detector stack (Apache-2.0 RT-DETRv2 people + ball, zero Ultralytics).
+name: apache2-detector
+tasks:
+  - id: gsr-pipeline-apache2-valid-6
+    kind: gsr_pipeline
+    split: valid
+    clips: [SNGS-025, SNGS-028, SNGS-050, SNGS-056, SNGS-081, SNGS-086]
+    every: 10
+    detector:
+      people_detector: rtdetr
+      people_weights_dir: people-rtdetrv2/best
+      conf: 0.30
+      ball_detector: rtdetr
+      ball_weights_dir: ball-rtdetrv2-vl/best
+      ball_conf: 0.15
+    pipeline:
+      ball_link: true
+      ball_link_break_cost: 3.0

@@ -635,16 +635,25 @@ def _ball_weights(paths: BenchPaths, det_cfg: dict) -> str:
     return str(paths.root / "weights" / sub) if sub else str(paths.ball_detr_weights)
 
 
+def _people_weights(paths: BenchPaths, det_cfg: dict) -> Path:
+    """People detector weights: `people_weights_dir` overrides the default RT-DETRv2 directory."""
+    if det_cfg.get("people_detector") != "rtdetr":
+        return paths.detector_weights
+    sub = det_cfg.get("people_weights_dir")
+    return (paths.root / "weights" / sub) if sub else paths.people_detr_weights
+
+
 def _detector(paths: BenchPaths, det_cfg: dict):
     """One detector per process and settings (the people model plus the ball model)."""
     key = tuple(sorted(det_cfg.items()))
     if key not in _DETECTORS:
-        from ..perception.detect import Detector, DetectorConfig       # Ultralytics is heavy
+        from ..perception.detect import Detector, DetectorConfig
 
         _DETECTORS.clear()      # a suite comparing detector settings must not hold them all in VRAM
-        _DETECTORS[key] = Detector(paths.detector_weights, DetectorConfig(
+        _DETECTORS[key] = Detector(_people_weights(paths, det_cfg), DetectorConfig(
             tile=det_cfg.get("tile", 0), imgsz=det_cfg.get("imgsz", 1280),
             conf=det_cfg.get("conf", 0.25), device="cuda", half=True,
+            people_detector=det_cfg.get("people_detector", "yolo"),
             ball_detector=det_cfg.get("ball_detector", "yolo"),
             ball_weights=_ball_weights(paths, det_cfg),
             ball_conf=det_cfg.get("ball_conf", 0.10),

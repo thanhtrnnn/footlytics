@@ -126,6 +126,9 @@ class DetectorConfig:
     max_det: int = 300
     device: str = "cuda"
     half: bool = True
+    #: "yolo" (default: Ultralytics weights, AGPL) or "rtdetr" (fine-tuned RT-DETRv2 directory,
+    #: Apache-2.0: `perception.people_detr`).
+    people_detector: str = "yolo"
     #: Optional single-class ball model run on the full frame at a higher resolution. On a
     #: 720p tactical cam the finetuned people detector sees the ball in ~30% of frames; a
     #: dedicated model at 1920 px saw it in 95% (measured on a public 3-minute clip). When it
@@ -155,13 +158,24 @@ def _bgr(rgb: np.ndarray) -> np.ndarray:
 
 
 class Detector:
-    """Thin wrapper over an Ultralytics model, adding tiling and role mapping."""
+    """Wrapper over a people detector (`yolo` or `rtdetr`) + optional dedicated ball detector."""
 
     def __init__(self, weights: str | Path, cfg: DetectorConfig | None = None):
-        from ultralytics import YOLO           # imported lazily: heavy, GPU-side
         self.cfg = cfg or DetectorConfig()
-        self.model = YOLO(str(weights))
-        self.names: dict[int, str] = dict(self.model.names)
+        if self.cfg.people_detector not in ("yolo", "rtdetr"):
+            raise ValueError(f"people_detector {self.cfg.people_detector!r}: one of 'yolo', 'rtdetr'")
+        if self.cfg.people_detector == "rtdetr":
+            from .people_detr import PeopleDetr
+
+            self.model = PeopleDetr(
+                str(weights), self.cfg.device, self.cfg.conf, self.cfg.max_det, imgsz=self.cfg.imgsz
+            )
+            self.names: dict[int, str] = dict(self.model.names)
+        else:
+            from ultralytics import YOLO           # imported lazily: heavy, GPU-side, AGPL
+
+            self.model = YOLO(str(weights))
+            self.names = dict(self.model.names)
         self.roles: dict[int, str] = map_class_names(self.names)
         unknown = {self.names[c] for c, r in self.roles.items() if r == Role.OTHER.value}
         if unknown:
@@ -175,7 +189,12 @@ class Detector:
             self.ball_model = (BallDetr(str(self.cfg.ball_weights), self.cfg.device, self.cfg.ball_conf,
                                         self.cfg.max_balls) if self.cfg.ball_weights else None)
         else:
-            self.ball_model = YOLO(str(self.cfg.ball_weights)) if self.cfg.ball_weights else None
+            if self.cfg.ball_weights:
+                from ultralytics import YOLO
+
+                self.ball_model = YOLO(str(self.cfg.ball_weights))
+            else:
+                self.ball_model = None
         ball_classes = [c for c, r in self.roles.items() if r == Role.BALL.value]
         self._ball_cls = ball_classes[0] if ball_classes else None
         if self.ball_model is not None and self._ball_cls is None:
@@ -187,6 +206,8 @@ class Detector:
     # ------------------------------------------------------------------ run
 
     def _raw(self, images: list[np.ndarray]) -> list[np.ndarray]:
+        if self.cfg.people_detector == "rtdetr":
+            return self.model.predict_batch(images, thr=self.cfg.conf, max_n=self.cfg.max_det)
         res = self.model.predict(
             [_bgr(im) for im in images], imgsz=self.cfg.imgsz, conf=min(self.cfg.conf, self.cfg.ball_conf),
             iou=0.7, max_det=self.cfg.max_det, device=self.cfg.device,
@@ -231,11 +252,14 @@ class Detector:
         if not len(d):
             return self._with_dedicated_ball(frame, np.empty((0, 6), np.float32))
 
-        # NMS per class, so a player standing on the ball doesn't suppress it.
+        # NMS across all person roles together (one box per human body), and separately for the ball
+        # so a player standing on the ball never suppresses it.
+        is_ball_nms = np.array([self.roles.get(int(c)) == Role.BALL.value for c in d[:, 5]], dtype=bool)
         keep: list[int] = []
-        for c in np.unique(d[:, 5]):
-            idx = np.flatnonzero(d[:, 5] == c)
-            keep.extend(idx[nms(d[idx, :4], d[idx, 4], self.cfg.iou_merge)])
+        for group_mask in (~is_ball_nms, is_ball_nms):
+            idx = np.flatnonzero(group_mask)
+            if len(idx):
+                keep.extend(idx[nms(d[idx, :4], d[idx, 4], self.cfg.iou_merge)])
         d = d[np.array(sorted(keep), dtype=int)]
 
         # Keep the `max_balls` most confident ball candidates; the pipeline picks one.

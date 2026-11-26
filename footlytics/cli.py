@@ -127,6 +127,8 @@ def match_run_cmd(
     home: str = typer.Option("HOME"),
     away: str = typer.Option("AWAY"),
     home_defends: Optional[str] = typer.Option(None, help="side HOME defends in Period 1: left | right"),
+    people_detector: str = typer.Option("yolo", help="people detector backend: yolo | rtdetr"),
+    people_weights_dir: Optional[str] = typer.Option(None, help="weights/ subdirectory for rtdetr people detector"),
     ball_link: bool = typer.Option(True, "--ball-link/--no-ball-link"),
     ball_detector: str = typer.Option("rtdetr", help="ball detector backend: rtdetr | yolo"),
     ball_weights_dir: Optional[str] = typer.Option(None, help="weights/ subdirectory for rtdetr ball detector"),
@@ -159,6 +161,8 @@ def match_run_cmd(
         home=home,
         away=away,
         home_defends=home_defends,
+        people_detector=people_detector,
+        people_weights_dir=people_weights_dir,
         ball_link=ball_link,
         ball_detector=ball_detector,
         ball_weights_dir=ball_weights_dir,
@@ -470,6 +474,47 @@ def pack_export_cmd(
     except ValueError as e:
         raise typer.BadParameter(str(e))
     typer.echo(json.dumps(manifest["economics"], indent=2))
+
+
+workspace_app = typer.Typer(help="Interactive multi-match Web Tactical Query & 2D Radar Workspace")
+app.add_typer(workspace_app, name="workspace")
+
+
+@workspace_app.command("serve")
+def workspace_serve_cmd(
+    paths: list[Path] = typer.Argument(..., exists=True, help="Match output directory or parent root."),
+    packs: list[Path] = typer.Option([], "--packs", help="Optional exported pack directory(s) containing MP4 clips."),
+    video_dir: Optional[Path] = typer.Option(None, exists=True, file_okay=False, help="Optional folder of <match_id>.mp4 videos."),
+    reviewer: str = typer.Option("analyst", help="Reviewer name recorded when saving verdicts to marks.json."),
+    host: str = typer.Option("127.0.0.1", help="Bind address (use 0.0.0.0 with --token for LAN/club access)."),
+    port: int = typer.Option(8765, help="Port to listen on (0 picks a free port)."),
+    token: Optional[str] = typer.Option(None, envvar="FOOTLYTICS_WORKSPACE_TOKEN", help="Access token required to view/edit."),
+) -> None:
+    """Serve the multi-match Web Tactical Query, Video, and Interactive 2D Radar Workspace."""
+    from .workspace_server import make_workspace_server
+
+    try:
+        server = make_workspace_server(
+            paths,
+            pack_dirs=packs,
+            video_dir=video_dir,
+            reviewer=reviewer,
+            host=host,
+            port=port,
+            token=token,
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    addr_host, addr_port = server.server_address[:2]
+    shown_host = "127.0.0.1" if addr_host == "0.0.0.0" else addr_host
+    suffix = f"?token={token}" if token else ""
+    typer.echo(f"workspace: http://{shown_host}:{addr_port}/{suffix}  (Ctrl-C to stop)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

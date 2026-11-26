@@ -344,6 +344,8 @@ def run_match(
     home: str = "HOME",
     away: str = "AWAY",
     home_defends: str | None = None,
+    people_detector: str = "yolo",
+    people_weights_dir: str | None = None,
     ball_link: bool = True,
     ball_detector: str = "rtdetr",
     ball_weights_dir: str | None = None,
@@ -395,8 +397,17 @@ def run_match(
         bpaths = paths or BenchPaths.from_env()
         calibrator = runner._calibrator(bpaths)
         det_cfg: dict = {}
+        if people_detector == "rtdetr":
+            det_cfg["people_detector"] = "rtdetr"
+            if people_weights_dir:
+                det_cfg["people_weights_dir"] = people_weights_dir
+        elif people_detector != "yolo":
+            raise ValueError(
+                f"unknown people_detector {people_detector!r}; expected 'yolo' or 'rtdetr'"
+            )
         if ball_detector == "rtdetr":
-            det_cfg = {"ball_detector": "rtdetr", "ball_conf": 0.15}
+            det_cfg["ball_detector"] = "rtdetr"
+            det_cfg["ball_conf"] = 0.15
             if ball_weights_dir:
                 det_cfg["ball_weights_dir"] = ball_weights_dir
         elif ball_detector != "yolo":

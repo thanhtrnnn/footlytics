@@ -86,6 +86,12 @@ class BenchPaths:
         return self.root / "weights" / "ball-rtdetrv2" / "best"
 
     @property
+    def people_detr_weights(self) -> Path:
+        """Our RT-DETRv2 multi-class people detector (Apache-2.0), `save_pretrained` directory from
+        `scripts/train_people_detr.py`."""
+        return self.root / "weights" / "people-rtdetrv2" / "best"
+
+    @property
     def soccermaster_code(self) -> Path:
         """The SoccerMaster checkout (no licence: internal R&D), shipped by `bench setup`."""
         return self.ext / "SoccerMaster"

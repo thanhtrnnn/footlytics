@@ -658,12 +658,22 @@ def run_observations(
     scores: dict[int, float] = {}
     if desc_rows:
         D = np.stack(desc_rows); T = np.array(desc_track)
-        idx = np.arange(len(D))
-        if len(idx) > cfg.team_fit_sample:
-            idx = np.random.default_rng(0).choice(idx, cfg.team_fit_sample, replace=False)
-        clf = TeamClassifier().fit(D[idx])
-        diag = clf.diagnose(T, D)
-        scores = team_scores_by_track(T, D)
+        outfield_mask = np.array([role_vote.get(int(t)) == Role.PLAYER.value for t in T], dtype=bool)
+        fit_pool = np.flatnonzero(outfield_mask) if outfield_mask.sum() >= 20 else np.arange(len(D))
+        if len(fit_pool) > cfg.team_fit_sample:
+            fit_pool = np.random.default_rng(0).choice(fit_pool, cfg.team_fit_sample, replace=False)
+        clf = TeamClassifier().fit(D[fit_pool])
+        diag = clf.diagnose(T[outfield_mask] if outfield_mask.sum() >= 20 else T,
+                            D[outfield_mask] if outfield_mask.sum() >= 20 else D)
+        if outfield_mask.sum() >= 20 and len(np.unique(T[outfield_mask])) >= 4:
+            # Fit 2-team centroids on outfield players only so keeper/referee/other kits cannot skew k-means,
+            # then project non-outfield tracks onto the same signed team axis if needed.
+            scores = team_scores_by_track(T[outfield_mask], D[outfield_mask])
+            raw_scores = clf.track_scores(T, D)
+            for tid_k, sc_v in raw_scores.items():
+                scores.setdefault(int(tid_k), float(sc_v))
+        else:
+            scores = team_scores_by_track(T, D)
         report["team_diagnosis"] = diag
         report["_team_clf"] = clf
         if cfg.montage:
@@ -677,11 +687,13 @@ def run_observations(
         for tid in np.unique(Tm):
             track_emb[int(tid)] = Dm[Tm == tid].mean(axis=0)
 
-    # Detectors without a referee class (the SoccerMaster x6 weights expose only "person")
-    # would put the officials into one team and skew the eleven-a-side quota. Split a third
-    # kit off first; with two kits the helper returns nothing and the 2-means path is untouched.
+    # Detectors with a referee class identify officials directly via `role_vote`; single-class
+    # person detectors (SoccerMaster YOLOv8x6) fall back to 3-cluster kit splitting.
     officials: set[int] = set()
-    if desc_rows and not has_referee_class:
+    other_ids: set[int] = {int(tid) for tid, rv in role_vote.items() if rv == Role.OTHER.value}
+    if has_referee_class:
+        officials = {int(tid) for tid, rv in role_vote.items() if rv == Role.REFEREE.value}
+    elif desc_rows:
         info: dict = {}
         officials = split_officials(np.array(desc_track), np.stack(desc_rows), info=info)
         report["officials_check"] = info
@@ -722,17 +734,28 @@ def run_observations(
         return (sum(frames_of.get(i, 0) for i in t.track_ids if i in officials)
                 / max(sum(frames_of.get(i, 0) for i in t.track_ids), 1))
 
+    def other_share(t) -> float:
+        return (sum(frames_of.get(i, 0) for i in t.track_ids if i in other_ids)
+                / max(sum(frames_of.get(i, 0) for i in t.track_ids), 1))
+
     # Goalkeepers first, among everyone who is not on a touchline: a keeper wears a third kit,
     # which is exactly what the official split looks for, and position says who he is better.
     keepers: dict[int, int] = {}
     if cfg.goalkeepers and scores:
         keepers = goalkeeper_tracklets(
             state.tracks, [t for t in tracklets if t.id not in on_line], pitch.half_l, pitch.half_w)
+        for t in tracklets:
+            if t.id not in keepers and t.id not in on_line and t.role == Role.GOALKEEPER.value:
+                sub_x = state.tracks.loc[state.tracks["track_id"].isin(t.track_ids), "x"].astype(float)
+                if len(sub_x) and abs(float(sub_x.mean())) >= pitch.half_l - 22.0:
+                    keepers[t.id] = -1 if float(sub_x.mean()) < 0.0 else 1
     official_tracklets = [t for t in tracklets if t.id not in keepers
                           and on_line.get(t.id) != Role.OTHER.value
+                          and other_share(t) < 0.5
                           and (official_share(t) >= 0.5 or on_line.get(t.id) == Role.REFEREE.value)]
     other_tracklets = [t for t in tracklets
-                       if on_line.get(t.id) == Role.OTHER.value and t.id not in keepers]
+                       if t.id not in keepers
+                       and (on_line.get(t.id) == Role.OTHER.value or other_share(t) >= 0.5)]
     side = {id(t) for t in official_tracklets} | {id(t) for t in other_tracklets}
     player_tracklets = [t for t in tracklets if id(t) not in side]
     if scores:
