@@ -3,6 +3,12 @@
 Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.
 `partial` runs had a failed clip or task and are not comparable with complete runs.
 
+## apache2-detector
+
+| finished (UTC) | commit | status | host | gsr-pipeline-apache2-valid-6 |
+|---|---|---|---|---|
+| 2026-11-26 04:39 | 12e25c2 | complete | iec5090 | hota_jersey_off 60.49 |
+
 ## ball
 
 | finished (UTC) | commit | status | host | ball-base | ball-link | ball-link-conf05 | ball-link-conf05-img2560 | ball-rtdetr | ball-rtdetr-link | ball-rtdetr-vl | ball-rtdetr-vl-link |
