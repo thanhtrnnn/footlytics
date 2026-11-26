@@ -323,12 +323,71 @@
     background: var(--bg);
   }
   #err-msg { color: var(--danger); font-size: 12px; min-height: 16px; }
+
+  section.profile-bar {
+    flex: none;
+    padding: 8px 16px;
+    background: #111a22;
+    border-bottom: 1px solid var(--line);
+    display: none;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    align-items: end;
+  }
+  section.profile-bar[data-open="true"] { display: flex; }
+  .profile-bar .check-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    padding: 5px 4px;
+  }
+  .passcode-gate {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    background: rgba(10, 15, 20, 0.96);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .passcode-gate[data-open="true"] { display: flex; }
+  .passcode-card {
+    width: 100%;
+    max-width: 380px;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .passcode-card h2 { margin: 0; font-size: 18px; }
+  .passcode-card p { margin: 0; font-size: 12px; color: var(--muted); }
+  .passcode-err { color: var(--danger); font-size: 12px; min-height: 16px; }
 </style>
 </head>
 <body>
+<div class="passcode-gate" id="passcode-gate" data-open="false">
+  <form class="passcode-card" id="passcode-form">
+    <h2>Footlytics Club Pack</h2>
+    <p>Nhập mã truy cập (passcode) để mở gói phân tích chiến thuật riêng tư.</p>
+    <input id="passcode-in" type="password" placeholder="Passcode..." autocomplete="off" required>
+    <button type="submit" class="primary" style="justify-content:center">Mở gói phân tích</button>
+    <div class="passcode-err" id="passcode-err"></div>
+  </form>
+</div>
 <header class="topbar">
-  <div class="brand">FOOTLYTICS <span>TACTICAL WORKSPACE</span></div>
+  <div class="brand" id="brand-title">FOOTLYTICS <span>TACTICAL WORKSPACE</span></div>
   <div class="summary-stat" id="summary-stat">Loading sequences...</div>
+  <a id="btn-dossier" href="dossier.html" target="_blank" rel="noopener" style="display:none;text-decoration:none">
+    <button type="button" title="Mở báo cáo chiến thuật tiếng Việt (Cmd+P -> PDF)">Báo cáo PDF</button>
+  </a>
+  <button id="btn-profile-toggle" title="Tùy chỉnh ngưỡng chiến thuật theo triết lý CLB" style="display:none">Ngưỡng CLB</button>
+  <button id="btn-marks-dl" title="Tải xuống file marks.json chứa các tình huống đã đánh dấu" style="display:none">Tải marks.json</button>
   <button id="btn-xml" title="Download Hudl Sportscode / LongoMatch XML for current filter">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
     Sportscode XML
@@ -339,6 +398,20 @@
   </button>
   <div class="save-pill" id="save-pill" data-state="saved">Saved</div>
 </header>
+
+<section class="profile-bar" id="profile-bar" data-open="false" aria-label="Club tactical thresholds">
+  <div class="field"><label for="p-preset">Preset CLB</label><select id="p-preset"></select></div>
+  <div class="field"><label for="p-lb-line">LowBlock line (m)</label><input class="num-in" id="p-lb-line" type="number" step="0.5"></div>
+  <div class="field"><label for="p-lb-comp">LowBlock compact (m)</label><input class="num-in" id="p-lb-comp" type="number" step="0.5"></div>
+  <div class="field"><label for="p-lb-min">LowBlock min (s)</label><input class="num-in" id="p-lb-min" type="number" step="0.5"></div>
+  <div class="field"><label for="p-hp-line">HighPress line (m)</label><input class="num-in" id="p-hp-line" type="number" step="0.5"></div>
+  <div class="field"><label for="p-hp-n">HighPress &lt;=10m</label><input class="num-in" id="p-hp-n" type="number" min="1" max="10" step="1"></div>
+  <div class="field"><label for="p-ov-n">Overload att &gt;=</label><input class="num-in" id="p-ov-n" type="number" min="2" max="10" step="1"></div>
+  <div class="field"><label for="p-cp-m">CounterPress (m)</label><input class="num-in" id="p-cp-m" type="number" step="0.5"></div>
+  <label class="check-wrap"><input id="p-persist" type="checkbox"> Lưu sequences.csv</label>
+  <button id="btn-recompute" class="primary">Áp dụng &amp; Tính lại</button>
+  <button id="btn-prof-yaml">Tải YAML</button>
+</section>
 
 <section class="filters" aria-label="Tactical filters">
   <div class="field"><label for="f-club">CLB (Club)</label><select id="f-club"></select></div>
@@ -591,6 +664,38 @@ $("save-pill").addEventListener("click", () => {
   retry.forEach(([u, b]) => postJson(u, b));
 });
 
+function staticStorageKey() {
+  return "footlytics_static_marks_" + (DATA.pack_title || "default");
+}
+function loadStaticMarks() {
+  if (!DATA.static_mode) return;
+  try {
+    const raw = localStorage.getItem(staticStorageKey());
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    for (const s of state.sequences) {
+      const m = saved[s.uid];
+      if (m) {
+        s.verdict = m.verdict || "";
+        s.note = m.note || "";
+      }
+    }
+  } catch (_) {}
+}
+function saveStaticMarks() {
+  if (!DATA.static_mode) return;
+  const out = {};
+  for (const s of state.sequences) {
+    if (s.verdict || s.note) out[s.uid] = { verdict: s.verdict, note: s.note };
+  }
+  try {
+    localStorage.setItem(staticStorageKey(), JSON.stringify(out));
+    setSavePill("saved");
+  } catch (_) {
+    setSavePill("failed");
+  }
+}
+
 function markVerdict(v) {
   const s = currentSeq();
   if (!s) return;
@@ -598,7 +703,11 @@ function markVerdict(v) {
   s.verdict = v;
   s.note = note;
   delete state.drafts[s.uid];
-  postJson("/api/verdict", { uid: s.uid, verdict: v, note });
+  if (DATA.static_mode) {
+    saveStaticMarks();
+  } else {
+    postJson("/api/verdict", { uid: s.uid, verdict: v, note });
+  }
   renderPlaylist();
   renderSummary();
   renderReviewControls(false);
@@ -617,7 +726,11 @@ function flushNote() {
   }
   if (s.note === txt) return;
   s.note = txt;
-  postJson("/api/note", { uid: s.uid, note: txt });
+  if (DATA.static_mode) {
+    saveStaticMarks();
+  } else {
+    postJson("/api/note", { uid: s.uid, note: txt });
+  }
 }
 $("note").addEventListener("input", () => {
   const s = currentSeq();
@@ -642,12 +755,16 @@ async function loadRadarFor(s) {
   }
   state.radarLoadingUid = s.uid;
   try {
-    const qs = new URLSearchParams({
-      match_id: s.match_id,
-      start_s: String(s.start_s),
-      end_s: String(s.end_s),
-    });
-    const res = await fetch("/api/radar?" + qs.toString());
+    let url = s.radar_url || "";
+    if (!url) {
+      const qs = new URLSearchParams({
+        match_id: s.match_id,
+        start_s: String(s.start_s),
+        end_s: String(s.end_s),
+      });
+      url = "/api/radar?" + qs.toString();
+    }
+    const res = await fetch(url);
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     if (state.radarCache.size >= 40) {
@@ -1092,27 +1209,225 @@ function onFilterChanged() {
   }
 }
 
+function downloadBlob(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 100);
+}
+
+function xmlEscape(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function csvCell(v) {
+  const s = String(v ?? "");
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function buildStaticCsv(list) {
+  const cols = [
+    "clip_index", "sequence_id", "match_id", "club", "opponent", "side", "period",
+    "match_clock", "clock", "start_s", "end_s", "clip_start_s", "clip_end_s",
+    "duration_s", "label", "verdict", "note", "evidence_summary", "clip_path",
+  ];
+  const lines = [cols.join(",")];
+  list.forEach((r, i) => {
+    const row = { ...r, clip_index: i + 1, clip_path: r.clip_url || "" };
+    lines.push(cols.map((c) => csvCell(row[c])).join(","));
+  });
+  return lines.join("\n") + "\n";
+}
+
+function buildStaticSportscodeXml(list) {
+  const out = ['<?xml version="1.0" encoding="utf-8"?>', "<file>", "  <ALL_INSTANCES>"];
+  list.forEach((r, i) => {
+    const code = `${r.club} - ${r.label}`;
+    out.push("    <instance>");
+    out.push(`      <ID>${i + 1}</ID>`);
+    out.push(`      <start>${Number(r.clip_start_s).toFixed(2)}</start>`);
+    out.push(`      <end>${Number(r.clip_end_s).toFixed(2)}</end>`);
+    out.push(`      <code>${xmlEscape(code)}</code>`);
+    const tags = [
+      ["Match", r.match_id],
+      ["Team", r.club],
+      ["Opponent", r.opponent],
+      ["Period", `H${r.period}`],
+      ["MatchClock", r.match_clock],
+      ["Pattern", r.label],
+      ["Evidence", r.evidence_summary],
+    ];
+    if (r.verdict) tags.push(["Verdict", r.verdict]);
+    for (const [grp, txt] of tags) {
+      out.push(`      <label><group>${xmlEscape(grp)}</group><text>${xmlEscape(txt)}</text></label>`);
+    }
+    if (r.note) out.push(`      <free_text>${xmlEscape(r.note)}</free_text>`);
+    out.push("    </instance>");
+  });
+  out.push("  </ALL_INSTANCES>", "</file>");
+  return out.join("\n") + "\n";
+}
+
 function exportUrl(endpoint) {
+  if (DATA.static_mode) {
+    const list = filteredSequences();
+    if (endpoint.endsWith(".xml")) {
+      downloadBlob("sportscode.xml", buildStaticSportscodeXml(list), "application/xml;charset=utf-8");
+    } else {
+      downloadBlob("playlist.csv", buildStaticCsv(list), "text/csv;charset=utf-8");
+    }
+    return;
+  }
   const qs = new URLSearchParams(queryParamsObject());
   window.location.href = `${endpoint}?${qs.toString()}`;
 }
 
-function init() {
+function fillProfileInputs(p) {
+  if (!p) return;
+  $("p-lb-line").value = p.low_block_line ?? -22.5;
+  $("p-lb-comp").value = p.low_block_compact_m ?? 14.0;
+  $("p-lb-min").value = p.low_block_min_s ?? 8.0;
+  $("p-hp-line").value = p.high_press_line ?? 7.5;
+  $("p-hp-n").value = p.high_press_n ?? 3;
+  $("p-ov-n").value = p.overload_n ?? 4;
+  $("p-cp-m").value = p.counter_press_m ?? 6.0;
+}
+
+async function setupPasscodeGate() {
+  if (!DATA.passcode_sha256) return;
+  const key = "footlytics_unlock_" + DATA.passcode_sha256.slice(0, 12);
+  if (sessionStorage.getItem(key) === "1") return;
+  const gate = $("passcode-gate");
+  gate.dataset.open = "true";
+  $("passcode-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const val = $("passcode-in").value.trim();
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(val));
+    const hex = Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    if (hex === DATA.passcode_sha256) {
+      sessionStorage.setItem(key, "1");
+      gate.dataset.open = "false";
+      $("passcode-err").textContent = "";
+    } else {
+      $("passcode-err").textContent = "Mã truy cập không đúng. Vui lòng thử lại.";
+    }
+  });
+}
+
+function populateSelectOptions() {
   const clubSel = $("f-club");
+  clubSel.textContent = "";
   clubSel.add(new Option("Tất cả CLB", "all"));
   DATA.clubs.forEach((c) => clubSel.add(new Option(c, c)));
 
   const oppSel = $("f-opp");
+  oppSel.textContent = "";
   oppSel.add(new Option("Tất cả đối thủ", "all"));
   DATA.clubs.forEach((c) => oppSel.add(new Option(c, c)));
 
   const matchSel = $("f-match");
+  matchSel.textContent = "";
   matchSel.add(new Option("Tất cả trận (" + DATA.matches.length + ")", "all"));
   DATA.matches.forEach((m) => matchSel.add(new Option(`${m.home} vs ${m.away} (${m.match_id})`, m.match_id)));
 
   const lblSel = $("f-label");
+  lblSel.textContent = "";
   lblSel.add(new Option("Tất cả 5 mẫu V1", "all"));
   DATA.labels.forEach((l) => lblSel.add(new Option(DATA.label_vi[l] || l, l)));
+}
+
+function init() {
+  if (DATA.pack_title) {
+    $("brand-title").innerHTML = `FOOTLYTICS <span>${DATA.pack_title}</span>`;
+    document.title = `Footlytics — ${DATA.pack_title}`;
+  }
+  if (DATA.dossier_url) {
+    $("btn-dossier").href = DATA.dossier_url;
+    $("btn-dossier").style.display = "inline-flex";
+  }
+  if (DATA.static_mode) {
+    loadStaticMarks();
+    $("btn-marks-dl").style.display = "inline-flex";
+    $("save-pill").textContent = "Local";
+    $("btn-marks-dl").addEventListener("click", () => {
+      const byMatch = {};
+      for (const s of state.sequences) {
+        if (!s.verdict) continue;
+        if (!byMatch[s.match_id]) byMatch[s.match_id] = {};
+        byMatch[s.match_id][s.sequence_id] = { verdict: s.verdict, note: s.note || "" };
+      }
+      downloadBlob("footlytics_marks.json", JSON.stringify({ reviewer: DATA.reviewer, matches: byMatch }, null, 2), "application/json;charset=utf-8");
+    });
+    setupPasscodeGate();
+  } else {
+    $("btn-profile-toggle").style.display = "inline-flex";
+    const pSel = $("p-preset");
+    (DATA.presets || []).forEach((p) => pSel.add(new Option(`${p.name} — ${p.description}`, p.name)));
+    if (DATA.profile) {
+      pSel.value = DATA.profile.name || "default";
+      fillProfileInputs(DATA.profile);
+    }
+    pSel.addEventListener("change", () => {
+      const found = (DATA.presets || []).find((x) => x.name === pSel.value);
+      if (found) fillProfileInputs(found);
+    });
+    $("btn-profile-toggle").addEventListener("click", () => {
+      const bar = $("profile-bar");
+      bar.dataset.open = bar.dataset.open === "true" ? "false" : "true";
+    });
+    $("btn-prof-yaml").addEventListener("click", () => { window.location.href = "/api/export/profile.yaml"; });
+    $("btn-recompute").addEventListener("click", async () => {
+      const btn = $("btn-recompute");
+      btn.disabled = true;
+      setSavePill("saving");
+      $("err-msg").textContent = "";
+      try {
+        const payload = {
+          persist: $("p-persist").checked,
+          profile: {
+            name: pSel.value || "custom",
+            low_block_line: Number($("p-lb-line").value),
+            low_block_compact_m: Number($("p-lb-comp").value),
+            low_block_min_s: Number($("p-lb-min").value),
+            high_press_line: Number($("p-hp-line").value),
+            high_press_n: Number($("p-hp-n").value),
+            overload_n: Number($("p-ov-n").value),
+            counter_press_m: Number($("p-cp-m").value),
+          },
+        };
+        const res = await fetch("/api/recompute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const fresh = await res.json();
+        DATA.sequences = fresh.sequences;
+        DATA.matches = fresh.matches;
+        DATA.clubs = fresh.clubs;
+        DATA.labels = fresh.labels;
+        DATA.profile = fresh.profile;
+        state.sequences = fresh.sequences;
+        state.radarCache.clear();
+        populateSelectOptions();
+        renderSummary();
+        renderPlaylist();
+        const fl = filteredSequences();
+        if (fl.length) selectSequence(fl[0].uid, false);
+        setSavePill("saved");
+      } catch (e) {
+        $("err-msg").textContent = "Lỗi tính lại ngưỡng CLB: " + e.message;
+        setSavePill("failed");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
+  populateSelectOptions();
 
   ["f-club", "f-opp", "f-match", "f-label", "f-period", "f-verdict", "f-resp", "f-flank"].forEach((id) =>
     $(id).addEventListener("change", onFilterChanged)

@@ -349,6 +349,7 @@ def run_match(
     ball_link: bool = True,
     ball_detector: str = "rtdetr",
     ball_weights_dir: str | None = None,
+    tactical_profile: str | Path | object | None = None,
     save_obs: bool = True,
     replay_only: bool = False,
     log: Callable[[str], None] = print,
@@ -575,7 +576,18 @@ def run_match(
 
     norm = normalise_direction(full_state)
     poss = infer_possession(norm)
-    seqs = detect_sequences(norm, poss)
+    seq_kwargs: dict = {}
+    if tactical_profile is not None:
+        from ..analytics.profiles import TacticalProfile, load_profile, save_profile
+
+        prof = (
+            tactical_profile
+            if isinstance(tactical_profile, TacticalProfile)
+            else load_profile(tactical_profile)
+        )
+        seq_kwargs = prof.to_detect_kwargs()
+        save_profile(prof, out / "tactical_profile.yaml")
+    seqs = detect_sequences(norm, poss, **seq_kwargs)
     seqs.to_csv(out / "sequences.csv", index=False)
     poss.to_csv(out / "possession.csv", index=False)
     log(

@@ -40,6 +40,12 @@ from .analytics.pack import (
     resolve_sequence_marks,
     write_sportscode_xml,
 )
+from .analytics.profiles import (
+    BUILTIN_PROFILES,
+    TacticalProfile,
+    load_profile,
+    recompute_match_sequences,
+)
 from .analytics.query import MatchEntry, discover_matches
 from .review_server import _TYPES, CHUNK, MAX_BODY, parse_range
 from .state.schema import MatchState, Role, Team
@@ -131,6 +137,7 @@ class WorkspaceStore:
         reviewer: str = "analyst",
         pre_roll_s: float = 3.0,
         post_roll_s: float = 2.0,
+        profile: str | Path | TacticalProfile | None = None,
     ):
         entries = discover_matches(roots)
         if not entries:
@@ -140,8 +147,15 @@ class WorkspaceStore:
         self.pre_roll_s = float(pre_roll_s)
         self.post_roll_s = float(post_roll_s)
         self.video_dir = Path(video_dir) if video_dir is not None else None
+        if isinstance(profile, TacticalProfile):
+            self.profile = profile
+        elif profile is not None:
+            self.profile = load_profile(profile)
+        else:
+            self.profile = BUILTIN_PROFILES["default"]
         self._lock = threading.Lock()
         self._state_cache: dict[str, MatchState] = {}
+        self._override_sequences: dict[str, pd.DataFrame] = {}
 
         self._clip_by_sid, self._clip_by_approx = _index_pack_clips(pack_dirs)
         self.match_videos: dict[str, tuple[Path, float]] = {}
@@ -152,9 +166,14 @@ class WorkspaceStore:
         self._build_index()
 
     def _build_index(self) -> None:
+        self.matches_meta = []
+        self._rows_by_uid = {}
+        self._uid_order = []
         all_rows: list[dict[str, Any]] = []
         for entry in self.entries.values():
-            seq_df = pd.read_csv(entry.sequences_path)
+            seq_df = self._override_sequences.get(entry.match_id)
+            if seq_df is None:
+                seq_df = pd.read_csv(entry.sequences_path)
             marks_path = entry.dir / "marks.json"
             marks_doc = review.load_marks(marks_path) if marks_path.is_file() else None
             resolved = resolve_sequence_marks(marks_doc, seq_df)
@@ -262,13 +281,40 @@ class WorkspaceStore:
             if s["label"] not in labels:
                 labels.append(s["label"])
         return {
+            "static_mode": False,
+            "pack_title": "",
+            "dossier_url": "",
+            "passcode_sha256": "",
             "reviewer": self.reviewer,
             "matches": self.matches_meta,
             "clubs": clubs,
             "labels": labels,
             "label_vi": LABEL_DISPLAY_VI,
             "sequences": seqs,
+            "profile": self.profile.to_dict(),
+            "presets": [p.to_dict() for p in BUILTIN_PROFILES.values()],
         }
+
+    def recompute_with_profile(
+        self,
+        profile: TacticalProfile,
+        *,
+        persist: bool = False,
+    ) -> dict[str, Any]:
+        """Re-run tactical sequence detection across loaded matches using custom thresholds."""
+        updated: dict[str, pd.DataFrame] = {}
+        for mid, entry in self.entries.items():
+            if entry.tracks_path is None or not entry.tracks_path.is_file():
+                continue
+            st = self._get_state(mid)
+            updated[mid] = recompute_match_sequences(entry.dir, profile, write=persist, state=st)
+        if not updated:
+            raise ValueError("no loaded matches have tracks.parquet available for live recompute")
+        with self._lock:
+            self.profile = profile
+            self._override_sequences = updated
+            self._build_index()
+        return self.public_snapshot()
 
     def clip_path_for(self, uid: str) -> Path | None:
         row = self._rows_by_uid.get(uid)
@@ -466,9 +512,16 @@ def make_workspace_server(
     host: str = "127.0.0.1",
     port: int = 0,
     token: str | None = None,
+    profile: str | Path | TacticalProfile | None = None,
 ) -> ThreadingHTTPServer:
     """Create a multi-match Web Tactical Query & 2D Radar HTTP server."""
-    store = WorkspaceStore(roots, pack_dirs=pack_dirs, video_dir=video_dir, reviewer=reviewer)
+    store = WorkspaceStore(
+        roots,
+        pack_dirs=pack_dirs,
+        video_dir=video_dir,
+        reviewer=reviewer,
+        profile=profile,
+    )
     clean_token = token.strip() if token and token.strip() else None
     expected_cookie = _cookie_digest(clean_token) if clean_token else None
 
@@ -657,6 +710,16 @@ def make_workspace_server(
                 )
                 return
 
+            if path == "/api/export/profile.yaml":
+                yaml_bytes = store.profile.to_yaml().encode("utf-8")
+                self._send(
+                    200,
+                    yaml_bytes,
+                    "application/x-yaml; charset=utf-8",
+                    extra_headers={"Content-Disposition": f'attachment; filename="{store.profile.name}.yaml"'},
+                )
+                return
+
             if path == "/favicon.ico":
                 self.send_response(204)
                 self.end_headers()
@@ -669,7 +732,7 @@ def make_workspace_server(
             ok, _ = self._authorize(parse_qs(parsed.query))
             if not ok:
                 return
-            if parsed.path not in ("/api/verdict", "/api/note"):
+            if parsed.path not in ("/api/verdict", "/api/note", "/api/recompute"):
                 self._text(404, "not found")
                 return
             if self.headers.get_content_type() != "application/json":
@@ -684,8 +747,16 @@ def make_workspace_server(
                     raise TypeError("JSON body must be an object")
                 if parsed.path == "/api/verdict":
                     res = store.set_verdict(str(req.get("uid", "")), req.get("verdict"), req.get("note", ""))
-                else:
+                elif parsed.path == "/api/note":
                     res = store.set_note(str(req.get("uid", "")), req.get("note", ""))
+                else:
+                    persist = bool(req.get("persist", False))
+                    prof_raw = req.get("profile", req)
+                    if not isinstance(prof_raw, dict):
+                        raise TypeError("profile must be an object")
+                    prof_clean = {k: v for k, v in prof_raw.items() if k != "persist"}
+                    prof = TacticalProfile.from_dict(prof_clean)
+                    res = store.recompute_with_profile(prof, persist=persist)
             except (ValueError, TypeError) as e:
                 self._text(400, f"bad request: {e}")
                 return

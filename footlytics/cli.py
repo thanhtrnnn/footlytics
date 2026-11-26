@@ -132,6 +132,7 @@ def match_run_cmd(
     ball_link: bool = typer.Option(True, "--ball-link/--no-ball-link"),
     ball_detector: str = typer.Option("rtdetr", help="ball detector backend: rtdetr | yolo"),
     ball_weights_dir: Optional[str] = typer.Option(None, help="weights/ subdirectory for rtdetr ball detector"),
+    profile: Optional[str] = typer.Option(None, help="Tactical threshold preset or YAML/JSON file (e.g. default, high_press_aggressive, club.yaml)"),
     save_obs: bool = typer.Option(True, "--save-obs/--no-save-obs", help="save per-chunk obs.pkl for fast CPU replay"),
     replay_only: bool = typer.Option(False, "--replay-only", help="re-run tracking and sequences from saved chunk obs.pkl on CPU"),
 ) -> None:
@@ -166,6 +167,7 @@ def match_run_cmd(
         ball_link=ball_link,
         ball_detector=ball_detector,
         ball_weights_dir=ball_weights_dir,
+        tactical_profile=profile,
         save_obs=save_obs,
         replay_only=replay_only,
         log=typer.echo,
@@ -450,6 +452,8 @@ def pack_export_cmd(
     max_clips: Optional[int] = typer.Option(None, help="Optional cap on exported sequences/clips."),
     gpu_hourly_usd: float = typer.Option(0.80, help="Cloud GPU hourly USD rate for unit-economics reporting."),
     operator_minutes: Optional[float] = typer.Option(None, help="Logged internal operator QA minutes."),
+    static_site: bool = typer.Option(False, "--static-site", help="Also build a zero-backend shareable index.html + radar JSON bundle in --out."),
+    passcode: Optional[str] = typer.Option(None, help="Optional client-side passcode for --static-site."),
 ) -> None:
     """Export playlist.csv, sportscode.xml, dossier.md/html, and optional radar-PiP MP4 clips."""
     from .analytics.pack import export_pack
@@ -471,9 +475,104 @@ def pack_export_cmd(
             gpu_hourly_usd=gpu_hourly_usd,
             operator_minutes=operator_minutes,
         )
+        if static_site:
+            from .analytics.static_site import build_static_pack_site
+
+            site_info = build_static_pack_site(
+                paths,
+                out,
+                pack_dir=out,
+                club=club,
+                passcode=passcode,
+                pre_roll_s=pre_roll_s,
+                post_roll_s=post_roll_s,
+            )
+            manifest["static_site"] = site_info
     except ValueError as e:
         raise typer.BadParameter(str(e))
     typer.echo(json.dumps(manifest["economics"], indent=2))
+
+
+@pack_app.command("build-site")
+def pack_build_site_cmd(
+    paths: list[Path] = typer.Argument(..., exists=True, help="Match output directory or parent root (for tracks.parquet radar)."),
+    out: Path = typer.Option(..., help="Destination directory for static shareable web bundle (deployable to Cloudflare Pages)."),
+    pack: Optional[Path] = typer.Option(None, exists=True, file_okay=False, help="Existing exported pack directory containing clips/ and dossier.html."),
+    club: Optional[str] = typer.Option(None, help="Optional club filter (e.g. PVFCAND)."),
+    title: Optional[str] = typer.Option(None, help="Custom pack title shown in workspace header."),
+    passcode: Optional[str] = typer.Option(None, help="Optional client-side passcode curtain for private link sharing."),
+    radar_hz: float = typer.Option(12.0, help="Pre-baked 2D radar JSON sample rate (Hz)."),
+    only_with_clips: bool = typer.Option(False, "--only-with-clips", help="Include only sequences with exported MP4 clips."),
+) -> None:
+    """Build a zero-backend static web workspace bundle (`index.html`, `radar/*.json`, `clips/`, `_headers`)."""
+    from .analytics.static_site import build_static_pack_site
+
+    try:
+        info = build_static_pack_site(
+            paths,
+            out,
+            pack_dir=pack,
+            club=club,
+            title=title,
+            passcode=passcode,
+            radar_hz=radar_hz,
+            only_with_clips=only_with_clips,
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    typer.echo(json.dumps(info, indent=2))
+
+
+profile_app = typer.Typer(help="Manage per-club tactical threshold profiles (`--profile club.yaml`)")
+app.add_typer(profile_app, name="profile")
+
+
+@profile_app.command("list")
+def profile_list_cmd() -> None:
+    """List built-in club tactical threshold presets."""
+    from .analytics.profiles import BUILTIN_PROFILES
+
+    for name, prof in BUILTIN_PROFILES.items():
+        typer.echo(f"{name:<24} {prof.description}")
+
+
+@profile_app.command("init")
+def profile_init_cmd(
+    out: Path = typer.Argument(..., help="Destination YAML/JSON file path (e.g. profiles/hanoi_fc.yaml)."),
+    preset: str = typer.Option("default", help="Base preset to copy from."),
+    name: Optional[str] = typer.Option(None, help="Optional club/profile name override."),
+) -> None:
+    """Create a starter YAML/JSON tactical threshold file for a club."""
+    from dataclasses import replace
+
+    from .analytics.profiles import load_profile, save_profile
+
+    try:
+        prof = load_profile(preset)
+        if name:
+            prof = replace(prof, name=name)
+        written = save_profile(prof, out)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    typer.echo(f"wrote tactical profile -> {written}")
+
+
+@profile_app.command("apply")
+def profile_apply_cmd(
+    match_dir: Path = typer.Argument(..., exists=True, file_okay=False, help="Processed match directory with tracks.parquet."),
+    profile: str = typer.Option("default", "--profile", help="Built-in preset name or YAML/JSON profile file."),
+    write: bool = typer.Option(True, "--write/--dry-run", help="Overwrite sequences.csv and save tactical_profile.yaml."),
+) -> None:
+    """Re-run tactical sequence detection on a match using a club threshold profile (no GPU needed)."""
+    from .analytics.profiles import load_profile, recompute_match_sequences
+
+    try:
+        prof = load_profile(profile)
+        df = recompute_match_sequences(match_dir, prof, write=write)
+    except (ValueError, FileNotFoundError) as e:
+        raise typer.BadParameter(str(e))
+    counts = df["label"].value_counts().to_dict() if not df.empty else {}
+    typer.echo(json.dumps({"profile": prof.name, "written": write, "total_sequences": len(df), "by_label": counts}, indent=2))
 
 
 workspace_app = typer.Typer(help="Interactive multi-match Web Tactical Query & 2D Radar Workspace")
@@ -486,6 +585,7 @@ def workspace_serve_cmd(
     packs: list[Path] = typer.Option([], "--packs", help="Optional exported pack directory(s) containing MP4 clips."),
     video_dir: Optional[Path] = typer.Option(None, exists=True, file_okay=False, help="Optional folder of <match_id>.mp4 videos."),
     reviewer: str = typer.Option("analyst", help="Reviewer name recorded when saving verdicts to marks.json."),
+    profile: Optional[str] = typer.Option(None, help="Initial club tactical profile preset or YAML file."),
     host: str = typer.Option("127.0.0.1", help="Bind address (use 0.0.0.0 with --token for LAN/club access)."),
     port: int = typer.Option(8765, help="Port to listen on (0 picks a free port)."),
     token: Optional[str] = typer.Option(None, envvar="FOOTLYTICS_WORKSPACE_TOKEN", help="Access token required to view/edit."),
@@ -502,6 +602,7 @@ def workspace_serve_cmd(
             host=host,
             port=port,
             token=token,
+            profile=profile,
         )
     except ValueError as e:
         raise typer.BadParameter(str(e))
