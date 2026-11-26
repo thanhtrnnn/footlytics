@@ -308,12 +308,17 @@ def assemble_match_states(
 
         parts.append(df)
 
+    period_starts = {
+        str(p): round(min(spec.start_s for spec, _ in chunk_states if spec.period == p), 3)
+        for p in sorted({int(spec.period) for spec, _ in chunk_states})
+    }
     meta = MatchMeta(
         match_id=match_id,
         fps=eff_fps,
         source_type="broadcast",
         home=TeamInfo(home, home[:3].upper()),
         away=TeamInfo(away, away[:3].upper()),
+        provenance={"period_start_s": period_starts},
     )
     merged = (
         pd.concat(parts, ignore_index=True)

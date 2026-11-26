@@ -35,12 +35,12 @@ def _match(home_shape, away_shape, ball, status, seconds):
         people += [(20, (50.0, 0.0), Team.AWAY)]
         people += [(21 + i, p, Team.AWAY) for i, p in enumerate(_at(away_shape, f))]
         for tid, (x, y), team in people:
-            rows.append(dict(frame_idx=f, period=1, timestamp=t, track_id=tid,
-                             role=Role.PLAYER.value, team=team.value, x=x, y=y))
+            rows.append({"frame_idx": f, "period": 1, "timestamp": t, "track_id": tid,
+                         "role": Role.PLAYER.value, "team": team.value, "x": x, "y": y})
         bx, by = _at(ball, f)
-        rows.append(dict(frame_idx=f, period=1, timestamp=t, track_id=-1,
-                         role=Role.BALL.value, team=Team.UNKNOWN.value, x=bx, y=by))
-        poss.append(dict(frame_idx=f, period=1, timestamp=t, ballStatus=_at(status, f)))
+        rows.append({"frame_idx": f, "period": 1, "timestamp": t, "track_id": -1,
+                     "role": Role.BALL.value, "team": Team.UNKNOWN.value, "x": bx, "y": by})
+        poss.append({"frame_idx": f, "period": 1, "timestamp": t, "ballStatus": _at(status, f)})
     meta = MatchMeta(match_id="S", fps=FPS, home=TeamInfo("H", "H"), away=TeamInfo("A", "A"))
     return MatchState(meta, pd.DataFrame(rows)), pd.DataFrame(poss)
 
@@ -362,3 +362,18 @@ def test_build_up_works_when_broadcast_zoom_shows_four_outfielders():
                       seconds=6)
     bu = detect_sequences(st, poss).query("label == 'build_up'")
     assert len(bu) == 1 and bu.iloc[0]["team"] == Team.HOME.value
+
+
+def test_no_low_block_on_set_piece_wall_with_occluded_or_jittering_ball():
+    # Direct free-kick wall: 10 defenders stand shoulder-to-shoulder (compactness <= 6 m),
+    # players are stopped waiting for the whistle, and the ball either jitters ~1.8 m in
+    # homography projection or is occluded behind legs.
+    wall_home = _shape(-38.0, -33.0, -6.0, 6.0)
+    jitter_ball = lambda f: (-24.0 + 0.9 * np.sin(f * 0.7), 0.9 * np.cos(f * 0.9))
+    st_jit, poss_jit = _match(wall_home, AWAY_SPREAD, ball=jitter_ball, status="AWAY", seconds=12)
+    assert (detect_sequences(st_jit, poss_jit)["label"] != "low_block").all()
+
+    # Same stationary defensive block with the ball completely occluded behind players.
+    no_ball_tracks = st_jit.tracks[st_jit.tracks["role"] != Role.BALL.value].copy()
+    st_occ = MatchState(st_jit.meta, no_ball_tracks)
+    assert (detect_sequences(st_occ, poss_jit)["label"] != "low_block").all()

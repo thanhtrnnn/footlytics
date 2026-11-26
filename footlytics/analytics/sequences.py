@@ -113,10 +113,12 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
     blk["ball_x_own"] = blk["frame_idx"].map(ball_x) * blk["team"].map(attacking_sign)
     opp_third = state.meta.pitch_length / 2 - state.meta.pitch_length / 3
     bs = ball_still(state, still_s, still_m)
+    ps = play_stopped(state, sample_every, stopped_mps)
+    ba = ball_active(state, still_s)
     blk["ball_still"] = blk["frame_idx"].map(bs).fillna(False).astype(bool)
-    blk["dead_ball"] = (blk["ball_still"]
-                        | blk["frame_idx"].map(play_stopped(state, sample_every, stopped_mps))
-                                          .fillna(False).astype(bool))
+    blk["play_stopped"] = blk["frame_idx"].map(ps).fillna(False).astype(bool)
+    blk["ball_active"] = blk["frame_idx"].map(ba).fillna(False).astype(bool)
+    blk["dead_ball"] = blk["ball_still"] | blk["play_stopped"]
     blk = blk.merge(own_third_pressers(state, sample_every, opp_third),
                     on=["frame_idx", "team"], how="left")
     blk["n_pressers"] = blk["n_pressers"].fillna(0).astype(int)
@@ -134,7 +136,7 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
         | (blk["in_possession"] & (blk["ball_x_own"] <= -25.0)
            & (blk["centroid_x"] < build_up_min_centroid_x) & (blk["def_line_x"] <= -30.0))
     )
-    lb_gap = max(2 * sample_every, int(round(1.0 * fps)))
+    lb_gap = max(2 * sample_every, round(1.0 * fps))
     rules = {
         "low_block": ((oop | deep_scramble) & (blk["def_line_x"] <= low_block_line)
                       & (blk["compactness_m"] <= low_block_compact_m)
@@ -208,10 +210,24 @@ def ball_still(state: MatchState, still_s: float = 2.0, still_m: float = 1.0) ->
     if b.empty:
         return pd.Series(dtype=bool)
     b = b.reindex(range(int(b.index.min()), int(b.index.max()) + 1))
-    n = max(2, int(round(still_s * state.meta.fps)))
+    n = max(2, round(still_s * state.meta.fps))
     roll = b.rolling(n, min_periods=n // 2 + 1)
     spread = (roll.max() - roll.min()).pow(2).sum(axis=1, min_count=2).pow(0.5)
     return (spread <= still_m) & roll.count()["x"].ge(n // 2 + 1)
+
+
+def ball_active(state: MatchState, window_s: float = 2.0, min_spread_m: float = 3.0) -> pd.Series:
+    """frame_idx -> True where the ball's 15%-85% spatial spread over `window_s` exceeds `min_spread_m`."""
+    b = state.ball.drop_duplicates("frame_idx").set_index("frame_idx")[["x", "y"]].sort_index()
+    if b.empty:
+        return pd.Series(dtype=bool)
+    b = b.reindex(range(int(b.index.min()), int(b.index.max()) + 1))
+    n = max(4, round(window_s * state.meta.fps))
+    mp = max(2, n // 4)
+    qx = b["x"].rolling(n, min_periods=mp)
+    qy = b["y"].rolling(n, min_periods=mp)
+    spread = np.hypot(qx.quantile(0.85) - qx.quantile(0.15), qy.quantile(0.85) - qy.quantile(0.15))
+    return (spread > min_spread_m).fillna(False)
 
 
 def play_stopped(state: MatchState, sample_every: int = 5, stopped_mps: float = 1.0) -> pd.Series:
@@ -223,7 +239,7 @@ def play_stopped(state: MatchState, sample_every: int = 5, stopped_mps: float = 
     """
     p = state.players
     p = p[p["team"].isin([Team.HOME.value, Team.AWAY.value])][["frame_idx", "track_id", "x", "y"]]
-    lag = int(round(state.meta.fps))
+    lag = round(state.meta.fps)
     now = p[p["frame_idx"] % sample_every == 0]
     before = p.assign(frame_idx=p["frame_idx"] + lag)
     j = now.merge(before, on=["frame_idx", "track_id"], suffixes=("", "_1s"))
@@ -281,7 +297,7 @@ def _midfield_losses(state: MatchState, possession: pd.DataFrame, blk: pd.DataFr
                                  & frames["live_wide"] & (frames["shot"] == s0), "frame_idx"]
             if len(in_shot):
                 end_bound = min(end_bound, int(in_shot.max()))
-        f1 = min(end_bound, f0 + int(round(window_s * fps)) - 1)
+        f1 = min(end_bound, f0 + round(window_s * fps) - 1)
         if f1 - f0 + 1 < counter_press_s * fps:
             continue  # cut off before the response can be judged
         b = blk[(blk["team"] == team) & blk["frame_idx"].between(f0, f1)]
@@ -340,7 +356,15 @@ def _runs(hits: pd.DataFrame, label: str, min_s: float, step: int, fps: float,
             if duration < min_s:
                 continue
             if label == "low_block" and (
-                not bool(r["out_of_possession"].any()) or float(r["in_possession"].mean()) > 0.65
+                not bool(r["out_of_possession"].any())
+                or float(r["in_possession"].mean()) > 0.65
+                or (
+                    float(r["play_stopped"].mean()) > 0.55
+                    and (
+                        float(r["compactness_m"].mean()) <= 6.5
+                        or float(r["ball_active"].mean()) < 0.30
+                    )
+                )
             ):
                 continue
             if label == "flank_overload" and bool(r["out_of_possession"].all()):
@@ -359,7 +383,7 @@ def _runs(hits: pd.DataFrame, label: str, min_s: float, step: int, fps: float,
                 "n_attackers": int(r["n_attackers"].max()),
                 "n_defenders": int(r["n_defenders"].max()),
                 "in_possession_share": float(r["in_possession"].mean()),
-                "n_pressers": int(round(r["n_pressers"].median())),
+                "n_pressers": round(float(r["n_pressers"].median())),
                 "ball_dist_m": float("nan"), "retreat_mps": float("nan"), "response": "",
             })
     return out

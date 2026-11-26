@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 from typer.testing import CliRunner
 
-from footlytics.analytics.pack import export_pack, format_clock
+from footlytics.analytics.pack import export_pack, format_clock, format_match_clock
 from footlytics.analytics.query import search_sequences, summarize_sequences
 from footlytics.analytics.sequences import COLUMNS
 from footlytics.cli import app
@@ -217,6 +217,86 @@ def test_format_clock():
     assert format_clock(0) == "00:00"
     assert format_clock(175.4) == "02:55"
     assert format_clock(3665.0) == "1:01:05"
+
+
+def test_format_match_clock_and_period_offsets(tmp_path: Path):
+    assert format_match_clock(15.6, period=1) == "00:16"
+    assert format_match_clock(2890.0, period=1) == "45+03:10"
+    assert format_match_clock(1473.0, period=2) == "69:33"
+    assert format_match_clock(2947.0, period=2) == "90+04:07"
+
+    mdir = _make_match_dir(
+        tmp_path,
+        "m_full",
+        match_id="full_broadcast",
+        home="PVFCAND",
+        away="HANOI",
+        seq_rows=[
+            {
+                "label": "low_block", "team": "home", "period": 2,
+                "start_s": 4923.0, "end_s": 4935.0, "start_frame": 147690, "end_frame": 148050,
+                "duration_s": 12.0, "def_line_x": -39.0, "compactness_m": 9.8,
+                "n_within_10m": 5, "flank": "", "n_attackers": 0, "n_defenders": 0,
+                "in_possession_share": 0.0, "n_pressers": 5, "response": "",
+            },
+        ],
+    )
+    meta_doc = json.loads((mdir / "meta.json").read_text())
+    meta_doc["provenance"] = {"period_start_s": {"1": 160.0, "2": 3450.0}}
+    (mdir / "meta.json").write_text(json.dumps(meta_doc))
+
+    out_dir = tmp_path / "clock_pack"
+    export_pack(mdir, out_dir, export_clips=False, pre_roll_s=3.0, post_roll_s=2.0)
+    pl = pd.read_csv(out_dir / "playlist.csv")
+    assert pl.iloc[0]["match_clock"] == "69:33-69:45"
+    assert pl.iloc[0]["clock"] == "1:22:03-1:22:15"
+    html_doc = (out_dir / "dossier.html").read_text()
+    assert "69:33-69:45" in html_doc
+    assert "video 1:22:03-1:22:15" in html_doc
+    tree = ET.parse(out_dir / "sportscode.xml")
+    inst = tree.getroot().find("./ALL_INSTANCES/instance")
+    assert inst is not None
+    assert inst.findtext("start") == "4920.00"
+    assert inst.findtext("end") == "4937.00"
+
+
+def test_max_clips_stratifies_across_all_five_labels_without_truncating_playlist(tmp_path: Path):
+    labels = ["high_press", "build_up", "build_up", "build_up", "low_block", "low_block",
+              "midfield_loss", "midfield_loss", "flank_overload", "flank_overload"]
+    rows = []
+    for i, lbl in enumerate(labels):
+        rows.append(
+            {
+                "label": lbl, "team": "home", "period": 1,
+                "start_s": 0.5 + 0.3 * i, "end_s": 2.5 + 0.3 * i,
+                "start_frame": 12 + 8 * i, "end_frame": 62 + 8 * i,
+                "duration_s": 2.0, "def_line_x": -30.0, "compactness_m": 10.0,
+                "n_within_10m": 3, "flank": "right" if lbl == "flank_overload" else "",
+                "n_attackers": 4, "n_defenders": 2,
+                "in_possession_share": 0.5, "n_pressers": 3, "response": "counter_press",
+            }
+        )
+    mdir = _make_match_dir(
+        tmp_path,
+        "m_strat",
+        match_id="strat_match",
+        home="PVFCAND",
+        away="HANOI",
+        seq_rows=rows,
+        with_tracks_and_video=True,
+    )
+    out_dir = tmp_path / "strat_pack"
+    manifest = export_pack(
+        mdir, out_dir, club="PVFCAND", export_clips=True, max_clips=5, pre_roll_s=0.2, post_roll_s=0.2
+    )
+    assert manifest["economics"]["sequences_exported"] == 10
+    assert manifest["economics"]["clips_exported"] == 5
+    pl = pd.read_csv(out_dir / "playlist.csv")
+    assert len(pl) == 10
+    rendered = pl[pl["clip_path"].notna() & (pl["clip_path"] != "")]
+    assert set(rendered["label"]) == {
+        "high_press", "build_up", "low_block", "midfield_loss", "flank_overload"
+    }
 
 
 def test_query_club_filter_aggregates_home_and_away_fixtures(two_fixture_root: Path):

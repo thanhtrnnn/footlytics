@@ -108,6 +108,120 @@ def format_clock(seconds: float) -> str:
     return f"{hh}:{mm:02d}:{ss:02d}" if hh else f"{mm:02d}:{ss:02d}"
 
 
+def format_match_clock(elapsed_period_s: float, period: int = 1) -> str:
+    """Format kickoff-relative football match clock (`00:16`, `45+03:10`, `69:33`, `90+04:07`)."""
+    s = max(0, round(float(elapsed_period_s)))
+    half_s = 45 * 60
+    p = max(1, int(period))
+    if p == 1:
+        if s <= half_s:
+            mm, ss = divmod(s, 60)
+            return f"{mm:02d}:{ss:02d}"
+        mm, ss = divmod(s - half_s, 60)
+        return f"45+{mm:02d}:{ss:02d}"
+    if p == 2:
+        if s <= half_s:
+            mm, ss = divmod(half_s + s, 60)
+            return f"{mm:02d}:{ss:02d}"
+        mm, ss = divmod(s - half_s, 60)
+        return f"90+{mm:02d}:{ss:02d}"
+    mm, ss = divmod((p - 1) * half_s + s, 60)
+    return f"{mm:02d}:{ss:02d}"
+
+
+def _resolve_period_starts(entry: MatchEntry) -> dict[int, float]:
+    """Infer video/state start timestamp (in seconds) of each match period."""
+    meta_path = entry.dir / "meta.json"
+    if meta_path.is_file():
+        with contextlib.suppress(OSError, ValueError):
+            meta_doc = json.loads(meta_path.read_text())
+            raw = (meta_doc.get("provenance") or {}).get("period_start_s")
+            if isinstance(raw, dict) and raw:
+                return {int(k): float(v) for k, v in raw.items()}
+    if entry.tracks_path is not None and entry.tracks_path.is_file():
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            tdf = pd.read_parquet(entry.tracks_path, columns=["period", "timestamp"])
+            if not tdf.empty:
+                out: dict[int, float] = {}
+                for p, g in tdf.groupby("period", observed=True):
+                    t0 = float(g["timestamp"].min())
+                    out[int(p)] = 0.0 if (int(p) == 1 and t0 < 5.0) else t0
+                return out
+    return {}
+
+
+def _period_elapsed_s(state_s: float, period: int, period_starts: dict[int, float]) -> float:
+    p = max(1, int(period))
+    if p in period_starts:
+        return max(0.0, float(state_s) - float(period_starts[p]))
+    base = (p - 1) * 45.0 * 60.0
+    if p >= 2 and float(state_s) >= base:
+        return float(state_s) - base
+    return max(0.0, float(state_s))
+
+
+def _select_stratified_clip_indices(
+    playlist: pd.DataFrame,
+    eligible_matches: set[str],
+    max_clips: int | None,
+) -> set[int]:
+    """Select row indices in `playlist` for MP4 cutting, stratified across labels and matches."""
+    if playlist.empty or not eligible_matches:
+        return set()
+    cand_mask = playlist["match_id"].astype(str).isin(eligible_matches)
+    cand_indices = [int(i) for i in playlist.index[cand_mask]]
+    if max_clips is None:
+        return set(cand_indices)
+    budget = int(max_clips)
+    if budget <= 0 or not cand_indices:
+        return set()
+    if len(cand_indices) <= budget:
+        return set(cand_indices)
+
+    sub = playlist.loc[cand_indices]
+    present_labels = list(dict.fromkeys(list(LABEL_ORDER) + [str(x) for x in sub["label"].unique()]))
+    buckets: list[list[int]] = []
+    for lbl in present_labels:
+        l_df = sub[sub["label"] == lbl]
+        if l_df.empty:
+            continue
+        # Within each label, prioritize verified 'right' and longer sequences, interleaved by match_id
+        by_match: list[list[int]] = []
+        for _, m_df in l_df.groupby("match_id", sort=False):
+            ranked = m_df.assign(
+                _v=(m_df["verdict"] != "right").astype(int),
+                _d=-m_df["duration_s"].astype(float),
+            ).sort_values(["_v", "_d", "start_s"], kind="stable")
+            by_match.append([int(i) for i in ranked.index])
+        interleaved: list[int] = []
+        pos = 0
+        while True:
+            added = False
+            for m_list in by_match:
+                if pos < len(m_list):
+                    interleaved.append(m_list[pos])
+                    added = True
+            if not added:
+                break
+            pos += 1
+        buckets.append(interleaved)
+
+    selected: set[int] = set()
+    cursor = [0] * len(buckets)
+    while len(selected) < budget:
+        progressed = False
+        for b_idx, bucket in enumerate(buckets):
+            if cursor[b_idx] < len(bucket):
+                selected.add(bucket[cursor[b_idx]])
+                cursor[b_idx] += 1
+                progressed = True
+                if len(selected) >= budget:
+                    break
+        if not progressed:
+            break
+    return selected
+
+
 def resolve_sequence_marks(
     marks: dict[str, Any] | None,
     sequences: pd.DataFrame,
@@ -217,10 +331,12 @@ def _resolve_video_for_entry(
         if video_dir is not None:
             candidates.append(Path(video_dir) / vname)
         candidates.append(entry.dir / vname)
-    if video_dir is not None:
-        for ext in (".mp4", ".mkv", ".mov", ".m4v"):
+    for ext in (".mp4", ".mkv", ".mov", ".m4v"):
+        if video_dir is not None:
             candidates.append(Path(video_dir) / f"{entry.match_id}{ext}")
             candidates.append(Path(video_dir) / f"{entry.dir.name}{ext}")
+        candidates.append(entry.dir / f"{entry.match_id}{ext}")
+        candidates.append(entry.dir / f"{entry.dir.name}{ext}")
     for c in candidates:
         if c.is_file():
             return c
@@ -326,6 +442,7 @@ def _draw_hud_banner(
     evidence: str,
     in_window: bool,
     cur_s: float,
+    clock_str: str | None = None,
 ) -> None:
     fw = canvas_bgr.shape[1]
     bar_h = 34
@@ -336,7 +453,8 @@ def _draw_hud_banner(
     badge_txt = "LIVE SEQ" if in_window else "CONTEXT"
     cv2.rectangle(canvas_bgr, (12, 6), (98, 28), badge_col, -1)
     cv2.putText(canvas_bgr, badge_txt, (19, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 1, cv2.LINE_AA)
-    title = f"{club} vs {opponent}  |  P{period} {format_clock(cur_s)}  |  {label.upper()}"
+    clk = clock_str if clock_str is not None else format_clock(cur_s)
+    title = f"{club} vs {opponent}  |  P{period} {clk}  |  {label.upper()}"
     if evidence:
         title += f"  ({evidence})"
     cv2.putText(canvas_bgr, title[:115], (110, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (245, 245, 245), 1, cv2.LINE_AA)
@@ -353,6 +471,7 @@ def export_sequence_clip(
     clip_start_s: float,
     clip_end_s: float,
     video_offset_s: float = 0.0,
+    period_start_s: float | None = None,
     state: MatchState | None = None,
     club: str = "HOME",
     opponent: str = "AWAY",
@@ -459,6 +578,11 @@ def export_sequence_clip(
                     else bgr.copy()
                 )
                 in_seq = seq_start_s <= cur_match_s <= seq_end_s
+                hud_clk = (
+                    format_match_clock(max(0.0, cur_match_s - period_start_s), period)
+                    if period_start_s is not None
+                    else None
+                )
                 _draw_hud_banner(
                     canvas,
                     club=club,
@@ -468,6 +592,7 @@ def export_sequence_clip(
                     evidence=evidence,
                     in_window=in_seq,
                     cur_s=cur_match_s,
+                    clock_str=hud_clk,
                 )
                 if state is not None:
                     s_idx = round(cur_match_s * state_fps)
@@ -527,6 +652,7 @@ def write_sportscode_xml(playlist: pd.DataFrame, out_xml: Path) -> Path:
             ("Club", str(r.club or r.side)),
             ("Opponent", str(r.opponent or "")),
             ("Period", f"P{int(r.period)}"),
+            ("Match Clock", str(getattr(r, "match_clock", "") or r.clock)),
             ("Tactical Label", str(r.label)),
             ("Verdict", str(r.verdict or "unmarked")),
             ("Evidence", str(r.evidence_summary or "")),
@@ -701,9 +827,11 @@ def _render_dossier_markdown(
     for r in playlist.itertuples():
         clip_cell = f"[Xem clip]({r.clip_path})" if r.clip_path else "—"
         note_clean = str(r.note or "").replace("|", "/")
+        m_clk = str(getattr(r, "match_clock", "") or r.clock)
+        clk_cell = f"H{int(r.period)} `{m_clk}`" + (f" (video `{r.clock}`)" if m_clk != str(r.clock) else "")
         lines.append(
             f"| {int(r.clip_index)} | `{r.match_id}` | {r.club or r.side} | "
-            f"H{int(r.period)} `{r.clock}` | `{r.label}` | {float(r.duration_s):.1f}s | "
+            f"{clk_cell} | `{r.label}` | {float(r.duration_s):.1f}s | "
             f"{r.evidence_summary} | {clip_cell} | {note_clean} |"
         )
     lines.append("")
@@ -741,11 +869,17 @@ def _render_dossier_html(
 
     def _fmt_seq_row(r: Any) -> str:
         clip_link = f'<a href="{esc(str(r.clip_path))}">MP4 + Radar</a>' if r.clip_path else "—"
+        m_clk = str(getattr(r, "match_clock", "") or r.clock)
+        v_sub = (
+            f"<br><span style='color:#64748b;font-size:11px'>video {esc(str(r.clock))}</span>"
+            if m_clk != str(r.clock)
+            else ""
+        )
         return (
             f"<tr><td class='num'>{int(r.clip_index)}</td>"
             f"<td><code>{esc(str(r.match_id))}</code></td>"
             f"<td><strong>{esc(str(r.club or r.side))}</strong></td>"
-            f"<td>H{int(r.period)} <code>{esc(str(r.clock))}</code></td>"
+            f"<td>H{int(r.period)} <code>{esc(m_clk)}</code>{v_sub}</td>"
             f"<td><span class='pill'>{esc(str(r.label))}</span></td>"
             f"<td class='num'>{float(r.duration_s):.1f}s</td>"
             f"<td>{esc(str(r.evidence_summary))}</td>"
@@ -882,6 +1016,7 @@ def export_pack(
         vid_offset = float(marks_doc.get("video_offset_s", 0.0)) if marks_doc else 0.0
         if vid_path is not None:
             match_videos[entry.match_id] = (vid_path, vid_offset, entry)
+        period_starts = _resolve_period_starts(entry)
 
         exported_for_match = 0
         for (_, row), (sid, verdict, note) in zip(seq_df.iterrows(), resolved_marks):
@@ -902,7 +1037,10 @@ def export_pack(
                 if verdict in ("wrong", "unsure"):
                     continue
 
+            per = int(row["period"])
             s0, s1 = float(row["start_s"]), float(row["end_s"])
+            e0 = _period_elapsed_s(s0, per, period_starts)
+            e1 = _period_elapsed_s(s1, per, period_starts)
             c0 = max(0.0, s0 - pre_roll_s)
             c1 = s1 + post_roll_s
             exported_for_match += 1
@@ -913,8 +1051,10 @@ def export_pack(
                     "club": row_club,
                     "opponent": row_opp,
                     "side": side,
-                    "period": int(row["period"]),
+                    "period": per,
+                    "match_clock": f"{format_match_clock(e0, per)}-{format_match_clock(e1, per)}",
                     "clock": f"{format_clock(s0)}-{format_clock(s1)}",
+                    "period_start_s": period_starts.get(per),
                     "start_s": round(s0, 2),
                     "end_s": round(s1, 2),
                     "clip_start_s": round(c0, 2),
@@ -961,23 +1101,27 @@ def export_pack(
             .drop(columns=["_ord"])
             .reset_index(drop=True)
         )
-        if max_clips is not None and max_clips >= 0:
-            playlist = playlist.iloc[: int(max_clips)].copy()
         playlist.insert(0, "clip_index", range(1, len(playlist) + 1))
     else:
         playlist = pd.DataFrame(
             columns=[
                 "clip_index", "sequence_id", "match_id", "club", "opponent", "side", "period",
-                "clock", "start_s", "end_s", "clip_start_s", "clip_end_s", "duration_s",
-                "label", "verdict", "note", "evidence_summary", "clip_path",
+                "match_clock", "clock", "start_s", "end_s", "clip_start_s", "clip_end_s",
+                "duration_s", "label", "verdict", "note", "evidence_summary", "clip_path",
             ]
         )
 
     clips_exported = 0
     if export_clips and not playlist.empty and match_videos:
+        selected_rows = _select_stratified_clip_indices(
+            playlist, set(match_videos.keys()), max_clips
+        )
         loaded_states: dict[str, MatchState | None] = {}
         clip_paths: list[str] = []
-        for r in playlist.itertuples():
+        for idx_row, r in zip(playlist.index, playlist.itertuples()):
+            if int(idx_row) not in selected_rows:
+                clip_paths.append("")
+                continue
             mv = match_videos.get(str(r.match_id))
             if mv is None:
                 clip_paths.append("")
@@ -993,6 +1137,7 @@ def export_pack(
                 f"{round(float(r.start_s)):04d}s_{r.label}_{r.club or r.side}.mp4"
             )
             rel_mp4 = Path("clips") / folder / fname
+            p_start = float(r.period_start_s) if pd.notna(r.period_start_s) else None
             export_sequence_clip(
                 vid_path,
                 out_path / rel_mp4,
@@ -1001,6 +1146,7 @@ def export_pack(
                 clip_start_s=float(r.clip_start_s),
                 clip_end_s=float(r.clip_end_s),
                 video_offset_s=vid_offset,
+                period_start_s=p_start,
                 state=loaded_states[m_entry.match_id],
                 club=str(r.club or r.side).upper(),
                 opponent=str(r.opponent or ("AWAY" if r.side == "home" else "HOME")).upper(),
@@ -1016,7 +1162,7 @@ def export_pack(
 
     csv_cols = [
         "clip_index", "sequence_id", "match_id", "club", "opponent", "side", "period",
-        "clock", "start_s", "end_s", "clip_start_s", "clip_end_s", "duration_s",
+        "match_clock", "clock", "start_s", "end_s", "clip_start_s", "clip_end_s", "duration_s",
         "label", "verdict", "note", "evidence_summary", "clip_path",
     ]
     playlist[csv_cols].to_csv(out_path / "playlist.csv", index=False)
