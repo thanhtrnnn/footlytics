@@ -5,7 +5,7 @@ const caption = document.querySelector('#layer-caption');
 const unit = document.querySelector('#desk-unit');
 const captions = {
   image: 'Minh hoạ cơ chế · dữ liệu tổng hợp. Phối cảnh làm vị trí và tỷ lệ chuyển động trong điểm ảnh thay đổi; cần calibration trước khi dùng mét.',
-  pitch: 'Minh hoạ cơ chế · dữ liệu tổng hợp. Các điểm được đưa về hệ toạ độ sân; không phải bản chạy pipeline.',
+  pitch: 'Minh hoạ cơ chế · dữ liệu tổng hợp. Các điểm được đưa về hệ toạ độ sân 105×68m; không phải bản chạy pipeline.',
   track: 'Minh hoạ cơ chế · dữ liệu tổng hợp. Quỹ đạo biểu diễn chuyển động trong mét; không phải ID hay kinematics đã đo trên một trận thật.',
 };
 buttons.forEach(button => button.addEventListener('click', () => {
@@ -24,35 +24,72 @@ buttons.forEach(button => button.addEventListener('click', () => {
   caption.textContent = captions[layer];
   unit.textContent = layer === 'image' ? 'Image space · minh hoạ' : 'Toạ độ sân · mét';
 }));
+
 // Real-video controls; the pitch illustration below remains a separate, labelled demo.
 const reel = document.querySelector('#hero-video');
 const reelButton = document.querySelector('#reel-toggle');
 const reelStatus = document.querySelector('#reel-status');
 function reelLabel(playing) {
   reelButton.setAttribute('aria-pressed', String(playing));
-  reelButton.querySelector('span').textContent = playing ? 'Tạm dừng trích đoạn' : 'Phát trích đoạn · 10s';
+  reelButton.querySelector('span').textContent = playing ? 'Tạm dừng showcase' : 'Phát showcase V1 · 64s';
   reelButton.querySelector('path').setAttribute('d', playing ? 'M7 5h3v14H7zM14 5h3v14h-3z' : 'm9 5 10 7-10 7z');
 }
 reelButton.addEventListener('click', async () => {
   if (!reel.paused) { reel.pause(); return; }
-  reelStatus.textContent = 'Đang tải trích đoạn…';
+  reelStatus.textContent = 'Đang tải showcase V1…';
   if (reel.error) reel.load();
   try { await reel.play(); }
-  catch { reelStatus.textContent = 'Chưa phát được trích đoạn. Thử lại hoặc mở video đầy đủ ở showcase bên dưới.'; }
+  catch { reelStatus.textContent = 'Chưa phát được video. Thử lại hoặc mở chương trình demo bên dưới.'; }
 });
 reel.addEventListener('playing', () => { reelLabel(true); reelStatus.textContent = ''; });
 reel.addEventListener('pause', () => reelLabel(false));
-reel.addEventListener('error', () => { reelLabel(false); reelStatus.textContent = 'Video chưa tải được. Thử lại hoặc mở showcase đầy đủ bên dưới.'; });
+reel.addEventListener('error', () => { reelLabel(false); reelStatus.textContent = 'Video chưa tải được. Thử lại hoặc mở chương trình demo bên dưới.'; });
 new IntersectionObserver(entries => {
   if (!entries[0].isIntersecting) reel.pause();
 }, { threshold: .05 }).observe(reel);
 document.addEventListener('visibilitychange', () => { if (document.hidden) reel.pause(); });
 
 const demos = {
-  gt40: { file: 'gt-video-radar-40s', title: 'Video & radar đồng bộ', kind: 'Ground truth · 40 giây · 25 fps', description: 'Footage thật, bbox và số áo từ annotations, cùng radar và quỹ đạo. Hai góc nhìn của cùng một đoạn trận đấu.', limit: 'Dùng ground truth cung cấp sẵn, không đo accuracy của model.' },
-  gt240: { file: 'gt-radar-4min', title: 'Theo trận đấu trong bốn phút', kind: 'Ground truth · 4 phút · 25 fps', description: 'Radar toàn sân, vị trí và trails từ annotations. Cửa sổ dài hơn để quan sát cách đội hình thay đổi theo thời gian.', limit: 'Chỉ hiển thị ground truth. Radar dùng giả định kích thước sân legacy chưa được xác minh.' },
-  model25: { file: 'pipeline-detection-10s', title: 'Khi pipeline tự nhìn trận đấu', kind: 'Model prediction · 10 giây · 25 fps', description: 'Nhận diện và chiếu lên radar với confidence 0.25, pitch margin 2m. Xem trực tiếp những quan sát model xuất ra.', limit: 'Còn bỏ sót người, false positive và ID phân mảnh. Chưa có ground-truth scoring cho lượt chạy này.' },
-  model10: { file: 'pipeline-detection-low-confidence-10s', title: 'Nhận nhiều hơn. Kiểm lỗi kỹ hơn.', kind: 'Model prediction · 10 giây · 25 fps', description: 'Lượt chạy với confidence 0.10, pitch margin 6m. Ngưỡng nhận rộng hơn cần được kiểm cùng bộ lọc và chất lượng tracking.', limit: 'Cả confidence và pitch margin đều thay đổi. Không phải so sánh có kiểm soát chỉ một tham số.' },
+  vleague64: {
+    file: 'founder-showcase',
+    aspect: '16-9',
+    title: 'V.League V1 Showcase toàn quy trình',
+    kind: 'Pipeline V1 · V.League 2025/26 · 64 giây · 30 fps',
+    description: '4 chương liên mạch trên 4 trận V.League 2025/26: chiếu sân 105×68m, nhận diện người & bóng, đủ 5 mẫu hình chiến thuật, Web Tactical Workspace và Hồ sơ Đối thủ tiếng Việt.',
+    limit: 'V1 tập trung cấu trúc chiến thuật cấp đội (chưa định danh số áo cá nhân). 96.3% độ chính xác kiểm duyệt trên 55 tình huống qua 3 sân.',
+  },
+  gt40: {
+    file: 'gt-video-radar-40s',
+    aspect: 'legacy',
+    title: 'Video & radar đồng bộ (SoccerTrack)',
+    kind: 'Ground truth · 40 giây · 25 fps',
+    description: 'Footage thật, bbox và số áo từ annotations SoccerTrack v2, cùng radar và quỹ đạo. Hai góc nhìn của cùng một đoạn trận đấu.',
+    limit: 'Dùng ground truth cung cấp sẵn, không đo accuracy của model.',
+  },
+  gt240: {
+    file: 'gt-radar-4min',
+    aspect: 'legacy',
+    title: 'Theo trận đấu trong bốn phút (SoccerTrack)',
+    kind: 'Ground truth · 4 phút · 25 fps',
+    description: 'Radar toàn sân, vị trí và trails từ annotations. Cửa sổ dài hơn để quan sát cách đội hình thay đổi theo thời gian.',
+    limit: 'Chỉ hiển thị ground truth. Radar legacy dùng giả định kích thước sân 105×76m.',
+  },
+  model25: {
+    file: 'pipeline-detection-10s',
+    aspect: 'legacy',
+    title: 'Đối chiếu detector sớm (conf 0.25)',
+    kind: 'Model prediction · 10 giây · 25 fps',
+    description: 'Lượt chạy đầu kỳ tháng 10 trên SoccerTrack với confidence 0.25, pitch margin 2m để đối chiếu sự cải tiến của V1.',
+    limit: 'Bản đầu kỳ trước khi nâng cấp Apache-2.0 RT-DETRv2 và phân vai toàn quỹ đạo.',
+  },
+  model10: {
+    file: 'pipeline-detection-low-confidence-10s',
+    aspect: 'legacy',
+    title: 'Mở rộng ngưỡng nhận (conf 0.10)',
+    kind: 'Model prediction · 10 giây · 25 fps',
+    description: 'Lượt chạy với confidence 0.10, pitch margin 6m. Ngưỡng nhận rộng hơn cần được kiểm cùng bộ lọc và chất lượng tracking.',
+    limit: 'Cả confidence và pitch margin đều thay đổi. Không phải so sánh có kiểm soát chỉ một tham số.',
+  },
 };
 const demoVideo = document.querySelector('#demo-video');
 const demoStatus = document.querySelector('#demo-status');
@@ -63,6 +100,7 @@ selectors.forEach(button => button.addEventListener('click', event => {
   const demo = demos[button.dataset.demo];
   demoVideo.pause();
   selectors.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+  demoVideo.dataset.aspect = demo.aspect || 'legacy';
   demoVideo.src = `/assets/demos/${demo.file}.mp4`;
   demoVideo.poster = `/assets/demos/${demo.file}.jpg`;
   document.querySelector('#demo-title').textContent = demo.title;

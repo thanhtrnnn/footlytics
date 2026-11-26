@@ -87,3 +87,4 @@ h1,h2,h3,.primary-display,.demo-selector strong{font-family:var(--display);font-
 
 h1,h2,h3,.wordmark,.primary-display,.technology-strip,.demo-selector strong{font-family:var(--display);font-weight:550;font-synthesis:none;font-optical-sizing:auto}
 .technology-strip{font-weight:500}.contact-address{font-weight:500}
+.demo-stage video[data-aspect="16-9"]{aspect-ratio:16/9;background:#0b1813}

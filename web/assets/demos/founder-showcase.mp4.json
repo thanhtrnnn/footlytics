@@ -1,0 +1,9 @@
+{
+  "file": "founder-showcase.mp4",
+  "bytes": 8026454,
+  "sha256": "a34ad4787d02ff30cdc2cc7d990d380d3a74b5f85e2a2ca929feea1154079586",
+  "width": 1280,
+  "height": 720,
+  "origin": "Generated locally by scripts/build_founder_showcase.py from processed LPBank V.League 1 2025/26 MatchStates",
+  "provenance": "Technical showcase & club pilot demonstration (non-CC-BY broadcast excerpts)"
+}
