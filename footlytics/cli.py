@@ -100,15 +100,18 @@ def run_video_cmd(
     ball_link: bool = typer.Option(True, "--ball-link/--no-ball-link", help="link ball detections across frames into continuous tracks"),
     ball_detector: str = typer.Option("yolo", help="ball detector backend: yolo | rtdetr"),
     ball_weights_dir: Optional[str] = typer.Option(None, help="weights/ subdirectory for rtdetr ball detector, e.g. ball-rtdetrv2-vl/best"),
+    calib_backend: str = typer.Option("soccermaster", help="broadcast pitch calibrator: soccermaster | apache2"),
+    calib_weights_dir: Optional[str] = typer.Option(None, help="weights directory for apache2 pitch calibrator"),
 ) -> None:
-    """Per-frame calibration (SoccerMaster, CUDA host with the bench install) + full pipeline on a
+    """Per-frame calibration (SoccerMaster or Apache-2.0 PitchCalibNet) + full pipeline on a
     broadcast video; writes tracks.parquet, quality.json/md, sequences.csv for `review serve`."""
     from .bench.paths import BenchPaths
     from .pipeline.clip import run_video
 
     q = run_video(video, out, BenchPaths.from_env(), every, gate_px, home, away, log=typer.echo,
                   capture=capture, replay=replay, ball_link=ball_link,
-                  ball_detector=ball_detector, ball_weights_dir=ball_weights_dir)
+                  ball_detector=ball_detector, ball_weights_dir=ball_weights_dir,
+                  calib_backend=calib_backend, calib_weights_dir=calib_weights_dir)
     typer.echo(json.dumps({k: q.get(k) for k in ("frames", "mean_players_per_frame", "ball_coverage",
                                                   "seconds_per_match_minute", "calib_success_rate")}, indent=2))
 
@@ -132,6 +135,8 @@ def match_run_cmd(
     ball_link: bool = typer.Option(True, "--ball-link/--no-ball-link"),
     ball_detector: str = typer.Option("rtdetr", help="ball detector backend: rtdetr | yolo"),
     ball_weights_dir: Optional[str] = typer.Option(None, help="weights/ subdirectory for rtdetr ball detector"),
+    calib_backend: str = typer.Option("soccermaster", help="broadcast pitch calibrator: soccermaster | apache2"),
+    calib_weights_dir: Optional[str] = typer.Option(None, help="weights directory for apache2 pitch calibrator"),
     profile: Optional[str] = typer.Option(None, help="Tactical threshold preset or YAML/JSON file (e.g. default, high_press_aggressive, club.yaml)"),
     save_obs: bool = typer.Option(True, "--save-obs/--no-save-obs", help="save per-chunk obs.pkl for fast CPU replay"),
     replay_only: bool = typer.Option(False, "--replay-only", help="re-run tracking and sequences from saved chunk obs.pkl on CPU"),
@@ -167,6 +172,8 @@ def match_run_cmd(
         ball_link=ball_link,
         ball_detector=ball_detector,
         ball_weights_dir=ball_weights_dir,
+        calib_backend=calib_backend,
+        calib_weights_dir=calib_weights_dir,
         tactical_profile=profile,
         save_obs=save_obs,
         replay_only=replay_only,

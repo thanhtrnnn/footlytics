@@ -85,7 +85,9 @@ def run_video(video: Path, out: Path, paths, every: int = 10, gate_px: float = 2
               home: str = "HOME", away: str = "AWAY", log=print,
               capture: Path | None = None, replay: Path | None = None,
               ball_link: bool = True, ball_detector: str = "yolo",
-              ball_weights_dir: Optional[str] = None) -> dict:
+              ball_weights_dir: Optional[str] = None,
+              calib_backend: str = "soccermaster",
+              calib_weights_dir: Optional[str] = None) -> dict:
     """Calibrate, detect, track, then write tracks, quality and sequences into `out`.
 
     `capture` also pickles what the GPU half produced (detections, pitch positions, kit
@@ -112,7 +114,10 @@ def run_video(video: Path, out: Path, paths, every: int = 10, gate_px: float = 2
         t0 = time.perf_counter()
         state, report = run_observations(obs, fps, meta, pcfg, has_referee_class=has_ref)
     else:
-        calibrator = runner._calibrator(paths)
+        cal_cfg: dict = {"backend": calib_backend}
+        if calib_weights_dir:
+            cal_cfg["weights_dir"] = calib_weights_dir
+        calibrator = runner._get_calibrator(paths, cal_cfg)
         det_cfg: dict = {}
         if ball_detector == "rtdetr":
             det_cfg = {"ball_detector": "rtdetr", "ball_conf": 0.15}

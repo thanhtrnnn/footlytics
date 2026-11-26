@@ -1,0 +1,18 @@
+# 100% Apache-2.0 / BSD-3-Clause commercial-clean perception + broadcast calibration stack.
+# Zero ultralytics (AGPL-3.0) and zero ext/SoccerMaster (unlicensed) runtime imports.
+name: apache2-full
+description: Full commercial-clean broadcast stack (Apache-2.0 RT-DETRv2 people + ball + Apache-2.0 PitchCalibNet)
+tasks:
+  - id: gsr-valid-apache2-full
+    kind: gsr
+    split: valid
+    every: 10
+    calibrator:
+      backend: apache2
+      kp_threshold: 0.30
+      line_threshold: 0.45
+      refine_lines: true
+    detector:
+      people_detector: rtdetr
+      ball_detector: rtdetr
+      ball_conf: 0.15

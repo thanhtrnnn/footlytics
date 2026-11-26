@@ -349,6 +349,8 @@ def run_match(
     ball_link: bool = True,
     ball_detector: str = "rtdetr",
     ball_weights_dir: str | None = None,
+    calib_backend: str = "soccermaster",
+    calib_weights_dir: str | None = None,
     tactical_profile: str | Path | object | None = None,
     save_obs: bool = True,
     replay_only: bool = False,
@@ -396,7 +398,10 @@ def run_match(
         from ..bench.paths import BenchPaths
 
         bpaths = paths or BenchPaths.from_env()
-        calibrator = runner._calibrator(bpaths)
+        cal_cfg: dict = {"backend": calib_backend}
+        if calib_weights_dir:
+            cal_cfg["weights_dir"] = calib_weights_dir
+        calibrator = runner._get_calibrator(bpaths, cal_cfg)
         det_cfg: dict = {}
         if people_detector == "rtdetr":
             det_cfg["people_detector"] = "rtdetr"

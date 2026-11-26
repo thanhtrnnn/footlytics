@@ -627,9 +627,9 @@ def vleague_task(task: dict, ctx) -> dict:
             if not jpg.exists():
                 raise FileNotFoundError(f"frame {key}: missing window image {jpg.name} ({jpg})")
     runner.require_vram(task.get("vram_mib", runner.VRAM_MIB))
-    cal = runner._calibrator(ctx.paths)
-    landmarks = DEFAULT_PITCH.landmarks()
     cfg = task.get("calibrator", {})
+    cal = runner._get_calibrator(ctx.paths, cfg)
+    landmarks = DEFAULT_PITCH.landmarks()
     fit_kw = {**runner._thresholds(cfg), **_solve_kw(cfg)}
     solver_errors = 0
 

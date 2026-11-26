@@ -92,6 +92,12 @@ class BenchPaths:
         return self.root / "weights" / "people-rtdetrv2" / "best"
 
     @property
+    def pitch_calib_weights(self) -> Path:
+        """Our Apache-2.0 ResNet-FPN pitch keypoint+line calibrator from
+        `scripts/train_pitch_calibrator.py`."""
+        return self.root / "weights" / "pitch-calib-apache2" / "best"
+
+    @property
     def soccermaster_code(self) -> Path:
         """The SoccerMaster checkout (no licence: internal R&D), shipped by `bench setup`."""
         return self.ext / "SoccerMaster"

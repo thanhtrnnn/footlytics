@@ -308,13 +308,34 @@ _CALIBRATORS: dict = {}
 
 def _calibrator(paths: BenchPaths):
     """One SoccerMaster model per process (1.4 GB of weights; thresholds are per call)."""
-    key = (str(paths.soccermaster_code), str(paths.weights))
+    key = ("soccermaster", str(paths.soccermaster_code), str(paths.weights))
     if key not in _CALIBRATORS:
         from ..geometry.calib_nn import SoccerMasterCalibrator
 
         _CALIBRATORS[key] = SoccerMasterCalibrator(paths.soccermaster_code, paths.weights,
                                                    device="cuda")
     return _CALIBRATORS[key]
+
+
+def _get_calibrator(paths: BenchPaths, cfg: dict | None = None):
+    """Return the configured pitch calibrator (`soccermaster` default or Apache-2.0 `apache2`)."""
+    cfg = cfg or {}
+    backend = str(cfg.get("backend", "soccermaster")).lower()
+    if backend == "soccermaster":
+        return _calibrator(paths)
+    if backend == "apache2":
+        wdir = (
+            Path(cfg["weights_dir"])
+            if cfg.get("weights_dir")
+            else paths.pitch_calib_weights
+        )
+        key = ("apache2", str(wdir))
+        if key not in _CALIBRATORS:
+            from ..geometry.pitch_calibrator import Apache2PitchCalibrator
+
+            _CALIBRATORS[key] = Apache2PitchCalibrator(wdir)
+        return _CALIBRATORS[key]
+    raise ValueError(f"unknown calibrator backend {backend!r}; expected 'soccermaster' or 'apache2'")
 
 
 def _thresholds(cfg: dict) -> dict:
@@ -370,7 +391,7 @@ def sncalib(task: dict, ctx: TaskContext) -> dict:
     gt_dir, pred_dir = ctx.work / "gt" / split, ctx.work / "pred" / split
     gt_dir.mkdir(parents=True, exist_ok=True)
     pred_dir.mkdir(parents=True, exist_ok=True)
-    cal = _calibrator(ctx.paths)
+    cal = _get_calibrator(ctx.paths, cfg)
     failed, jobs, ids, gts = {}, [], [], {}
     spent = 0.0                    # decode + solve only: not the evaluator runs
     with zipfile.ZipFile(ctx.paths.calib_zip(split)) as z:
@@ -502,7 +523,7 @@ def _clip_calibration(ctx: TaskContext, z: zipfile.ZipFile, split: str, seq: str
         return _CLIP_CALIBRATIONS[key]
     names = _frame_names(z, split, seq, ctx.paths)
     _check_alignment(seq, names)
-    cal = _calibrator(ctx.paths)
+    cal = _get_calibrator(ctx.paths, cfg)
     thr = _thresholds(cfg)
     solve_kw = {"voting": False, "mode": cfg.get("mode", "full"),
                 "ransac": float(cfg.get("ransac", 10.0)),
@@ -536,7 +557,7 @@ def gsr_calibration(task: dict, ctx: TaskContext) -> dict:
     split, cfg = task["split"], task.get("calibrator", {})
     every, gate = task.get("every", 25), float(task.get("gate_px", 25.0))
     require_vram(task.get("vram_mib", VRAM_MIB))
-    _calibrator(ctx.paths)       # a load failure fails the task here, not once per clip
+    _get_calibrator(ctx.paths, cfg)       # a load failure fails the task here, not once per clip
     per, failed = {}, {}
     spent, n_frames = 0.0, 0         # calibration time only: not the evaluator runs
 
@@ -692,7 +713,7 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
         require_vram(task.get("vram_mib", PIPELINE_VRAM_MIB))
         # Both models load before the clip loop and a failure there fails the task. Inside the
         # loop it would be retried per clip and score each as all misses.
-        _calibrator(ctx.paths)
+        _get_calibrator(ctx.paths, cfg)
         det = _detector(ctx.paths, task.get("detector", {}))
     out_dir = ctx.work / "trackers" / f"SoccerNetGS-{split}" / "footlytics"
     out_dir.mkdir(parents=True, exist_ok=True)
