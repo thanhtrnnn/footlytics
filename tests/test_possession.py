@@ -95,25 +95,120 @@ def test_uncontrolled_free_ball_flight_past_max_gap_resets_to_unknown():
     assert (s.loc[100:] == "AWAY").all()
 
 
-def test_deep_box_1v1_mark_does_not_flip_possession_to_defender():
-    # Home attacker dribbles inside away's deep box (x_own_away <= -30 -> x >= +30), while an
-    # away defender tracks at 1.0 m (closer than attacker's 2.5 m, inside 3.8 m contest radius).
+def _scene(ball_path, players, interpolated=False):
+    """players: {track_id: (team, [(x, y) per frame])}; ball_path: [(x, y) or None per frame]."""
     rows = []
-    bx = 35.0
-    for f in range(80):
-        # First 40 frames: home clearly controls unchallenged (away far away).
-        # Next 40 frames: away defender marks tighter (1.0 m) while home attacker stays at 2.5 m.
-        hx = bx if f < 40 else bx - 2.5
-        ax = 0.0 if f < 40 else bx + 1.0
-        for tid, x, y, team in ((1, hx, 0.0, Team.HOME), (2, ax, 0.0, Team.AWAY)):
+    for f, b in enumerate(ball_path):
+        for tid, (team, path) in players.items():
+            x, y = path[f]
             rows.append(dict(frame_idx=f, period=1, timestamp=f / FPS, track_id=tid,
                              role=Role.PLAYER.value, team=team.value, x=x, y=y))
-        rows.append(dict(frame_idx=f, period=1, timestamp=f / FPS, track_id=-1,
-                         role=Role.BALL.value, team=Team.UNKNOWN.value, x=bx, y=0.0))
-    st = MatchState(MatchMeta(match_id="B", fps=FPS, home=TeamInfo("H", "H"), away=TeamInfo("A", "A")),
-                    pd.DataFrame(rows))
-    s = _status(infer_possession(st))
-    assert (s == "HOME").all()
+        if b is not None:
+            rows.append(dict(frame_idx=f, period=1, timestamp=f / FPS, track_id=-1,
+                             role=Role.BALL.value, team=Team.UNKNOWN.value, x=b[0], y=b[1],
+                             interpolated=interpolated))
+    meta = MatchMeta(match_id="P", fps=FPS, home=TeamInfo("H", "H"), away=TeamInfo("A", "A"))
+    return MatchState(meta, pd.DataFrame(rows))
+
+
+def _carried(n, speed_mps=3.0, home_off=(-1.0, 0.0), away_off=(-1.2, 0.3), still_frames=25):
+    """Ball at home's feet for 1 s, then rolling at a constant speed with both teams alongside."""
+    ball, home, away = [], [], []
+    for f in range(n):
+        bx = max(0, f - still_frames) * speed_mps / FPS
+        ball.append((bx, 0.0))
+        if f < still_frames:
+            home.append((bx - 0.3, 0.0))
+            away.append((15.0, 0.0))
+        else:
+            home.append((bx + home_off[0], home_off[1]))
+            away.append((bx + away_off[0], away_off[1]))
+    return ball, {1: (Team.HOME, home), 2: (Team.AWAY, away)}
+
+
+def test_a_marker_almost_as_close_as_the_carrier_leaves_the_ball_contested():
+    ball, players = _carried(100)                     # home 1.0 m, away 1.24 m behind the ball
+    s = _status(infer_possession(_scene(ball, players)))
+    assert (s.loc[:24] == "HOME").all()
+    assert (s.loc[45:] == "CONTESTED").all()
+    assert (s != "AWAY").all()
+
+
+def test_a_nearer_defender_who_never_touches_the_ball_does_not_win_it():
+    ball, players = _carried(100, home_off=(-1.25, 0.0), away_off=(-0.8, 0.0))
+    s = _status(infer_possession(_scene(ball, players)))
+    assert (s != "AWAY").all()
+    assert (s.loc[45:] == "CONTESTED").all()
+
+
+def _intercepted():
+    """Home holds it 1 s, passes at 10 m/s, and an away player stops it 4 m out."""
+    ball = [(0.0, 0.0)] * 25 + [(0.4 * k, 0.0) for k in range(1, 11)] + [(4.0, 0.0)] * 40
+    home = [(-0.3, 0.0)] * len(ball)
+    away = [(4.3, 0.0)] * len(ball)
+    return ball, {1: (Team.HOME, home), 2: (Team.AWAY, away)}
+
+
+def test_a_stopping_touch_by_the_defender_gives_him_the_ball():
+    ball, players = _intercepted()
+    s = _status(infer_possession(_scene(ball, players)))
+    assert (s.loc[:31] == "HOME").all()
+    assert (s.loc[32:] == "AWAY").all()
+
+
+def test_a_defender_who_has_the_ball_to_himself_gets_it_without_a_touch():
+    """The ball sits still and the home player has gone: nobody within a stride contests it."""
+    ball = [(0.0, 0.0)] * 80
+    home = [(-0.3, 0.0)] * 25 + [(30.0, 0.0)] * 55
+    away = [(40.0, 0.0)] * 25 + [(0.8, 0.0)] * 55
+    s = _status(infer_possession(_scene(ball, {1: (Team.HOME, home), 2: (Team.AWAY, away)})))
+    assert (s.loc[:24] == "HOME").all()
+    assert (s.loc[25:] == "AWAY").all()
+
+
+def test_a_defender_with_the_carrier_still_within_a_stride_needs_a_touch_to_win_it():
+    ball = [(0.0, 0.0)] * 80
+    home = [(-0.3, 0.0)] * 25 + [(-1.8, 0.0)] * 55
+    away = [(40.0, 0.0)] * 25 + [(0.8, 0.0)] * 55
+    s = _status(infer_possession(_scene(ball, {1: (Team.HOME, home), 2: (Team.AWAY, away)})))
+    assert (s.loc[:24] == "HOME").all()
+    assert (s != "AWAY").all() and (s.loc[40:] == "CONTESTED").all()
+
+
+def test_touch_column_names_the_team_whose_player_changed_the_balls_velocity():
+    ball, players = _intercepted()
+    poss = infer_possession(_scene(ball, players))
+    touch = poss.set_index("frame_idx")["touch"]
+    assert touch.loc[34] == "AWAY"
+    assert touch.loc[5] == ""
+
+
+def test_gain_column_says_how_each_spell_of_possession_was_won():
+    ball, players = _intercepted()
+    gain = infer_possession(_scene(ball, players)).set_index("frame_idx")["gain"]
+    assert gain.loc[0] == "hold" and gain.loc[32] == "touch"
+    assert (gain.drop([0, 32]) == "").all()
+
+    ball = [(0.0, 0.0)] * 80
+    home = [(-0.3, 0.0)] * 25 + [(30.0, 0.0)] * 55
+    away = [(40.0, 0.0)] * 25 + [(0.8, 0.0)] * 55
+    gain = infer_possession(_scene(ball, {1: (Team.HOME, home), 2: (Team.AWAY, away)})).set_index("frame_idx")["gain"]
+    assert gain.loc[25] == "unclaimed"
+
+
+def test_a_loose_ball_with_both_teams_in_reach_is_contested():
+    ball = [(0.0, 0.0)] * 60
+    players = {1: (Team.HOME, [(-1.0, 0.0)] * 60), 2: (Team.AWAY, [(1.1, 0.0)] * 60)}
+    s = _status(infer_possession(_scene(ball, players)))
+    assert (s.loc[15:] == "CONTESTED").all()
+    assert (s.loc[:5] == "UNKNOWN").all()
+
+
+def test_interpolated_ball_positions_are_not_evidence_of_control():
+    ball = [(0.0, 0.0)] * 50
+    players = {1: (Team.HOME, [(0.3, 0.0)] * 50)}
+    s = _status(infer_possession(_scene(ball, players, interpolated=True)))
+    assert (s == "UNKNOWN").all()
 
 
 def test_touchline_dribble_within_two_metre_margin_is_not_ballout():
