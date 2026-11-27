@@ -1,4 +1,4 @@
-"""Unit & integration tests for the 100% Apache-2.0 broadcast pitch calibrator."""
+"""Unit & integration tests for the ResNet-FPN pitch calibrator and camera solver."""
 from __future__ import annotations
 
 import subprocess
@@ -63,6 +63,7 @@ def test_solver_recovers_broadcast_camera_from_noisy_keypoints_and_lines() -> No
     solver = Apache2CameraSolver()
     fit = solver.solve(kps, lines, w, h, refine_lines=True)
     assert fit is not None
+    assert fit.n_keypoints is not None and fit.n_keypoints >= len(kps)
     assert fit.rep_err < 2.5
 
     # Verify metric accuracy across a test grid projected onto the pitch plane
@@ -110,7 +111,22 @@ def test_heatmap_render_decode_and_solve_roundtrip() -> None:
     fit = Apache2CameraSolver().solve(kps, lns, w, h)
     assert fit is not None
     assert fit.rep_err < 5.0
+    assert fit.n_keypoints is not None and fit.n_keypoints >= len(kps)
     assert abs(fit.cam["pan_degrees"] - 8.0) < 0.5
+
+
+def test_solver_records_exact_n_keypoints_with_four_keypoints() -> None:
+    w, h = 1280, 720
+    cam_gt = _broadcast_camera(w, h, pan=10.0)
+    names = ("centre_spot", "halfway_T", "pa_RT_front", "pa_RB_front")
+    kps: dict[int, tuple[float, float, float]] = {}
+    for name in names:
+        idx = KEYPOINT_INDEX[name]
+        u, v = project(cam_gt, PITCH_KEYPOINTS_3D[[idx]])[0]
+        kps[idx] = (float(u), float(v), 0.95)
+    fit = Apache2CameraSolver().solve(kps, {}, w, h, refine_lines=False)
+    assert fit is not None
+    assert fit.n_keypoints == 4
     assert abs(fit.cam["tilt_degrees"] - 68.0) < 1.0
 
 

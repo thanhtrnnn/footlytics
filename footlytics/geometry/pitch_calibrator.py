@@ -1,14 +1,16 @@
-"""100% Apache-2.0 / BSD-3-Clause broadcast pitch keypoint & line calibrator.
+"""Experimental broadcast pitch keypoint & line calibrator (permissive code dependencies).
 
-Clean-room commercial replacement for `ext/SoccerMaster` + `PnLCalib`:
+An optional calibration backend under evaluation alongside `ext/SoccerMaster` + `PnLCalib`
+(`soccermaster` remains the default backend):
 1. FIFA `105 x 68 m` 3D pitch keypoint (41 landmarks: 37 ground + 4 crossbar) and
-   17 straight ground-line geometry catalog (zero third-party calibration code).
+   17 straight ground-line geometry catalog written directly against `sn_camera.py`.
 2. `Apache2CameraSolver`: RANSAC homography initializer with line-intersection
-   completion -> clean-room pinhole decomposition (`sn_camera.camera_from_homography`)
-   -> joint 3D keypoint + point-to-line nonlinear Levenberg-Marquardt refinement
-   (`scipy.optimize.least_squares` with robust `soft_l1` loss).
+   completion -> pinhole decomposition (`sn_camera.camera_from_homography`) ->
+   joint 3D keypoint + point-to-line nonlinear Levenberg-Marquardt refinement
+   (`scipy.optimize.least_squares` with robust `soft_l1` loss). Tested on synthetic cameras.
 3. `PitchCalibNet` & `Apache2PitchCalibrator`: ResNet-FPN dual-head heatmap model
-   (torchvision BSD-3-Clause + safetensors Apache-2.0) implementing the exact
+   (`torchvision` BSD-3-Clause + `safetensors` Apache-2.0 architecture; untrained/unscored on
+   real broadcast footage until trained weights are provided) implementing the
    `fit(frames_rgb, which=..., ...)` -> `dict[int, CameraFit | None]` interface used
    by `ClipCalibrator`, `pipeline/match.py`, `pipeline/clip.py`, and `bench/runner.py`.
 """
@@ -198,7 +200,7 @@ def complete_keypoints_from_lines(
 
 
 class Apache2CameraSolver:
-    """Clean-room homography + pinhole camera Levenberg-Marquardt solver."""
+    """Homography + pinhole camera Levenberg-Marquardt solver (no external PnLCalib code)."""
 
     def solve(
         self,
@@ -351,7 +353,12 @@ class Apache2CameraSolver:
         if not np.isfinite(H_inv).all() or abs(float(H_inv[2, 2])) < 1e-12:
             return None
         H_inv = H_inv / H_inv[2, 2]
-        fit = CameraFit(cam=cam_final, rep_err=rep_err, H_img_to_pitch=H_inv)
+        fit = CameraFit(
+            cam=cam_final,
+            rep_err=rep_err,
+            H_img_to_pitch=H_inv,
+            n_keypoints=len(all_ids),
+        )
         if not valid_camera_fit(fit, width, height):
             return None
         return fit
@@ -495,7 +502,7 @@ class PitchCalibConfig:
 
 
 def build_pitch_calib_net(cfg: PitchCalibConfig, *, pretrained_backbone: bool = False):
-    """Build the Apache-2.0 / BSD-3-Clause ResNet-FPN dual-head pitch keypoint+line model."""
+    """Build the ResNet-FPN dual-head pitch keypoint+line model (`torchvision` BSD-3-Clause)."""
     import torch
     import torch.nn.functional as F
     from torch import nn
@@ -566,7 +573,7 @@ def save_pitch_calibrator(model, cfg: PitchCalibConfig, out_dir: Path | str) -> 
         "fpn_channels": cfg.fpn_channels,
         "num_keypoints": cfg.num_keypoints,
         "num_lines": cfg.num_lines,
-        "license": "Apache-2.0",
+        "code_license": "Apache-2.0",
     }
     (dst / "config.json").write_text(json.dumps(cfg_dict, indent=2) + "\n", encoding="utf-8")
     state = {k: v.detach().cpu().contiguous() for k, v in model.state_dict().items()}
@@ -575,7 +582,7 @@ def save_pitch_calibrator(model, cfg: PitchCalibConfig, out_dir: Path | str) -> 
 
 
 class Apache2PitchCalibrator:
-    """Drop-in Apache-2.0 broadcast pitch calibrator matching `SoccerMasterCalibrator.fit()`."""
+    """Optional ResNet-FPN broadcast pitch calibrator matching `SoccerMasterCalibrator.fit()`."""
 
     def __init__(
         self,

@@ -31,6 +31,7 @@ class CameraFit:
     cam: dict                      # SoccerNet camera at the source resolution
     rep_err: float                 # solver's keypoint reprojection error, source px
     H_img_to_pitch: np.ndarray
+    n_keypoints: int | None = None
 
 
 def valid_camera_fit(fit: Optional[CameraFit], width: int, height: int) -> bool:
@@ -143,7 +144,7 @@ class PnlSolver:
                 for k, l in zip(kp, ln)]
 
     @staticmethod
-    def _fit_from_cam(cam, err) -> Optional[CameraFit]:
+    def _fit_from_cam(cam, err, n_keypoints: int | None = None) -> Optional[CameraFit]:
         if cam is None or err is None or not np.isfinite(err):
             return None
         cam_p = {k: _plain(v) for k, v in cam.items() if k != "rotation_matrix"}
@@ -153,7 +154,7 @@ class PnlSolver:
             return None
         if not np.isfinite(H).all() or abs(float(H[2, 2])) < 1e-12:
             return None
-        return CameraFit(cam_p, float(err), H / H[2, 2])
+        return CameraFit(cam_p, float(err), H / H[2, 2], n_keypoints=n_keypoints)
 
     def solve(self, keypoints: dict, lines: dict, width: int, height: int, voting: bool = True,
               mode: str = "full", ransac: float = 0.0,
@@ -162,12 +163,13 @@ class PnlSolver:
         otherwise the single (`mode`, `ransac`) setting. None when nothing fits."""
         c = self._calib.FramebyFrameCalib(iwidth=width, iheight=height, denormalize=True)
         c.update(copy.deepcopy(keypoints), copy.deepcopy(lines))
+        n_kp = len(keypoints)
         if voting:
             res = c.heuristic_voting(refine_lines=refine_lines)
             cam, err = (res["cam_params"], res["rep_err"]) if res else (None, None)
         else:
             cam, err = c.get_cam_params(mode=mode, use_ransac=ransac, refine_w_lines=refine_lines)
-        fit = self._fit_from_cam(cam, err)
+        fit = self._fit_from_cam(cam, err, n_keypoints=n_kp)
         if not voting and mode == "full" and ransac > 0 and (
             fit is None or fit.rep_err > 25.0 or not valid_camera_fit(fit, width, height)
         ):
@@ -176,7 +178,7 @@ class PnlSolver:
             try:
                 cam2, err2 = c2.get_cam_params(mode="ground_plane", use_ransac=0.0,
                                               refine_w_lines=refine_lines)
-                fit2 = self._fit_from_cam(cam2, err2)
+                fit2 = self._fit_from_cam(cam2, err2, n_keypoints=n_kp)
                 if fit2 is not None and fit2.rep_err <= 25.0 and valid_camera_fit(fit2, width, height):
                     fit = fit2
             except Exception:  # noqa: BLE001
