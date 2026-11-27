@@ -19,6 +19,12 @@ def frame(t):
     return f
 
 
+# These fixtures are a 16x9-pixel toy camera with a hand-made pan: its far field is nonsense and its
+# keyframes are not meant to be smoothed. They test the gate and the bridging, so those two newer
+# stages are switched off here and tested on a real camera below.
+LEGACY = dict(bridge_far_max_m=None, smooth=False)
+
+
 def shift(dx):
     return np.array([[1.0, 0, dx * STEP], [0, 1, 0], [0, 0, 1]])
 
@@ -45,7 +51,7 @@ def fits(rep_errs):
 def run(rep_errs, n=60, lost=(), every=25):
     FakeTracker.LOST = set(lost)
     cc = ClipCalibrator(fits(rep_errs), every=every, gate_px=25.0, tracker_factory=FakeTracker,
-                        chunk=30)
+                        chunk=30, **LEGACY)
     return cc, cc.run(frame(t) for t in range(n))
 
 
@@ -111,7 +117,7 @@ def test_bridge_max_m_rejects_isolated_keyframe_spike_and_recovers_on_pair():
     # Isolated spike at frame 25 is rejected in favour of the bridged camera
     cc = ClipCalibrator(
         mk_fits({0: CameraFit(CAM, 4.0, H0), 25: CameraFit(CAM, 4.0, H_spike), 50: CameraFit(CAM, 4.0, H0)}),
-        every=25, gate_px=25.0, tracker_factory=FakeTracker, chunk=30, bridge_max_m=3.0,
+        every=25, gate_px=25.0, tracker_factory=FakeTracker, chunk=30, bridge_max_m=3.0, **LEGACY,
     )
     out = cc.run(frame(t) for t in range(55))
     assert out[25].source == "bridged" and cc.keyframes_accepted == 2
@@ -120,7 +126,7 @@ def test_bridge_max_m_rejects_isolated_keyframe_spike_and_recovers_on_pair():
     # Two consecutive keyframes at H_new agree with each other and replace a stale anchor
     cc2 = ClipCalibrator(
         mk_fits({0: CameraFit(CAM, 4.0, H0), 10: CameraFit(CAM, 4.0, H_new), 20: CameraFit(CAM, 4.0, H_new)}),
-        every=10, gate_px=25.0, tracker_factory=FakeTracker, chunk=30, bridge_max_m=3.0,
+        every=10, gate_px=25.0, tracker_factory=FakeTracker, chunk=30, bridge_max_m=3.0, **LEGACY,
     )
     out2 = cc2.run(frame(t) for t in range(25))
     assert out2[10].source == "bridged"
@@ -143,7 +149,7 @@ def test_singular_tracker_homography_marks_frame_uncalibrated_without_crashing()
             return shift(t - self.t0)
 
     cc = ClipCalibrator(fits({0: 4.0, 10: 5.0}), every=10, gate_px=25.0,
-                        tracker_factory=SingularTracker, chunk=30)
+                        tracker_factory=SingularTracker, chunk=30, **LEGACY)
     out = cc.run(frame(t) for t in range(15))
     assert out[0].source == "keyframe"
     assert out[4].source == "bridged"

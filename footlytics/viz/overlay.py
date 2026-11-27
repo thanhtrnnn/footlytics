@@ -16,8 +16,9 @@ from typing import Optional
 
 import numpy as np
 
+from ..perception.state_smooth import is_smoothed
 from ..state.schema import MatchState, Role, Team
-from .radar import TEAM_COLORS, draw_pitch, hold_gaps
+from .radar import TEAM_COLORS, draw_pitch, hold_gaps, live_only
 from ..geometry.pitch import Pitch
 
 
@@ -66,7 +67,9 @@ def render_side_by_side(
     import matplotlib.cm as cm
     import imageio.v2 as imageio
 
-    if smooth_display:
+    if smooth_display and not is_smoothed(state.tracks):
+        # An old state (raw positions). A state from `smooth_state` is already smoothed;
+        # smoothing it again would lag every turn for nothing.
         from ..analytics.kinematics import smooth_positions
         state = MatchState(state.meta, smooth_positions(state.tracks, state.meta.fps))
 
@@ -92,11 +95,12 @@ def render_side_by_side(
     fig.patch.set_facecolor("#0d1117")
     draw_pitch(ax, pitch)
 
-    tracks = hold_gaps(state.tracks, hold_frames)
+    # The radar is drawn only on live wide frames; the video panel still shows every frame.
+    tracks = live_only(hold_gaps(state.tracks, hold_frames))
     people = tracks[tracks["role"].isin(
         [Role.PLAYER.value, Role.GOALKEEPER.value, Role.REFEREE.value])]
     by_frame = {f: g for f, g in people.groupby("frame_idx")}
-    ball_by_frame = {f: g for f, g in state.ball.groupby("frame_idx")}
+    ball_by_frame = {f: g for f, g in live_only(state.ball).groupby("frame_idx")}
     max_p = int(people.groupby("frame_idx").size().max()) if len(people) else 0
 
     dots = ax.scatter([], [], s=150, zorder=5, edgecolors="white", linewidths=1.4)
@@ -125,6 +129,8 @@ def render_side_by_side(
                 cols = [color_of(r) for _, r in g.iterrows()]
                 if draw_boxes:
                     for (_, r), c in zip(g.iterrows(), cols):
+                        if bool(r.get("coasted", False)):
+                            continue                  # carried through an occlusion: no box seen
                         x0 = int((r["bbox_x"] - cx0) * scale)
                         y0 = int((r["bbox_y"] - cy0) * scale)
                         x1 = int((r["bbox_x"] + r["bbox_w"] - cx0) * scale)

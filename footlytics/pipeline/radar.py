@@ -36,6 +36,7 @@ from ..perception.identity import (add_jersey_reads, apply_to_state, assign_team
 from ..perception.jersey import crop_sharpness, extract_jersey_crop, read_track_jerseys
 from ..perception.shots import (ShotConfig, frame_signals, live_wide_segments,
                                 stinger_and_replay)
+from ..perception.state_smooth import StateSmoothConfig, smooth_player_states
 from ..perception.track import PitchTracker, TrackerConfig
 from ..geometry.camera_motion import AnchoredCamera, MovingCalibration
 from ..state.schema import MatchMeta, MatchState, Role, Team, TeamInfo
@@ -139,6 +140,13 @@ class PipelineConfig:
     #: grass-share test would only add ways to be wrong. Rows are never dropped, only flagged.
     shot_filter: Optional[bool] = None
     shot: ShotConfig = field(default_factory=ShotConfig)
+    #: Write a smoothed pitch-space state for every tracked person (`perception.state_smooth`):
+    #: `x, y` become the forward-backward smoothed position, the measurement moves to `x_raw,
+    #: y_raw`, and occlusions up to `state_smooth.coast_s` are carried through as rows with
+    #: `coasted=True`. Off = the raw measurement as before. For a detection benchmark, score
+    #: `coasted == False` (or set `state_smooth.coast_s = 0`): a coasted row has no detection.
+    smooth_state: bool = True
+    state_smooth: StateSmoothConfig = field(default_factory=StateSmoothConfig)
     jersey_ocr: bool = False
     jersey_model: str = "microsoft/trocr-small-str"
     jersey_stride: int = 3
@@ -490,6 +498,22 @@ def run_observations(
     ball_cands: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     link_log: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
     jersey_samples: list[tuple[int, int, np.ndarray, float]] = []
+    pending: dict[int, list] = {}
+    confirm = cfg.min_track_frames > 1        # `min_track_frames=1` keeps everything, as documented
+
+    def commit(item) -> None:
+        row, jersey, desc_item, montage = item
+        rows.append(row)
+        if jersey is not None:
+            jersey_samples.append(jersey)
+        if desc_item is not None:
+            desc_rows.append(desc_item[0])
+            desc_track.append(desc_item[1])
+            desc_role.append(desc_item[2])
+            if montage is not None and len(montage_frames) < 600:
+                montage_frames.append(montage[0])
+                montage_boxes.append(montage[1])
+
     t0 = time.time()
 
     for ob in observations:
@@ -551,27 +575,40 @@ def run_observations(
                     xy, roles, bboxes=dets[:, :4], confs=dets[:, 4],
                     embeddings=embeddings,
                 )
+                live_tracks = {t.id: t for t in tracker.tracks}
                 for di, tid in matches:
-                    rows.append(dict(
-                        frame_idx=out_idx, period=1, timestamp=out_idx / eff_fps,
-                        track_id=tid, role=roles[di], team=Team.UNKNOWN.value,
-                        jersey=np.nan,
-                        bbox_x=dets[di, 0], bbox_y=dets[di, 1],
-                        bbox_w=dets[di, 2], bbox_h=dets[di, 3],
-                        det_conf=dets[di, 4],
-                        x=xy[di, 0], y=xy[di, 1],
-                        z=0.0 if roles[di] == Role.BALL.value else np.nan,
-                    ))
-                    if (cfg.jersey_ocr and jcrops is not None and jcrops[di] is not None
-                            and roles[di] == Role.PLAYER.value):
-                        jersey_samples.append((int(tid), out_idx, jcrops[di][0], jcrops[di][1]))
-                    if embeddings is not None and roles[di] != Role.BALL.value:
-                        desc_rows.append(embeddings[di])
-                        desc_track.append(tid)
-                        desc_role.append(roles[di])
-                        if cfg.montage and ob.frame is not None and len(montage_frames) < 600:
-                            montage_frames.append(ob.frame)
-                            montage_boxes.append(dets[di, :4])
+                    item = (
+                        dict(
+                            frame_idx=out_idx, period=1, timestamp=out_idx / eff_fps,
+                            track_id=tid, role=roles[di], team=Team.UNKNOWN.value,
+                            jersey=np.nan,
+                            bbox_x=dets[di, 0], bbox_y=dets[di, 1],
+                            bbox_w=dets[di, 2], bbox_h=dets[di, 3],
+                            det_conf=dets[di, 4],
+                            x=xy[di, 0], y=xy[di, 1],
+                            z=0.0 if roles[di] == Role.BALL.value else np.nan,
+                        ),
+                        (int(tid), out_idx, jcrops[di][0], jcrops[di][1])
+                        if (cfg.jersey_ocr and jcrops is not None and jcrops[di] is not None
+                            and roles[di] == Role.PLAYER.value) else None,
+                        (embeddings[di], tid, roles[di])
+                        if embeddings is not None and roles[di] != Role.BALL.value else None,
+                        (ob.frame, dets[di, :4])
+                        if cfg.montage and ob.frame is not None else None,
+                    )
+                    # A person is shown only once the tracker has seen them `min_hits` times
+                    # (causal: no look-ahead). The first detections are kept and written when
+                    # the track is confirmed, so a real person loses nothing and a one-frame
+                    # false alarm is never shown. The ball is not held back.
+                    if (confirm and roles[di] != Role.BALL.value
+                            and not live_tracks[tid].confirmed):
+                        pending.setdefault(tid, []).append(item)
+                        continue
+                    for held in pending.pop(tid, ()):
+                        commit(held)
+                    commit(item)
+                for tid in [k for k in pending if k not in live_tracks]:
+                    del pending[tid]                         # retired without ever being confirmed
 
         if cfg.verbose and out_idx % 50 == 0:
             el = time.time() - t0
@@ -790,6 +827,14 @@ def run_observations(
     report["tracklets_before_stitch"] = n_before
     report["tracklets_after_stitch"] = len(tracklets)
     _log(cfg.verbose, f"[pipeline] tracklets: {n_before} -> {len(tracklets)} after stitching")
+
+    if cfg.smooth_state:
+        # After identity, so one smoother run covers a stitched person end to end; before the
+        # kinematics, so speed and acceleration are derived from the state and not from jitter.
+        tracks, report["state_smoothing"] = smooth_player_states(
+            state.tracks, eff_fps, cfg.state_smooth)
+        state = MatchState(meta, tracks)
+        _log(cfg.verbose, f"[pipeline] state smoothed: {report['state_smoothing']}")
 
     if cfg.ball_max_gap:
         before = int((state.tracks["role"].astype(str) == Role.BALL.value).sum())

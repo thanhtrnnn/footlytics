@@ -79,9 +79,17 @@ TRACK_SCHEMA: dict[str, str] = {
     # camera saw; analytics must not join frames across ids. Old states default to live, shot 0.
     "live_wide":  "bool",
     "shot":       "int32",
+    # Player state. `x`, `y` of a person are the smoothed state (perception.state_smooth); `x_raw`,
+    # `y_raw` keep the measurement (box foot through that frame's homography) for audit; NaN where
+    # there was none. `coasted` is True on a frame the track was carried through an occlusion
+    # (<= 0.5 s): position interpolated, no detection behind it, `det_conf` 0. Evaluate detections
+    # with `coasted == False`. Old states: `x_raw = x`, never coasted.
+    "x_raw":      "float32",
+    "y_raw":      "float32",
+    "coasted":    "bool",
 }
 
-_DEFAULTS = {"live_wide": True, "shot": 0}
+_DEFAULTS = {"live_wide": True, "shot": 0, "coasted": False}
 
 _REQUIRED = ("frame_idx", "timestamp", "track_id", "role", "team", "x", "y")
 
@@ -139,6 +147,9 @@ class MatchState:
             raise ValueError(f"MatchState is missing required columns: {missing}")
 
         df = df.copy()
+        for raw, col in (("x_raw", "x"), ("y_raw", "y")):
+            if raw not in df.columns and col in df.columns:
+                df[raw] = df[col]
         for col, dtype in TRACK_SCHEMA.items():
             if col not in df.columns:
                 df[col] = pd.Series(_DEFAULTS.get(col, np.nan), index=df.index)

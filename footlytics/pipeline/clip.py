@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Iterator, Optional
 
@@ -76,6 +77,8 @@ def calibrate_video(video: Path, calibrator, every: int = 10, gate_px: float = 2
     res = cc.run(read_frames(video), mask=mask)
     stats = {"calib_seconds": time.perf_counter() - t0, "keyframes": cc.keyframes,
              "keyframes_accepted": cc.keyframes_accepted, "solver_errors": errors,
+             "keyframes_rejected_keypoints": cc.keyframes_rejected_keypoints,
+             "camera_smoothing": asdict(cc.smooth_info) if cc.smooth_info is not None else None,
              "sources": {s: sum(r.source == s for r in res) for s in ("keyframe", "bridged", "none")}}
     log(f"[calibration] {stats}")
     return res, stats

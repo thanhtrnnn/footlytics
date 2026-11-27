@@ -4,7 +4,9 @@ A solve costs about a second (5.5 s with PnLCalib's full voting), so only every 
 frame is solved, with one solver setting. A solve whose reprojection error exceeds `gate_px` is
 rejected: on the V.League clip the good windows were at 3-24 px and the bad ones above 40.
 Frames between accepted keyframes are related to the last one by `AnchoredCamera`. The
-broadcast's static overlays (score bug, channel logo) are masked out of its feature search,
+accepted cameras are then corrected across keyframes (`camera_smooth`): a keyframe replaces the
+bridged homography outright, and the difference (median 0.22 m, up to metres) moved every player
+on the pitch in one frame. The broadcast's static overlays (score bug, channel logo) are masked out of its feature search,
 because features that never move would pin the motion estimate to zero.
 """
 from __future__ import annotations
@@ -17,6 +19,7 @@ import numpy as np
 
 from .calib_nn import CameraFit
 from .camera_motion import AnchoredCamera
+from .camera_smooth import smooth_homographies
 from .homography import apply_homography
 from .sn_camera import camera_from_homography
 
@@ -43,6 +46,22 @@ def _pitch_disagreement_m(H1: np.ndarray, H2: np.ndarray, w: int, h: int) -> flo
     if not ok.any():
         return float("inf")
     return float(np.median(np.linalg.norm(p1[ok] - p2[ok], axis=1)))
+
+
+def _far_disagreement_m(H1: np.ndarray, H2: np.ndarray, w: int, h: int) -> float:
+    """Worst pitch-plane disagreement over the far field (image rows 30-40%, full width).
+
+    The lower-image grid of `_pitch_disagreement_m` is where players are, not where a fit goes
+    wrong first: depth sensitivity is ~0.23 m/px at row 0.30H against 0.03 at 0.9H, so a fit
+    that is a few pixels off at the far touchline is metres off there and invisible below.
+    """
+    us = np.linspace(0.1 * w, 0.9 * w, 5)
+    pts = np.array([(u, v * h) for v in (0.30, 0.40) for u in us], float)
+    p1, p2 = apply_homography(H1, pts), apply_homography(H2, pts)
+    ok = np.isfinite(p1).all(1) & np.isfinite(p2).all(1)
+    if not ok.any():
+        return float("inf")
+    return float(np.linalg.norm(p1[ok] - p2[ok], axis=1).max())
 
 
 @dataclass
@@ -73,14 +92,40 @@ def static_overlay_mask(frames_bgr: list[np.ndarray], std_thresh: float = 3.0,
 
 
 class ClipCalibrator:
+    """`bridge_max_m`: a keyframe may differ from the bridged camera by this much (median over
+    the lower image) ... and by `bridge_far_max_m` at worst over the far field, where the
+    lower-image grid cannot see an error. `min_keypoints`: a fit that reports how many keypoints
+    it used (`n_keypoints`) needs at least this many; four make the homography exact, so the
+    reprojection gate (`gate_px`) is blind to a wrong one. `smooth` removes the step at each
+    accepted keyframe (the drift of the carried camera) and then smooths what is left with a
+    Gaussian of `smooth_sigma` frames; cuts and gaps are never smoothed across. `camera_smooth`."""
+
     def __init__(self, fit_keyframes: Callable[[list, list], dict[int, Optional[CameraFit]]],
                  every: int = 25, gate_px: float = 25.0,
                  tracker_factory: Callable = AnchoredCamera, chunk: int = 30,
-                 bridge_max_m: Optional[float] = 3.0):
+                 bridge_max_m: Optional[float] = 3.0, bridge_far_max_m: Optional[float] = 7.5,
+                 min_keypoints: int = 5, smooth: bool = True, smooth_sigma: float = 3.0):
         self.fit_keyframes, self.every, self.gate_px = fit_keyframes, every, gate_px
         self.tracker_factory, self.chunk = tracker_factory, chunk
-        self.bridge_max_m = bridge_max_m
+        self.bridge_max_m, self.bridge_far_max_m = bridge_max_m, bridge_far_max_m
+        self.min_keypoints, self.smooth, self.smooth_sigma = min_keypoints, smooth, smooth_sigma
         self.keyframes = self.keyframes_accepted = 0
+        self.keyframes_rejected_keypoints = 0
+        self.smooth_info = None
+        self._wh: Optional[tuple[int, int]] = None
+
+    def _agrees(self, H1: np.ndarray, H2: np.ndarray, w: int, h: int) -> bool:
+        """Does a keyframe fit `H1` agree with the camera `H2` (lower image and far field)?"""
+        if self.bridge_max_m is None:
+            return True
+        if _pitch_disagreement_m(H1, H2, w, h) > self.bridge_max_m:
+            return False
+        return (self.bridge_far_max_m is None
+                or _far_disagreement_m(H1, H2, w, h) <= self.bridge_far_max_m)
+
+    def _redundant(self, fit: CameraFit) -> bool:
+        n = getattr(fit, "n_keypoints", None)
+        return n is None or n >= self.min_keypoints
 
     def run(self, frames_bgr: Iterable[np.ndarray],
             mask: Optional[np.ndarray] = None) -> list[FrameCalib]:
@@ -97,6 +142,7 @@ class ClipCalibrator:
             for i, f in enumerate(buf):
                 idx = start + i
                 h, w = f.shape[:2]
+                self._wh = (w, h)
                 bridged_H: Optional[np.ndarray] = None
                 if anchor is not None:
                     H_a_t = anchor[0].update(f, mask)
@@ -108,15 +154,16 @@ class ClipCalibrator:
                             if _safe_inv(cand) is not None:
                                 bridged_H = cand
                 fit = fits.get(i)
+                if fit is not None and not self._redundant(fit):
+                    self.keyframes_rejected_keypoints += 1
+                    fit = None
                 if fit is not None and fit.rep_err <= self.gate_px:
                     accept = True
                     if self.bridge_max_m is not None and self.every > 1 and bridged_H is not None:
-                        dis = _pitch_disagreement_m(fit.H_img_to_pitch, bridged_H, w, h)
-                        if dis > self.bridge_max_m:
+                        if not self._agrees(fit.H_img_to_pitch, bridged_H, w, h):
                             accept = (
                                 pending_H is not None
-                                and _pitch_disagreement_m(fit.H_img_to_pitch, pending_H, w, h)
-                                <= self.bridge_max_m
+                                and self._agrees(fit.H_img_to_pitch, pending_H, w, h)
                             )
                     if accept:
                         pending_H = None
@@ -144,4 +191,22 @@ class ClipCalibrator:
                 buf = []
         if buf:
             flush(start)
+        if self.smooth and self._wh is not None:
+            out = self._smooth(out)
         return out
+
+    def _smooth(self, out: list[FrameCalib]) -> list[FrameCalib]:
+        w, h = self._wh
+        Hs, self.smooth_info = smooth_homographies(
+            [c.H_img_to_pitch for c in out], w, h, key=[c.source == "keyframe" for c in out],
+            sigma=self.smooth_sigma)
+        res: list[FrameCalib] = []
+        for c, Hn in zip(out, Hs):
+            if Hn is None or Hn is c.H_img_to_pitch:
+                res.append(c)
+                continue
+            inv = _safe_inv(Hn)
+            cam = camera_from_homography(inv, w, h) if inv is not None else None
+            res.append(FrameCalib(c.frame_idx, Hn, cam if cam is not None else c.cam,
+                                  c.source, c.rep_err))
+        return res

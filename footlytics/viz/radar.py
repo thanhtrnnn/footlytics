@@ -27,6 +27,19 @@ TEAM_COLORS = {
 }
 
 
+def live_only(tracks):
+    """Rows of live wide-shot frames only.
+
+    On a replay, close-up, crowd shot or graphic the homography does not describe the pitch, so the
+    positions there are not where anyone stood and a radar that draws them shows players teleporting
+    to nonsense (`live_wide` False, set by `perception.shots`). A state without the column
+    (a fixed rig) is all live.
+    """
+    if "live_wide" not in tracks.columns:
+        return tracks
+    return tracks[tracks["live_wide"].astype(bool)]
+
+
 def hold_gaps(tracks, max_gap: int = 12):
     """Bridge short gaps in each person's track, for display only.
 
@@ -143,7 +156,7 @@ def plot_frame(state: MatchState, frame_idx: int, ax=None,
                                         TEAM_COLORS[Team.UNKNOWN.value]))
             ax.plot(g["x"], g["y"], color=col, alpha=0.45, lw=1.6, zorder=3)
 
-    f = state.frame(frame_idx)
+    f = live_only(state.frame(frame_idx))
     people = f[f["role"].isin([Role.PLAYER.value, Role.GOALKEEPER.value, Role.REFEREE.value])]
     import matplotlib.cm as cm
     for _, r in people.iterrows():
@@ -215,11 +228,11 @@ def render_video(state: MatchState, out_path: str, start: int = 0, end: Optional
 
     # Pre-index by frame once: repeated boolean masks over a 1.5M-row frame are
     # the other half of the cost.
-    tracks = hold_gaps(state.tracks, hold_frames)
+    tracks = live_only(hold_gaps(state.tracks, hold_frames))
     people = tracks[tracks["role"].isin(
         [Role.PLAYER.value, Role.GOALKEEPER.value, Role.REFEREE.value])]
     by_frame = {f: g for f, g in people.groupby("frame_idx")}
-    ball_by_frame = {f: g for f, g in state.ball.groupby("frame_idx")}
+    ball_by_frame = {f: g for f, g in live_only(state.ball).groupby("frame_idx")}
 
     max_players = int(people.groupby("frame_idx").size().max()) if len(people) else 0
     dots = ax.scatter([], [], s=170, zorder=5, edgecolors="white", linewidths=1.5)
