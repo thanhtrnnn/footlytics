@@ -635,15 +635,23 @@ def export_sequence_clip(
 
 
 def write_sportscode_xml(playlist: pd.DataFrame, out_xml: Path) -> Path:
-    """Write a Hudl Sportscode / LongoMatch / Nacsport compatible XML timeline."""
+    """Write a Hudl Sportscode / LongoMatch / Nacsport compatible XML timeline.
+
+    `clip_start_s`/`clip_end_s` are match-state seconds; the timeline is against the video, so the
+    optional `video_offset_s` column (marks.json) is added, as `export_sequence_clip` does.
+    """
     root = ET.Element("file")
     all_inst = ET.SubElement(root, "ALL_INSTANCES")
 
     for idx, r in enumerate(playlist.itertuples(), 1):
         inst = ET.SubElement(all_inst, "instance")
         ET.SubElement(inst, "ID").text = str(idx)
-        ET.SubElement(inst, "start").text = f"{float(r.clip_start_s):.2f}"
-        ET.SubElement(inst, "end").text = f"{float(r.clip_end_s):.2f}"
+        offset = getattr(r, "video_offset_s", 0.0)
+        offset = 0.0 if offset is None or pd.isna(offset) else float(offset)
+        v_start = max(0.0, float(r.clip_start_s) + offset)
+        v_end = max(v_start + 0.2, float(r.clip_end_s) + offset)
+        ET.SubElement(inst, "start").text = f"{v_start:.2f}"
+        ET.SubElement(inst, "end").text = f"{v_end:.2f}"
         club_tag = str(r.club or r.side).upper()
         ET.SubElement(inst, "code").text = f"{club_tag} - {r.label}"
 
@@ -674,6 +682,22 @@ def write_sportscode_xml(playlist: pd.DataFrame, out_xml: Path) -> Path:
     return out_xml
 
 
+def _round_or_none(v: float, nd: int = 1) -> float | None:
+    return round(v, nd) if np.isfinite(v) else None
+
+
+def _fmt_or_na(v: float | None, spec: str) -> str:
+    return format(v, spec) if v is not None and np.isfinite(v) else "n/a"
+
+
+def _is_verified(verdict: Any) -> bool:
+    return str(verdict) == "right"
+
+
+def _review_label(verdict: Any) -> str:
+    return "Đã xác thực" if _is_verified(verdict) else "Chưa xác thực"
+
+
 def _tactical_profile(df: pd.DataFrame) -> list[dict[str, Any]]:
     """Per-label tactical aggregate across all exported sequences."""
     profiles: list[dict[str, Any]] = []
@@ -688,13 +712,14 @@ def _tactical_profile(df: pd.DataFrame) -> list[dict[str, Any]]:
             "total_duration_s": round(float(sub["duration_s"].sum()), 1),
             "mean_duration_s": round(float(sub["duration_s"].mean()), 1),
             "key_metric": "",
+            "unreviewed_count": int((~sub["verdict"].map(_is_verified)).sum()),
         }
         if lbl == "low_block":
             dx = float(sub["def_line_x"].dropna().mean()) if sub["def_line_x"].notna().any() else float("nan")
             cp = float(sub["compactness_m"].dropna().mean()) if sub["compactness_m"].notna().any() else float("nan")
-            item["mean_def_line_x"] = round(dx, 1)
-            item["mean_compactness_m"] = round(cp, 1)
-            item["key_metric"] = f"Line phòng ngự TB {dx:+.1f} m, độ cô đặc {cp:.1f} m"
+            item["mean_def_line_x"] = _round_or_none(dx)
+            item["mean_compactness_m"] = _round_or_none(cp)
+            item["key_metric"] = f"Line phòng ngự TB {_fmt_or_na(dx, '+.1f')} m, độ cô đặc {_fmt_or_na(cp, '.1f')} m"
         elif lbl == "build_up":
             pr = sub["n_pressers"].dropna()
             vs3 = int((pr >= 3).sum())
@@ -704,7 +729,7 @@ def _tactical_profile(df: pd.DataFrame) -> list[dict[str, Any]]:
         elif lbl == "high_press":
             dx = float(sub["def_line_x"].dropna().mean()) if sub["def_line_x"].notna().any() else float("nan")
             n10 = float(sub["n_within_10m"].dropna().mean()) if sub["n_within_10m"].notna().any() else 0.0
-            item["key_metric"] = f"Line dâng cao TB {dx:+.1f} m, TB {n10:.1f} cầu thủ áp sát trong 10 m"
+            item["key_metric"] = f"Line dâng cao TB {_fmt_or_na(dx, '+.1f')} m, TB {n10:.1f} cầu thủ áp sát trong 10 m"
         elif lbl == "midfield_loss":
             vc = sub["response"].fillna("").value_counts()
             cp_n = int(vc.get("counter_press", 0))
@@ -731,8 +756,8 @@ def _takeaways_vi(target_title: str, n_matches: int, profiles: list[dict[str, An
         p = by_lbl["low_block"]
         bullets.append(
             f"**Tổ chức khối thấp ({p['count']} tình huống / {p['total_duration_s']:.0f}s qua {n_matches} trận):** "
-            f"{target_title} lùi khối phòng ngự với chiều cao hàng thủ trung bình `{p.get('mean_def_line_x', 0):+.1f} m` "
-            f"và cự ly đội hình `{p.get('mean_compactness_m', 0):.1f} m` (trung bình `{p['mean_duration_s']:.1f}s`/nhịp)."
+            f"{target_title} lùi khối phòng ngự với chiều cao hàng thủ trung bình `{_fmt_or_na(p.get('mean_def_line_x'), '+.1f')} m` "
+            f"và cự ly đội hình `{_fmt_or_na(p.get('mean_compactness_m'), '.1f')} m` (trung bình `{p['mean_duration_s']:.1f}s`/nhịp)."
         )
     if "build_up" in by_lbl:
         p = by_lbl["build_up"]
@@ -775,7 +800,8 @@ def _render_dossier_markdown(
         f"- **Số trận phân tích:** `{len(matches_meta)}`",
         (
             f"- **Tổng số tình huống xuất gói:** `{len(playlist)}` "
-            f"(đã xác thực `right`: `{economics['verified_right_sequences']}`)"
+            f"(đã xác thực `right`: `{economics['verified_right_sequences']}`, "
+            f"chưa xác thực: `{economics['unreviewed_sequences']}`)"
         ),
         (
             f"- **Thời gian xử lý GPU & Chi phí quy đổi:** `{economics['total_compute_hours']:.2f} giờ GPU` "
@@ -808,8 +834,9 @@ def _render_dossier_markdown(
         "|---|---:|---:|---:|---|",
     ]
     for p in profiles:
+        unrev = f" ({p['unreviewed_count']} chưa xác thực)" if p.get("unreviewed_count") else ""
         lines.append(
-            f"| {p['display_vi']} | {p['count']} | {p['total_duration_s']:.1f} | "
+            f"| {p['display_vi']} | {p['count']}{unrev} | {p['total_duration_s']:.1f} | "
             f"{p['mean_duration_s']:.1f} | {p['key_metric']} |"
         )
 
@@ -821,8 +848,8 @@ def _render_dossier_markdown(
         "",
         "## 4. Danh mục tình huống & Video Clips",
         "",
-        "| # | Trận | CLB | Hiệp & Đồng hồ | Nhãn | Thời lượng | Thông số | Video Clip | Ghi chú |",
-        "|---:|---|---|---|---|---:|---|---|---|",
+        "| # | Trận | CLB | Hiệp & Đồng hồ | Nhãn | Xác thực | Thời lượng | Thông số | Video Clip | Ghi chú |",
+        "|---:|---|---|---|---|---|---:|---|---|---|",
     ]
     for r in playlist.itertuples():
         clip_cell = f"[Xem clip]({r.clip_path})" if r.clip_path else "—"
@@ -831,7 +858,7 @@ def _render_dossier_markdown(
         clk_cell = f"H{int(r.period)} `{m_clk}`" + (f" (video `{r.clock}`)" if m_clk != str(r.clock) else "")
         lines.append(
             f"| {int(r.clip_index)} | `{r.match_id}` | {r.club or r.side} | "
-            f"{clk_cell} | `{r.label}` | {float(r.duration_s):.1f}s | "
+            f"{clk_cell} | `{r.label}` | {_review_label(r.verdict)} | {float(r.duration_s):.1f}s | "
             f"{r.evidence_summary} | {clip_cell} | {note_clean} |"
         )
     lines.append("")
@@ -851,7 +878,9 @@ def _render_dossier_html(
     cards_html = "".join(
         f"<div class='card'><div class='k'>{esc(p['display_vi'])}</div>"
         f"<div class='v'>{p['count']} <span class='sub'>({p['total_duration_s']:.0f}s)</span></div>"
-        f"<div class='m'>{esc(p['key_metric'])}</div></div>"
+        f"<div class='m'>{esc(p['key_metric'])}</div>"
+        + (f"<div class='m unreviewed'>{p['unreviewed_count']} chưa xác thực</div>" if p.get("unreviewed_count") else "")
+        + "</div>"
         for p in profiles
     )
     def _fmt_match_row(m: dict[str, Any]) -> str:
@@ -881,6 +910,7 @@ def _render_dossier_html(
             f"<td><strong>{esc(str(r.club or r.side))}</strong></td>"
             f"<td>H{int(r.period)} <code>{esc(m_clk)}</code>{v_sub}</td>"
             f"<td><span class='pill'>{esc(str(r.label))}</span></td>"
+            f"<td class='{'verified' if _is_verified(r.verdict) else 'unreviewed'}'>{_review_label(r.verdict)}</td>"
             f"<td class='num'>{float(r.duration_s):.1f}s</td>"
             f"<td>{esc(str(r.evidence_summary))}</td>"
             f"<td>{clip_link}</td>"
@@ -923,6 +953,8 @@ def _render_dossier_html(
   th, td {{ padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }}
   th {{ background:#f1f5f9; font-weight:600; color:#334155; }}
   td.num, th.num {{ text-align:right; font-variant-numeric:tabular-nums; }}
+  .unreviewed {{ color:#b45309; font-weight:600; }}
+  .verified {{ color:#0f766e; }}
   .pill {{ display:inline-block; padding:2px 7px; border-radius:4px; background:#ccfbf1; color:#115e59; font-weight:600; font-size:11px; }}
   a {{ color:var(--brand); font-weight:600; text-decoration:none; }}
   a:hover {{ text-decoration:underline; }}
@@ -933,7 +965,7 @@ def _render_dossier_html(
 <div class="wrap">
   <header>
     <h1>BÁO CÁO PHÂN TÍCH CHIẾN THUẬT — {esc(title)}</h1>
-    <div class="meta">Số trận: {len(matches_meta)} &middot; Tình huống xuất: {len(playlist)} (đã xác thực right: {economics['verified_right_sequences']}) &middot; Compute: {economics['total_compute_hours']:.2f} GPUh (~${economics['estimated_compute_usd']:.2f} USD){qa_str}</div>
+    <div class="meta">Số trận: {len(matches_meta)} &middot; Tình huống xuất: {len(playlist)} (đã xác thực right: {economics['verified_right_sequences']}, chưa xác thực: {economics['unreviewed_sequences']}) &middot; Compute: {economics['total_compute_hours']:.2f} GPUh (~${economics['estimated_compute_usd']:.2f} USD){qa_str}</div>
   </header>
 
   <h2>1. Tổng hợp mẫu hình chiến thuật</h2>
@@ -950,7 +982,7 @@ def _render_dossier_html(
 
   <h2>4. Danh mục tình huống &amp; Video Clips</h2>
   <table>
-    <thead><tr><th class="num">#</th><th>Trận</th><th>CLB</th><th>Đồng hồ</th><th>Nhãn</th><th class="num">Thời lượng</th><th>Thông số</th><th>Clip</th><th>Ghi chú</th></tr></thead>
+    <thead><tr><th class="num">#</th><th>Trận</th><th>CLB</th><th>Đồng hồ</th><th>Nhãn</th><th>Xác thực</th><th class="num">Thời lượng</th><th>Thông số</th><th>Clip</th><th>Ghi chú</th></tr></thead>
     <tbody>{seq_rows}</tbody>
   </table>
 </div>
@@ -1059,6 +1091,7 @@ def export_pack(
                     "end_s": round(s1, 2),
                     "clip_start_s": round(c0, 2),
                     "clip_end_s": round(c1, 2),
+                    "video_offset_s": vid_offset,
                     "duration_s": round(float(row["duration_s"]), 2),
                     "label": str(row["label"]),
                     "verdict": verdict,
@@ -1184,6 +1217,7 @@ def export_pack(
         "matches_count": len(matches_meta),
         "sequences_exported": len(playlist),
         "verified_right_sequences": int((playlist["verdict"] == "right").sum()) if len(playlist) else 0,
+        "unreviewed_sequences": int((playlist["verdict"] != "right").sum()) if len(playlist) else 0,
         "clips_exported": clips_exported,
         "total_compute_seconds": round(total_compute_s, 1),
         "total_compute_hours": round(compute_hours, 3),
@@ -1217,6 +1251,10 @@ def export_pack(
         "team_filter": team,
         "label_filter": label,
         "verified_only": verified_only,
+        "review_status": {
+            "verified": economics["verified_right_sequences"],
+            "unreviewed": economics["unreviewed_sequences"],
+        },
         "economics": economics,
         "matches": matches_meta,
         "profiles": profiles,

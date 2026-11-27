@@ -450,6 +450,22 @@ def run_frames(
                             jersey_reader=jersey_reader)
 
 
+def _merge_team_scores(primary: dict[int, float], fallback: dict[int, float]) -> dict[int, float]:
+    """`primary` scores plus `fallback` scores for tracks `primary` lacks, on one sign convention.
+
+    The two come from different clusterings (outfield 4-means vs the 2-means `TeamClassifier`),
+    and which team is "negative" in each is arbitrary. Tracks scored by both decide whether the
+    fallback is flipped before it fills the gaps.
+    """
+    both = [t for t in primary if t in fallback]
+    agree = sum(primary[t] * fallback[t] for t in both)
+    sign = -1.0 if agree < 0 else 1.0
+    merged = dict(primary)
+    for tid, score in fallback.items():
+        merged.setdefault(int(tid), sign * float(score))
+    return merged
+
+
 def run_observations(
     observations: Iterable[Observation],
     fps: float,
@@ -669,9 +685,7 @@ def run_observations(
             # Fit 2-team centroids on outfield players only so keeper/referee/other kits cannot skew k-means,
             # then project non-outfield tracks onto the same signed team axis if needed.
             scores = team_scores_by_track(T[outfield_mask], D[outfield_mask])
-            raw_scores = clf.track_scores(T, D)
-            for tid_k, sc_v in raw_scores.items():
-                scores.setdefault(int(tid_k), float(sc_v))
+            scores = _merge_team_scores(scores, clf.track_scores(T, D))
         else:
             scores = team_scores_by_track(T, D)
         report["team_diagnosis"] = diag

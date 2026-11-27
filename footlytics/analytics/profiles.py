@@ -7,7 +7,9 @@ club's exact game model without re-running perception or calibration.
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import asdict, dataclass, fields
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -118,8 +120,11 @@ class TacticalProfile:
         return yaml.safe_dump(self.to_dict(), sort_keys=False, allow_unicode=True)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> TacticalProfile:
-        """Build a validated `TacticalProfile` from a partial or full dict."""
+    def from_dict(cls, raw: dict[str, Any], base: TacticalProfile | None = None) -> TacticalProfile:
+        """Build a validated `TacticalProfile` from a partial or full dict.
+
+        With `base`, fields missing from `raw` keep `base`'s values instead of resetting to defaults.
+        """
         if not isinstance(raw, dict):
             raise TypeError("profile payload must be a mapping")
         # Allow nested `thresholds:` block in hand-written YAML files
@@ -135,7 +140,7 @@ class TacticalProfile:
         if unknown:
             raise ValueError(f"unknown tactical profile field(s): {', '.join(unknown)}")
 
-        coerced: dict[str, Any] = {}
+        coerced: dict[str, Any] = {} if base is None else base.to_dict()
         int_fields = {"sample_every", "high_press_n", "overload_n", "overload_max_defenders", "overload_min_visible"}
         str_fields = {"name", "description"}
         for k, v in merged.items():
@@ -214,6 +219,16 @@ def save_profile(profile: TacticalProfile, path: Path | str) -> Path:
     return out
 
 
+def backup_file(path: Path) -> Path | None:
+    """Copy `path` to `<name>.bak-<UTC timestamp>` beside it, so a rewrite never loses the original."""
+    if not path.is_file():
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    dst = path.with_name(f"{path.name}.bak-{stamp}")
+    shutil.copy2(path, dst)
+    return dst
+
+
 def recompute_match_sequences(
     match_dir: Path | str,
     profile: TacticalProfile,
@@ -232,6 +247,8 @@ def recompute_match_sequences(
         poss = infer_possession(norm)
     seqs = detect_sequences(norm, poss, **profile.to_detect_kwargs())
     if write:
+        backup_file(mdir / "sequences.csv")
+        backup_file(mdir / "tactical_profile.yaml")
         seqs.to_csv(mdir / "sequences.csv", index=False)
         save_profile(profile, mdir / "tactical_profile.yaml")
     return seqs

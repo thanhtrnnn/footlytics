@@ -174,7 +174,8 @@ def build_static_pack_site(
         "sequences_count": len(static_seqs),
         "clips_count": clips_linked,
         "radar_files_count": radar_written,
-        "passcode_protected": clean_pass is not None,
+        "passcode_gate": "client-side, not access control" if clean_pass else "none",
+        "access_control": "none: every file in this folder is publicly fetchable by anyone with its URL",
         "clips_dir": str(clips_out) if clips_out.exists() else "",
     }
     (out_path / "site_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

@@ -195,3 +195,20 @@ def test_cli_query_summary_search_and_exports(tmp_path: Path, multi_match_root: 
     exported = json.loads(out_json.read_text())
     assert len(exported) == 2
     assert all(r["match_id"] == "cahcm-hanoi" for r in exported)
+
+
+def test_reruns_sharing_a_match_id_stay_distinct(tmp_path: Path):
+    row = dict(
+        label="low_block", team="away", period=1, start_s=10.0, end_s=20.0, start_frame=250,
+        end_frame=500, duration_s=10.0, def_line_x=-30.0, compactness_m=10.0, n_within_10m=3,
+        flank="", n_attackers=0, n_defenders=0, in_possession_share=0.0, n_pressers=2, response="",
+    )
+    _write_match(tmp_path, "run_a", [row], match_id="vn_match", home="A", away="B")
+    _write_match(tmp_path, "run_b", [row, {**row, "start_s": 40.0, "end_s": 50.0}], match_id="vn_match", home="A", away="B")
+    _write_match(tmp_path, "solo", [row], match_id="other", home="C", away="D")
+
+    entries = discover_matches(tmp_path)
+
+    assert sorted(e.match_id for e in entries) == ["other", "vn_match@run_a", "vn_match@run_b"]
+    per_match = summarize_sequences(tmp_path)
+    assert per_match.groupby("match_id")["count"].sum().to_dict() == {"other": 1, "vn_match@run_a": 1, "vn_match@run_b": 2}

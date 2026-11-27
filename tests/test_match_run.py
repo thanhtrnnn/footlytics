@@ -1,6 +1,7 @@
 """Tests for chunked, resumable 90-minute full-match processing (`footlytics.pipeline.match`)."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import ClassVar
 
@@ -225,6 +226,173 @@ def test_run_match_checkpoints_resumes_and_replays_cpu(tmp_path: Path, monkeypat
     )
     assert q3["chunks_total"] == 2
     assert stub_cal.calls == cal_calls_first and stub_det.calls == det_calls_first
+
+
+WINDOWS = [(1, 0.0, 0.56), (2, 0.60, 1.16)]
+
+
+@pytest.fixture
+def match_env(tmp_path: Path, monkeypatch):
+    from footlytics.bench import runner
+
+    stub_cal = StubCalibrator()
+    stub_det = StubDetector()
+    backends: list[str] = []
+
+    def get_calibrator(paths, cfg=None):
+        backends.append(str((cfg or {}).get("backend")))
+        return stub_cal
+
+    monkeypatch.setattr(runner, "_get_calibrator", get_calibrator)
+    monkeypatch.setattr(runner, "_detector", lambda paths, cfg: stub_det)
+    vid = _write_synthetic_video(tmp_path / "match.mp4", n_frames=60, fps=50.0)
+
+    def go(video=vid, out=tmp_path / "out_match", **kw):
+        args = dict(
+            period_windows=WINDOWS, chunk_minutes=0.02, target_fps=25.0, every=5,
+            home="Ha Noi", away="CAHCM", save_obs=True, log=lambda _m: None,
+        )
+        args.update(kw)
+        return run_match(video, out, **args)
+
+    return {"go": go, "vid": vid, "out": tmp_path / "out_match", "cal": stub_cal, "det": stub_det,
+            "tmp": tmp_path, "backends": backends}
+
+
+def test_replay_only_preserves_original_calibration_and_compute_figures(match_env):
+    go, out = match_env["go"], match_env["out"]
+    go()
+    # Pretend the original GPU run had lost the calibration on 4 frames of each chunk
+    for cdir in sorted((out / "chunks").iterdir()):
+        sources = json.loads((cdir / "calib_sources.json").read_text())
+        sources[:4] = ["none"] * 4
+        (cdir / "calib_sources.json").write_text(json.dumps(sources))
+        done = json.loads((cdir / "done.json").read_text())
+        done.update(calib_seconds=100.0, pipeline_seconds=50.0)
+        (cdir / "done.json").write_text(json.dumps(done))
+
+    q = go(replay_only=True)
+
+    rep = json.loads((out / "report.json").read_text())
+    assert rep["frames_uncalibrated"] == 8
+    assert rep["frames_calibrated"] == rep["frames_processed"] - 8
+    assert rep["calib_success_rate"] == pytest.approx(1.0 - 8 / rep["frames_processed"])
+    assert rep["calib_seconds"] == 200.0
+    assert rep["pipeline_seconds"] == 100.0
+    assert rep["compute_seconds"] == 300.0
+    assert rep["replayed"] is True
+    assert q["frames_uncalibrated"] == 8
+    assert q["calib_success_rate"] == pytest.approx(rep["calib_success_rate"])
+    assert q["compute_seconds"] == 300.0
+    assert len(json.loads((out / "calib_sources.json").read_text())) == rep["frames_processed"]
+
+
+def test_replay_only_without_original_calibration_record_reports_unknown_not_perfect(match_env):
+    go, out = match_env["go"], match_env["out"]
+    go()
+    for cdir in (out / "chunks").iterdir():
+        (cdir / "calib_sources.json").unlink()
+
+    go(replay_only=True)
+
+    rep = json.loads((out / "report.json").read_text())
+    assert rep["calib_success_rate"] is None
+    assert rep["frames_uncalibrated"] is None
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"every": 7},
+        {"gate_px": 30.0},
+        {"people_detector": "rtdetr"},
+        {"ball_detector": "yolo"},
+        {"ball_link": False},
+        {"calib_backend": "apache2"},
+        {"calib_weights_dir": "weights/other"},
+        {"stride": 1},
+        {"period_windows": [(1, 0.0, 0.50), (2, 0.62, 1.16)]},
+    ],
+    ids=lambda c: next(iter(c)),
+)
+def test_chunk_checkpoint_is_not_reused_when_inputs_change(match_env, change):
+    go = match_env["go"]
+    go()
+    calls = match_env["cal"].calls
+
+    logs: list[str] = []
+    q = go(log=logs.append, **change)
+
+    assert q["chunks_reused"] == 0
+    assert match_env["cal"].calls > calls
+    assert any("stale" in line and "re-running" in line for line in logs)
+
+
+def test_chunk_checkpoint_is_not_reused_for_a_different_video(match_env):
+    go = match_env["go"]
+    go()
+    calls = match_env["cal"].calls
+    blank = np.zeros((240, 320, 3), dtype=np.uint8)
+    writer = cv2.VideoWriter(
+        str(match_env["tmp"] / "match.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), 50.0, (320, 240)
+    )
+    for _ in range(60):
+        writer.write(blank)
+    writer.release()
+
+    q = go()
+
+    assert q["chunks_reused"] == 0 and match_env["cal"].calls > calls
+
+
+def test_chunk_checkpoint_without_fingerprint_counts_as_stale(match_env):
+    go, out = match_env["go"], match_env["out"]
+    go()
+    for cdir in (out / "chunks").iterdir():
+        done = json.loads((cdir / "done.json").read_text())
+        done.pop("fingerprint")
+        (cdir / "done.json").write_text(json.dumps(done))
+
+    logs: list[str] = []
+    q = go(log=logs.append)
+
+    assert q["chunks_reused"] == 0
+    assert any("no fingerprint" in line for line in logs)
+
+
+def test_identical_rerun_and_new_home_defends_reuse_checkpoints(match_env):
+    go = match_env["go"]
+    go()
+    calls = match_env["cal"].calls
+    assert go()["chunks_reused"] == 2
+    assert go(home_defends="right")["chunks_reused"] == 2
+    assert match_env["cal"].calls == calls
+
+
+def test_run_records_detector_and_calibrator_provenance(match_env):
+    go, out = match_env["go"], match_env["out"]
+    go(people_detector="rtdetr", people_weights_dir="people/best", calib_backend="apache2")
+
+    prov = json.loads((out / "meta.json").read_text())["provenance"]
+    assert prov["detector"]["people"] == {"backend": "rtdetr", "weights_dir": "people/best"}
+    assert prov["detector"]["ball"]["backend"] == "rtdetr"
+    assert prov["calibrator"] == {"backend": "apache2", "weights_dir": None}
+    assert prov["period_start_s"]["1"] == 0.0
+    rep = json.loads((out / "report.json").read_text())
+    assert rep["provenance"]["calibrator"]["backend"] == "apache2"
+
+    # Replay (CLI defaults would say yolo/soccermaster) must report what actually produced the obs
+    go(replay_only=True)
+    prov2 = json.loads((out / "meta.json").read_text())["provenance"]
+    assert prov2["detector"]["people"]["backend"] == "rtdetr"
+    assert prov2["calibrator"]["backend"] == "apache2"
+
+
+def test_replay_refuses_observations_cut_from_different_windows(match_env):
+    go = match_env["go"]
+    go()
+    with pytest.raises(ValueError, match="do not match"):
+        go(replay_only=True, period_windows=[(1, 0.0, 0.50), (2, 0.62, 1.16)])
 
 
 def test_cli_match_run_help():

@@ -374,7 +374,7 @@
 <div class="passcode-gate" id="passcode-gate" data-open="false">
   <form class="passcode-card" id="passcode-form">
     <h2>Footlytics Club Pack</h2>
-    <p>Nhập mã truy cập (passcode) để mở gói phân tích chiến thuật riêng tư.</p>
+    <p>Nhập mã để mở gói phân tích chiến thuật. Mã này chỉ là màn chắn phía trình duyệt, không phải kiểm soát truy cập: dữ liệu và clip vẫn là tệp tĩnh ai có đường dẫn đều tải được. Cần quyền riêng tư thật thì đặt gói sau đăng nhập của máy chủ hoặc dịch vụ lưu trữ.</p>
     <input id="passcode-in" type="password" placeholder="Passcode..." autocomplete="off" required>
     <button type="submit" class="primary" style="justify-content:center">Mở gói phân tích</button>
     <div class="passcode-err" id="passcode-err"></div>
@@ -1366,13 +1366,17 @@ function init() {
     $("btn-profile-toggle").style.display = "inline-flex";
     const pSel = $("p-preset");
     (DATA.presets || []).forEach((p) => pSel.add(new Option(`${p.name} — ${p.description}`, p.name)));
+    let baseProfile = DATA.profile || {};
     if (DATA.profile) {
       pSel.value = DATA.profile.name || "default";
       fillProfileInputs(DATA.profile);
     }
     pSel.addEventListener("change", () => {
       const found = (DATA.presets || []).find((x) => x.name === pSel.value);
-      if (found) fillProfileInputs(found);
+      if (found) {
+        baseProfile = found;
+        fillProfileInputs(found);
+      }
     });
     $("btn-profile-toggle").addEventListener("click", () => {
       const bar = $("profile-bar");
@@ -1388,6 +1392,7 @@ function init() {
         const payload = {
           persist: $("p-persist").checked,
           profile: {
+            ...baseProfile,
             name: pSel.value || "custom",
             low_block_line: Number($("p-lb-line").value),
             low_block_compact_m: Number($("p-lb-comp").value),
@@ -1410,6 +1415,7 @@ function init() {
         DATA.clubs = fresh.clubs;
         DATA.labels = fresh.labels;
         DATA.profile = fresh.profile;
+        baseProfile = fresh.profile;
         state.sequences = fresh.sequences;
         state.radarCache.clear();
         populateSelectOptions();

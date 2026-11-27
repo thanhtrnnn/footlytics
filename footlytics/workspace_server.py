@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets
 import threading
@@ -324,24 +325,28 @@ class WorkspaceStore:
         mv = self.match_videos.get(match_id)
         return mv[0] if mv is not None else None
 
+    def _write_verdict(self, uid: str, verdict_raw: Any, note_raw: Any) -> dict[str, Any]:
+        """Validate and persist one verdict. Caller must hold `self._lock`."""
+        if uid not in self._rows_by_uid:
+            raise ValueError(f"unknown sequence uid {uid!r}")
+        verdict, note = review.check_verdict(verdict_raw, note_raw)
+        row = self._rows_by_uid[uid]
+        entry = self.entries[row["match_id"]]
+        marks_path = entry.dir / "marks.json"
+        if marks_path.is_file():
+            doc = review.load_marks(marks_path)
+        else:
+            doc = review.new_marks(self.reviewer, f"{entry.match_id}.mp4", 0.0)
+        doc["sequences"][row["sequence_id"]] = {"verdict": verdict, "note": note}
+        review.validate_marks(doc)
+        review.write_marks(marks_path, doc)
+        row["verdict"] = verdict
+        row["note"] = note
+        return {"uid": uid, "verdict": verdict, "note": note}
+
     def set_verdict(self, uid: str, verdict_raw: Any, note_raw: Any = "") -> dict[str, Any]:
         with self._lock:
-            if uid not in self._rows_by_uid:
-                raise ValueError(f"unknown sequence uid {uid!r}")
-            verdict, note = review.check_verdict(verdict_raw, note_raw)
-            row = self._rows_by_uid[uid]
-            entry = self.entries[row["match_id"]]
-            marks_path = entry.dir / "marks.json"
-            if marks_path.is_file():
-                doc = review.load_marks(marks_path)
-            else:
-                doc = review.new_marks(self.reviewer, f"{entry.match_id}.mp4", 0.0)
-            doc["sequences"][row["sequence_id"]] = {"verdict": verdict, "note": note}
-            review.validate_marks(doc)
-            review.write_marks(marks_path, doc)
-            row["verdict"] = verdict
-            row["note"] = note
-            return {"uid": uid, "verdict": verdict, "note": note}
+            return self._write_verdict(uid, verdict_raw, note_raw)
 
     def set_note(self, uid: str, note_raw: Any) -> dict[str, Any]:
         if not isinstance(note_raw, str):
@@ -352,7 +357,7 @@ class WorkspaceStore:
             row = self._rows_by_uid[uid]
             if not row["verdict"]:
                 raise ValueError("mark sequence right/wrong/unsure before saving a note")
-            return self.set_verdict(uid, row["verdict"], note_raw)
+            return self._write_verdict(uid, row["verdict"], note_raw)
 
     def _get_state(self, match_id: str) -> MatchState:
         with self._lock:
@@ -377,6 +382,8 @@ class WorkspaceStore:
         *,
         target_hz: float = 15.0,
     ) -> dict[str, Any]:
+        if not (np.isfinite(start_s) and np.isfinite(end_s)):
+            raise ValueError("start_s and end_s must be finite numbers")
         st = self._get_state(match_id)
         fps = float(st.meta.fps or 25.0)
         c0 = max(0.0, float(start_s) - self.pre_roll_s)
@@ -499,6 +506,20 @@ class WorkspaceStore:
         return df
 
 
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _secrets_equal(a: str, b: str) -> bool:
+    """Constant-time compare that accepts any text (`compare_digest` rejects non-ASCII `str`)."""
+    return secrets.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
 def _cookie_digest(secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), b"footlytics-workspace-v1", hashlib.sha256).hexdigest()
 
@@ -515,6 +536,12 @@ def make_workspace_server(
     profile: str | Path | TacticalProfile | None = None,
 ) -> ThreadingHTTPServer:
     """Create a multi-match Web Tactical Query & 2D Radar HTTP server."""
+    clean_token = token.strip() if token and token.strip() else None
+    if clean_token is None and not _is_loopback_host(host):
+        raise ValueError(
+            f"binding to {host or 'all interfaces'!r} exposes the write endpoints to the network: "
+            "pass --token (or FOOTLYTICS_WORKSPACE_TOKEN), or bind to 127.0.0.1"
+        )
     store = WorkspaceStore(
         roots,
         pack_dirs=pack_dirs,
@@ -522,7 +549,6 @@ def make_workspace_server(
         reviewer=reviewer,
         profile=profile,
     )
-    clean_token = token.strip() if token and token.strip() else None
     expected_cookie = _cookie_digest(clean_token) if clean_token else None
 
     class Handler(BaseHTTPRequestHandler):
@@ -566,13 +592,14 @@ def make_workspace_server(
                 return True, {}
 
             auth_hdr = self.headers.get("Authorization", "")
-            if auth_hdr.startswith("Bearer ") and secrets.compare_digest(
-                auth_hdr[7:].strip(), clean_token
-            ):
-                return True, {}
+            if auth_hdr.startswith("Bearer "):
+                # http.server decodes header bytes as latin-1; clients send the token as UTF-8
+                bearer = auth_hdr[7:].strip().encode("latin-1", "replace").decode("utf-8", "replace")
+                if _secrets_equal(bearer, clean_token):
+                    return True, {}
 
             q_tok = (query_params.get("token") or [""])[0]
-            if q_tok and secrets.compare_digest(q_tok, clean_token):
+            if q_tok and _secrets_equal(q_tok, clean_token):
                 cookie_val = f"{COOKIE_NAME}={expected_cookie}; HttpOnly; SameSite=Strict; Path=/"
                 return True, {"Set-Cookie": cookie_val}
 
@@ -582,7 +609,7 @@ def make_workspace_server(
                 with contextlib.suppress(cookies.CookieError):
                     jar.load(raw_cookie)
                 morsel = jar.get(COOKIE_NAME)
-                if morsel is not None and secrets.compare_digest(morsel.value, expected_cookie):
+                if morsel is not None and _secrets_equal(morsel.value, expected_cookie):
                     return True, {}
 
             self._text(401, "unauthorized: pass ?token=<secret> or Authorization: Bearer <secret>")
@@ -647,7 +674,7 @@ def make_workspace_server(
                     s0 = float((qparams.get("start_s") or ["0"])[0])
                     s1 = float((qparams.get("end_s") or [str(s0 + 5.0)])[0])
                     payload = store.radar_slice(mid, s0, s1)
-                except (ValueError, KeyError) as e:
+                except (ValueError, KeyError, OverflowError) as e:
                     self._text(400, f"bad radar query: {e}")
                     return
                 self._json(200, payload)
@@ -755,7 +782,7 @@ def make_workspace_server(
                     if not isinstance(prof_raw, dict):
                         raise TypeError("profile must be an object")
                     prof_clean = {k: v for k, v in prof_raw.items() if k != "persist"}
-                    prof = TacticalProfile.from_dict(prof_clean)
+                    prof = TacticalProfile.from_dict(prof_clean, base=store.profile)
                     res = store.recompute_with_profile(prof, persist=persist)
             except (ValueError, TypeError) as e:
                 self._text(400, f"bad request: {e}")
