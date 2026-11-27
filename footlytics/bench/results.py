@@ -33,7 +33,7 @@ def append_result(path: str | Path, row: dict) -> bool:
 #: JaC@5 x completeness.
 PRIMARY = {"gsr_pipeline": "hota_jersey_off", "gsr_gt_roundtrip": "hota_jersey_off",
            "gsr_rescore": "hota_jersey_on", "sncalib": "score", "gsr_calibration": "score",
-           "vleague": "share_under_1m"}
+           "vleague": "share_under_1m", "flicker": "flicker_passed"}
 
 
 def headline(task: dict) -> tuple[str, float | None, bool | None]:
@@ -56,6 +56,39 @@ def _cell(task: dict | None) -> str:
     return f"{metric} {value:.2f}{mark}"
 
 
+#: (aggregate key, column title, format) of the flicker table. Reported next to the headline
+#: numbers, never gating: `flicker.THRESHOLDS` says what passes, and a run that fails them is
+#: still a complete run.
+FLICKER_COLUMNS = (("flicker_player_step_gt12", "player >12 m/s", "{:.2%}"),
+                   ("flicker_player_step_gt20", "player >20 m/s", "{:.2%}"),
+                   ("flicker_ball_step_gt40", "ball >40 m/s", "{:.2%}"),
+                   ("flicker_ball_beyond_gate", "ball beyond gate", "{:.0f}"),
+                   ("flicker_common_mode_gt05", "common-mode >0.5 m", "{:.2%}"),
+                   ("flicker_still_sigma_p50", "still sigma p50 m", "{:.3f}"),
+                   ("flicker_still_sigma_p90", "still sigma p90 m", "{:.3f}"),
+                   ("flicker_births_per_min", "births/min", "{:.1f}"),
+                   ("flicker_id_life_median_s", "id life s", "{:.1f}"),
+                   ("flicker_frames_over_11_share", ">11 on a team", "{:.2%}"))
+
+
+def _flicker_section(runs: list[dict]) -> list[str]:
+    """The flicker metrics of the newest run's tasks that carry them, as a table (or nothing)."""
+    for r in runs:
+        tasks = {t: v for t, v in r["tasks"].items()
+                 if (v.get("aggregate") or {}).get("flicker_total")}
+        if not tasks:
+            continue
+        out = ["Flicker (reported, not gating), newest run with it:", "",
+               "| task | passed | " + " | ".join(c[1] for c in FLICKER_COLUMNS) + " |",
+               "|---" * (2 + len(FLICKER_COLUMNS)) + "|"]
+        for t, v in tasks.items():
+            a = v["aggregate"]
+            cells = [c[2].format(a[c[0]]) if a.get(c[0]) is not None else "-" for c in FLICKER_COLUMNS]
+            out.append(f"| {t} | {a['flicker_passed']}/{a['flicker_total']} | " + " | ".join(cells) + " |")
+        return out + [""]
+    return []
+
+
 def render_scoreboard(rows: list[dict]) -> str:
     out = ["# Benchmark scoreboard", "",
            "Regenerated from `results.jsonl` by `footlytics bench scoreboard`; do not edit.",
@@ -74,6 +107,7 @@ def render_scoreboard(rows: list[dict]) -> str:
             out.append(f"| {when} | {r['git_sha'][:7]} | {r['status']} | {r['host']} | "
                        + " | ".join(cells) + " |")
         out.append("")
+        out += _flicker_section(runs)
     return "\n".join(out)
 
 

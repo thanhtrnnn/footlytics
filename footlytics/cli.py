@@ -240,6 +240,25 @@ def calibrate(
     typer.echo(f"[calibration] {cal.verdict(lm)[1]} -> {out}")
 
 
+@app.command()
+def flicker(
+    out_dirs: list[Path] = typer.Argument(..., exists=True, file_okay=False,
+                                          help="match output directories holding tracks.parquet"),
+    every: int = typer.Option(10, help="calibration keyframe cadence of the run (frame_idx % every == 0)"),
+    fps: Optional[float] = typer.Option(None, help="override meta.json's fps"),
+) -> None:
+    """Flicker metrics of saved match states: write <out_dir>/flicker.json, print the pass/fail table.
+
+    Reported only: the exit code is 0 whatever fails (`footlytics.bench.flicker.THRESHOLDS`).
+    """
+    from .bench import flicker as fl
+
+    results = [fl.run_dir(d, every=every, fps=fps) for d in out_dirs]
+    typer.echo(fl.render(results))
+    for d in out_dirs:
+        typer.echo(f"wrote {d / 'flicker.json'}")
+
+
 @app.command("drift-check")
 def drift_check(
     video: Path = typer.Argument(..., exists=True),
