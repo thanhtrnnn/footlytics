@@ -18,7 +18,7 @@ import yaml
 
 from ..state.schema import MatchState
 from .possession import infer_possession
-from .sequences import detect_sequences
+from .sequences import detect_sequences, write_sequence_outputs
 from .tactics import normalise_direction
 
 _DETECT_FIELDS: tuple[str, ...] = (
@@ -245,10 +245,13 @@ def recompute_match_sequences(
         poss = pd.read_csv(poss_path)
     else:
         poss = infer_possession(norm)
-    seqs = detect_sequences(norm, poss, **profile.to_detect_kwargs())
     if write:
         backup_file(mdir / "sequences.csv")
+        backup_file(mdir / "turnovers.csv")
+        backup_file(mdir / "phase_shares.json")
         backup_file(mdir / "tactical_profile.yaml")
-        seqs.to_csv(mdir / "sequences.csv", index=False)
+        seqs = write_sequence_outputs(norm, poss, mdir, **profile.to_detect_kwargs())
         save_profile(profile, mdir / "tactical_profile.yaml")
+        return seqs
+    seqs = detect_sequences(norm, poss, **profile.to_detect_kwargs())
     return seqs

@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 
 from ..analytics.possession import infer_possession
-from ..analytics.sequences import detect_sequences
+from ..analytics.sequences import write_sequence_outputs
 from ..analytics.tactics import normalise_direction
 from ..geometry.clip_calib import ClipCalibrator, FrameCalib, static_overlay_mask
 from .quality import compute_quality, write_quality
@@ -153,8 +153,7 @@ def run_video(video: Path, out: Path, paths, every: int = 10, gate_px: float = 2
 
     norm = normalise_direction(state)
     poss = infer_possession(norm)
-    seqs = detect_sequences(norm, poss)
-    seqs.to_csv(out / "sequences.csv", index=False)
+    seqs = write_sequence_outputs(norm, poss, out)
     poss.to_csv(out / "possession.csv", index=False)
     log(f"[done] {seconds:.0f} s, {len(seqs)} sequences")
     return q

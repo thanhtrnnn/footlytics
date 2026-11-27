@@ -143,7 +143,7 @@ def detect_sequences(state: MatchState, possession: pd.DataFrame, sample_every: 
 
     oop = blk["out_of_possession"]
     deep_scramble = (
-        (~blk["in_possession"] & (blk["ball_x_own"] <= -opp_third))
+        (~blk["in_possession"] & ((blk["ball_x_own"] <= -opp_third) | (blk["n_opp_in_third"] >= 3)))
         | (blk["in_possession"] & (blk["ball_x_own"] <= -25.0)
            & (blk["centroid_x"] < build_up_min_centroid_x) & (blk["def_line_x"] <= -30.0))
     )
@@ -474,7 +474,10 @@ def _runs(hits: pd.DataFrame, label: str, min_s: float, step: int, fps: float,
             if duration < min_s:
                 continue
             if label == "low_block" and (
-                not bool(r["out_of_possession"].any())
+                not (
+                    bool(r["out_of_possession"].any())
+                    or (float(r["n_opp_in_third"].median()) >= 3 and float(r["ball_x_own"].median()) <= -25.0)
+                )
                 or float(r["in_possession"].mean()) > 0.65
                 or (
                     float(r["play_stopped"].mean()) > 0.55

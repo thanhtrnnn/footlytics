@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from ..analytics.possession import infer_possession
-from ..analytics.sequences import detect_sequences
+from ..analytics.sequences import write_sequence_outputs
 from ..analytics.tactics import infer_attacking_direction, normalise_direction
 from ..geometry.clip_calib import ClipCalibrator, FrameCalib, static_overlay_mask
 from ..state.schema import MatchMeta, MatchState, Team, TeamInfo
@@ -708,8 +708,7 @@ def run_match(
         )
         seq_kwargs = prof.to_detect_kwargs()
         save_profile(prof, out / "tactical_profile.yaml")
-    seqs = detect_sequences(norm, poss, **seq_kwargs)
-    seqs.to_csv(out / "sequences.csv", index=False)
+    seqs = write_sequence_outputs(norm, poss, out, **seq_kwargs)
     poss.to_csv(out / "possession.csv", index=False)
     log(
         f"[match] done -> {out} ({len(specs)} chunks, {chunks_reused} reused, "
