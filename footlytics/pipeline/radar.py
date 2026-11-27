@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from ..analytics.ball import interpolate_ball
-from ..analytics.ball_link import link_ball_candidates
+from ..analytics.ball_link import BALL_MAX_SPEED, BALL_NOISE_M, ball_reach, link_ball_candidates
 from ..analytics.kinematics import add_kinematics
 from ..geometry.homography import Calibration, apply_homography
 from ..geometry.pitch import Pitch
@@ -78,10 +78,12 @@ class PipelineConfig:
     #: and they became "the ball" in most frames.
     ball_margin_m: float = 2.0
     #: Ball continuity: of several ball candidates, keep the one the ball could have
-    #: reached from where it was last seen, at up to this speed (+ `ball_slack_m`).
-    #: After `ball_reacquire_s` without a sighting, take the most confident again.
-    ball_max_speed: float = 35.0
-    ball_slack_m: float = 1.0
+    #: reached from where it was last seen, at up to this speed, with `ball_noise_m` of position
+    #: error combined in quadrature (`analytics.ball_link.ball_reach`; the former additive 1 m
+    #: made the cap 60-65 m/s). After `ball_reacquire_s` without a sighting, take the most
+    #: confident again.
+    ball_max_speed: float = BALL_MAX_SPEED
+    ball_noise_m: float = BALL_NOISE_M
     ball_reacquire_s: float = 1.0
     #: A ball candidate that sat within 0.5 m of one spot for 80% of this long is a
     #: still decoy unless nothing else moves (`BallSelector`).
@@ -162,22 +164,24 @@ def on_pitch(xy: np.ndarray, roles: list[str], pitch: Pitch,
 
 
 def choose_ball(xy: np.ndarray, conf: np.ndarray, last_xy: Optional[np.ndarray],
-                frames_since: int, fps: float, max_speed: float = 35.0,
-                slack_m: float = 1.0, reacquire_s: float = 1.0) -> Optional[int]:
+                frames_since: int, fps: float, max_speed: float = BALL_MAX_SPEED,
+                noise_m: float = BALL_NOISE_M, reacquire_s: float = 1.0) -> Optional[int]:
     """Index of the ball candidate to keep this frame, or None.
 
     With a recent sighting, only candidates the ball could have reached are
     eligible and the nearest wins; if none is reachable the frame gets no ball
     rather than a teleport. Without one (start, or `reacquire_s` since the last
-    sighting) the most confident candidate is taken. The reach is the tracker's
-    own ball gate (`max_speed * (frames_since + 1) / fps + slack_m`), so a kept
-    candidate is never one the tracker would then refuse and re-id.
+    sighting) the most confident candidate is taken. The reach is `ball_reach` over the
+    `frames_since / fps` that elapsed (the tracker's own gate, `35 * dt + 1 m` per update, is
+    looser, so a kept candidate is never one the tracker would then refuse and re-id). It used
+    to be over `(frames_since + 1) / fps`, one frame more than had passed: twice the reach on
+    consecutive frames.
     """
     if not len(xy):
         return None
     if last_xy is None or frames_since > reacquire_s * fps:
         return int(np.argmax(conf))
-    reach = max_speed * (frames_since + 1) / fps + slack_m
+    reach = ball_reach(frames_since / fps, max_speed, noise_m)
     d = np.linalg.norm(xy - last_xy, axis=1)
     ok = np.flatnonzero(d <= reach)
     return int(ok[np.argmin(d[ok])]) if len(ok) else None
@@ -198,10 +202,10 @@ class BallSelector:
     without it every still ball is treated as a decoy.
     """
 
-    def __init__(self, fps: float, max_speed: float = 35.0, slack_m: float = 1.0,
+    def __init__(self, fps: float, max_speed: float = BALL_MAX_SPEED, noise_m: float = BALL_NOISE_M,
                  reacquire_s: float = 1.0, still_m: float = 0.5, still_s: float = 2.0,
                  still_share: float = 0.8, alone_m: float = 3.0):
-        self.fps, self.max_speed, self.slack_m = fps, max_speed, slack_m
+        self.fps, self.max_speed, self.noise_m = fps, max_speed, noise_m
         self.reacquire_s, self.still_m, self.still_share = reacquire_s, still_m, still_share
         self.alone_m = alone_m
         self.window = max(int(round(still_s * fps)), 1)
@@ -249,7 +253,7 @@ class BallSelector:
             p = int(ok[np.argmax(conf[ok])]) if len(ok) else None
         else:
             p = choose_ball(xy, conf, self.last_xy, frame - self.last_frame, self.fps,
-                            self.max_speed, self.slack_m, self.reacquire_s)
+                            self.max_speed, self.noise_m, self.reacquire_s)
             if p is None:
                 self.n_unreachable += 1
             elif still[p] and len(moving):
@@ -277,7 +281,7 @@ def link_ball_rows(log: list, fps: float, first_track_id: int,
     penalty = [np.where(e[4], 1.0, np.where(e[3], 0.5, 0.0)) for e in log]
     picks = link_ball_candidates(
         frames, xy, conf, fps, penalty=penalty, max_speed=cfg.ball_max_speed,
-        slack_m=cfg.ball_slack_m, max_gap_s=cfg.ball_reacquire_s,
+        noise_m=cfg.ball_noise_m, max_gap_s=cfg.ball_reacquire_s,
         break_cost=cfg.ball_link_break_cost)
     rows: list[dict] = []
     tid, prev = first_track_id - 1, None
@@ -285,8 +289,8 @@ def link_ball_rows(log: list, fps: float, first_track_id: int,
         if p is None:
             continue
         if (prev is None or frame - prev[0] > cfg.ball_reacquire_s * fps
-                or np.linalg.norm(pts[p] - prev[1]) > cfg.ball_max_speed * (frame - prev[0]) / fps
-                + cfg.ball_slack_m):
+                or np.linalg.norm(pts[p] - prev[1]) > ball_reach(
+                    (frame - prev[0]) / fps, cfg.ball_max_speed, cfg.ball_noise_m)):
             tid += 1
         prev = (frame, pts[p])
         d = dets[p]
@@ -485,7 +489,7 @@ def run_observations(
     n_det_total = 0
     n_off_pitch = 0
     n_ball_off_pitch = 0
-    ball_sel = BallSelector(eff_fps, cfg.ball_max_speed, cfg.ball_slack_m,
+    ball_sel = BallSelector(eff_fps, cfg.ball_max_speed, cfg.ball_noise_m,
                             cfg.ball_reacquire_s, still_s=cfg.ball_still_s)
     ball_cands: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     link_log: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
@@ -794,7 +798,8 @@ def run_observations(
     if cfg.ball_max_gap:
         before = int((state.tracks["role"].astype(str) == Role.BALL.value).sum())
         state.tracks = interpolate_ball(state.tracks, eff_fps, max_gap=cfg.ball_max_gap,
-                                        last_frame=out_idx - 1)
+                                        last_frame=out_idx - 1, max_speed=cfg.ball_max_speed,
+                                        noise_m=cfg.ball_noise_m)
         after = int((state.tracks["role"].astype(str) == Role.BALL.value).sum())
         report["ball_frames_detected"] = before
         report["ball_frames_interpolated"] = after - before

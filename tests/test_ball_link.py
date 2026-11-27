@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from footlytics.analytics.ball_link import link_ball_candidates
+from footlytics.analytics.ball_link import ball_reach, link_ball_candidates
 from footlytics.bench.metrics import ball_loss, ball_loss_summary
 from footlytics.pipeline.radar import (BallSelector, PipelineConfig, homography_mapper,
                                        run_frames)
@@ -136,6 +136,47 @@ def test_keep_ball_candidates_records_raw_boxes_and_whether_they_survived():
 
 
 # ----------------------------------------------------------------------------- bench metric
+
+# ---------------------------------------------------------------- the reach gate
+
+
+def test_reach_is_a_speed_cap_near_max_speed_whatever_the_frame_rate():
+    # the old `35 * dt + 1 m` capped the ball at 60 m/s at 25 fps and 65 at 30
+    cap = lambda fps, frames=1: float(ball_reach(frames / fps)) * fps / frames
+    assert 35.0 < cap(25.0) < 38.0
+    assert 35.0 < cap(30.0) < 39.0
+    assert 35.0 < cap(50.0) < 45.0
+    # over a longer gap the noise stops mattering: the cap tends to max_speed
+    assert cap(25.0, frames=25) == pytest.approx(35.0, abs=0.05)
+    assert float(ball_reach(0.0)) == pytest.approx(0.5)      # the noise alone
+    assert ball_reach(np.array([0.04, 0.08])).shape == (2,)
+
+
+def test_a_step_faster_than_any_ball_is_a_break_not_a_continuation():
+    # 2.2 m in one frame at 25 fps = 55 m/s: the old gate (35/25 + 1 = 2.4 m) linked it
+    xy = [arr([0, 0]), arr([2.2, 0]), arr([2.4, 0]), arr([2.6, 0])]
+    conf = [np.array([0.3])] * 4
+    # linked: every frame is picked, but a break costs `break_cost`; with a huge one the
+    # unreachable second sighting cannot sit on the same path as the first
+    picks = link_ball_candidates([0, 1, 2, 3], xy, conf, FPS, break_cost=5.0)
+    assert picks[0] is None or picks[1] is None
+    # a 1.0 m step (25 m/s) is a continuation
+    xy[1] = arr([1.0, 0])
+    assert link_ball_candidates([0, 1, 2, 3], xy, conf, FPS, break_cost=5.0) == [0, 0, 0, 0]
+
+
+def test_choose_ball_reach_is_the_time_that_passed_not_one_frame_more():
+    from footlytics.pipeline.radar import choose_ball
+
+    last = np.array([0.0, 0.0])
+    conf = np.array([0.5])
+    # consecutive frames at 25 fps: 1.2 m is 30 m/s, 2.2 m is 55 m/s
+    assert choose_ball(arr([1.2, 0]), conf, last, frames_since=1, fps=FPS) == 0
+    assert choose_ball(arr([2.2, 0]), conf, last, frames_since=1, fps=FPS) is None
+    # three frames later the ball can have gone 3 x 1.4 m
+    assert choose_ball(arr([3.6, 0]), conf, last, frames_since=3, fps=FPS) == 0
+    assert choose_ball(arr([4.6, 0]), conf, last, frames_since=3, fps=FPS) is None
+
 
 def _gt(frames_xy):
     rows = [dict(frame_idx=f, role="ball", interpolated=False, bbox_x=x - 3, bbox_y=y - 3,

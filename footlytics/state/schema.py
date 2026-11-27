@@ -67,7 +67,9 @@ TRACK_SCHEMA: dict[str, str] = {
     # pitch space (metres, origin = centre spot)
     "x":          "float32",
     "y":          "float32",
-    "z":          "float32",    # ball height; NaN for people
+    "z":          "float32",    # ball height; NaN for people. Always 0 for the ball today: height is
+                                # not estimated, so an airborne ball's x, y are its ground-plane
+                                # projection, displaced along the camera ray.
     # derived kinematics, filled by analytics.kinematics
     "speed":      "float32",    # m/s
     "accel":      "float32",    # m/s^2
@@ -116,6 +118,39 @@ class MatchMeta:
     @property
     def full_pitch_visible(self) -> bool:
         return self.source_type in ("fixed_panoramic", "tactical_cam")
+
+
+#: Fastest a person (12.5 m/s, a touch above Bolt's peak) or the ball (a hard shot is ~35 m/s)
+#: can move between two sightings, for `MatchState.validate`.
+PLAYER_STEP_LIMIT_MS = 12.5
+BALL_STEP_LIMIT_MS = 40.0
+
+
+def _implied_speeds(rows: pd.DataFrame, fps: float) -> np.ndarray:
+    """Speed (m/s) between each track's consecutive rows: displacement over elapsed time.
+
+    Pairs that cross a period, a shot or a non-live-wide frame are not steps of one object and
+    are left out, as are duplicate rows of one frame.
+    """
+    if rows.empty:
+        return np.empty(0)
+    r = rows.sort_values(["track_id", "frame_idx"], kind="stable")
+    same = np.ones(len(r), bool)
+    for col in ("track_id", "period", "shot"):
+        if col in r.columns:
+            v = r[col].to_numpy()
+            same[1:] &= v[1:] == v[:-1]
+    same[0] = False
+    if "live_wide" in r.columns:
+        lw = r["live_wide"].to_numpy(bool)
+        same[1:] &= lw[1:] & lw[:-1]
+    f = r["frame_idx"].to_numpy(np.int64)
+    x, y = r["x"].to_numpy(float), r["y"].to_numpy(float)
+    df = np.diff(f, prepend=f[0])
+    ok = same & (df >= 1)
+    dist = np.hypot(np.diff(x, prepend=x[0]), np.diff(y, prepend=y[0]))
+    v = dist[ok] * fps / df[ok]
+    return v[np.isfinite(v)]
 
 
 class MatchState:
@@ -203,6 +238,30 @@ class MatchState:
 
     # ------------------------------------------------------------------ checks
 
+    def _implied_speed_problems(self) -> list[str]:
+        """Positions that move faster than a person or the ball can.
+
+        Checked on the stored positions (raw displacement over elapsed time between a track's
+        consecutive rows), never on the `speed` column: that is smoothed and clamped by
+        `analytics.kinematics`, so a teleport cannot show in it. Steps are only taken inside one
+        period and one live-wide shot, where a track is one continuous stretch of video.
+        """
+        out: list[str] = []
+        t = self.tracks
+        for label, roles, limit, tolerance in (
+                ("player", (Role.PLAYER.value, Role.GOALKEEPER.value), PLAYER_STEP_LIMIT_MS, 0.001),
+                ("ball", (Role.BALL.value,), BALL_STEP_LIMIT_MS, 0.0)):
+            v = _implied_speeds(t[t["role"].astype(str).isin(roles)], self.meta.fps)
+            if not len(v):
+                continue
+            share = float((v > limit).mean())
+            if share > tolerance:
+                out.append(
+                    f"{share:.2%} of consecutive {label} steps imply more than {limit:g} m/s "
+                    f"({int((v > limit).sum())} of {len(v)}; worst {float(v.max()):.0f} m/s) -- "
+                    f"identity switches, a bad homography or a bad frame rate")
+        return out
+
     def validate(self) -> list[str]:
         """Cheap sanity checks. Returns human-readable problems, worst first.
 
@@ -232,14 +291,7 @@ class MatchState:
                     "(expected ~22) -- detector is missing players"
                 )
 
-        speeds = self.players["speed"].dropna()
-        if not speeds.empty:
-            impossible = (speeds > 12.5).mean()   # 12.5 m/s ~ faster than Mbappe
-            if impossible > 0.001:
-                problems.append(
-                    f"{impossible:.2%} of player speeds exceed 12.5 m/s -- "
-                    "identity switches or a bad frame rate"
-                )
+        problems += self._implied_speed_problems()
 
         unknown = (self.players["team"] == Team.UNKNOWN.value).mean()
         if unknown > 0.1:
