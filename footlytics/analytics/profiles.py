@@ -155,7 +155,7 @@ class TacticalProfile:
 BUILTIN_PROFILES: dict[str, TacticalProfile] = {
     "default": TacticalProfile(
         name="default",
-        description="V1 calibrated V.League defaults (96.3% audited precision)",
+        description="V1 calibrated V.League defaults (pattern detections pending blind analyst validation)",
     ),
     "high_press_aggressive": TacticalProfile(
         name="high_press_aggressive",

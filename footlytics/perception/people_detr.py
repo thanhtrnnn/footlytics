@@ -1,5 +1,6 @@
-"""Multi-class football people detector on RT-DETRv2 (Apache-2.0 code and weights), replacing the
-AGPL Ultralytics YOLOv8x6 people model for commercial-clean perception.
+"""Multi-class football people detector on RT-DETRv2 (Apache-2.0 architecture and base weights),
+an option under evaluation to replace the AGPL Ultralytics YOLOv8x6 people model. YOLOv8x6 remains
+the default (`DetectorConfig.people_detector`).
 
 Fine-tuned by `scripts/train_people_detr.py` from `PekingU/rtdetr_v2_r50vd` on SoccerNet GSR train.
 Indices `0..3` are trained as `player`, `goalkeeper`, `referee`, and `other` (seeded from COCO's
@@ -7,7 +8,7 @@ pretrained `person` prior at index `0`). At pipeline inference time (`collapse_r
 off-pitch `other` detections (`cls == 3`) are dropped and on-pitch person roles (`0, 1, 2`) are
 emitted as `player` (`0`) so whole-clip trajectory role resolution (`split_officials`,
 `goalkeeper_tracklets`, `team_scores_by_track`) decides officials and keepers without confusing a
-dark-kit team for referees (`60.49` GS-HOTA, `92.8%` team accuracy on GSR valid).
+dark-kit team for referees.
 """
 from __future__ import annotations
 

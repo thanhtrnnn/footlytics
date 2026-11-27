@@ -56,7 +56,7 @@ const demos = {
     title: 'V.League V1 Showcase toàn quy trình',
     kind: 'Pipeline V1 · V.League 2025/26 · 64 giây · 30 fps',
     description: '4 chương liên mạch trên 4 trận V.League 2025/26: chiếu sân 105×68m, nhận diện người & bóng, đủ 5 mẫu hình chiến thuật, Web Tactical Workspace và Hồ sơ Đối thủ tiếng Việt.',
-    limit: 'V1 tập trung cấu trúc chiến thuật cấp đội (chưa định danh số áo cá nhân). 96.3% độ chính xác kiểm duyệt trên 55 tình huống qua 3 sân.',
+    limit: 'V1 tập trung cấu trúc chiến thuật cấp đội (chưa định danh số áo cá nhân). Các phát hiện mẫu hình đang chờ analyst kiểm định mù.',
   },
   gt40: {
     file: 'gt-video-radar-40s',
@@ -80,7 +80,7 @@ const demos = {
     title: 'Đối chiếu detector sớm (conf 0.25)',
     kind: 'Model prediction · 10 giây · 25 fps',
     description: 'Lượt chạy đầu kỳ tháng 10 trên SoccerTrack với confidence 0.25, pitch margin 2m để đối chiếu sự cải tiến của V1.',
-    limit: 'Bản đầu kỳ trước khi nâng cấp Apache-2.0 RT-DETRv2 và phân vai toàn quỹ đạo.',
+    limit: 'Bản đầu kỳ trước khi bổ sung phân vai toàn quỹ đạo.',
   },
   model10: {
     file: 'pipeline-detection-low-confidence-10s',

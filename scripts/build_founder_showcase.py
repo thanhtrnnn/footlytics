@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Build the 1080p@30fps Footlytics Founder Demo Video Showcase.
+"""Build the 30 fps Footlytics Founder Demo Video Showcase.
 
-Renders a self-contained H.264 MP4 (`1920x1080`, `yuv420p`, `+faststart`) from
+Renders a self-contained H.264 MP4 (`1920x1080`, `yuv420p`, `+faststart`; the copy committed under
+`web/assets/demos/` is 1280x720) from
 real processed LPBank V.League 1 2025/26 MatchStates, opposition pack clips, and
 live workspace/dossier surfaces:
 
-- Act I   (0:00 - 0:13.0): Editorial hook + live 1080p pitch calibration & tracking reveal
+- Act I   (0:00 - 0:13.0): Editorial hook + live pitch calibration & tracking reveal
 - Act II  (0:13 - 0:45.5): All 5 V1 tactical sequence engines across 3 matches & 2 stadiums
 - Act III (0:45.5 - 0:58.5): Interactive Web Tactical Workspace & Opposition Scouting Pack
-- Act IV  (0:58.5 - 1:07.5): Verified V1 precision, Apache-2.0 benchmarks, & unit economics
+- Act IV  (0:58.5 - 1:07.5): Measured V1 figures with sample sizes & unit economics
 """
 from __future__ import annotations
 
@@ -201,7 +202,7 @@ def build_sequence_specs() -> list[SequenceShowcaseSpec]:
             away_code="HANOI",
             rule_text="Rule: Controlled own-third possession (x <= -17.5 m for >= 4.0 s) progressing cleanly into midfield under opponent pressure.",
             insight_text="PVF-CAND absorbs 3 pressing Hà Nội forwards in the right defensive third (-17.7 m) and progresses cleanly up the far touchline.",
-            badge_text="HUMAN VERIFIED · PVF STADIUM",
+            badge_text="AUTO-DETECTED · PVF STADIUM",
             summary_stats=(
                 ("Opponent Pressers in 3rd", "3 forwards", 0.65),
                 ("Starting Line Depth", "-17.7 m", 0.58),
@@ -509,7 +510,7 @@ def estimate_smoothed_homographies(tdf: pd.DataFrame, start_f: int, end_f: int) 
 
 
 def draw_projected_pitch_overlay(canvas_bgr: np.ndarray, h_mat: np.ndarray, reveal_frac: float) -> None:
-    """Project 105x68m pitch markings & tactical 10.5m grid onto 1080p grass via homography."""
+    """Project 105x68m pitch markings & tactical 10.5m grid onto the video frame via homography."""
     if reveal_frac <= 0.01:
         return
     overlay = canvas_bgr.copy()
@@ -569,7 +570,7 @@ def draw_projected_pitch_overlay(canvas_bgr: np.ndarray, h_mat: np.ndarray, reve
 
 
 def render_act1_frames(fonts: FontBank) -> list[np.ndarray]:
-    """Render Act I (13.0s = 390 frames): Hero Title Card + Live 1080p Calibration/Tracking."""
+    """Render Act I (13.0s = 390 frames): Hero Title Card + Live Calibration/Tracking."""
     frames: list[np.ndarray] = []
     raw_video = ROOT / "data" / "clips" / "vn_cahcm_hanoi_40m_10min.mp4"
     tdf = pd.read_parquet(ROOT / "data" / "out" / "vleague_10min_rtdetr_vl" / "tracks.parquet")
@@ -639,8 +640,8 @@ def render_act1_frames(fonts: FontBank) -> list[np.ndarray]:
             dr.line((88, y_base, W - 88, y_base), fill=C_RULE, width=2)
             metrics = [
                 ("549,300 FRAMES", "3 full 90-min V.League 2025/26 matches processed end-to-end at 30 Hz"),
-                ("96.3% PRECISION", "100.0% on decided sequences (52/52) across 55 visually audited clips"),
-                ("$3.66 / MATCH", "4.58 GPUh compute (~$2.58 on Apache-2.0 RT-DETRv2) · <8h overnight SLA"),
+                ("PRECISION: PENDING", "Pattern detections await blind analyst validation; no precision or recall figure is published"),
+                ("$3.66 / MATCH", "4.58 GPUh average compute per 90-min match · <8h overnight SLA"),
             ]
             col_w = (W - 176) // 3
             for ci, (big, desc) in enumerate(metrics):
@@ -654,7 +655,7 @@ def render_act1_frames(fonts: FontBank) -> list[np.ndarray]:
 
         frames.append(cv2.cvtColor(np.asarray(pil), cv2.COLOR_RGB2BGR))
 
-    # Scene 1B: 0:04.5 - 0:13.0 (255 frames = 8.5s) — Live 1080p Perception & Metric Projection
+    # Scene 1B: 0:04.5 - 0:13.0 (255 frames = 8.5s) — Live Perception & Metric Projection
     n_1b = 255
     base_rf = start_raw_f + int(n_1a * 25 / 30)
     for i in range(n_1b):
@@ -741,11 +742,11 @@ def render_act1_frames(fonts: FontBank) -> list[np.ndarray]:
         if sec < 2.0:
             step_tag = "STAGE 01 / 03  ·  HOMOGRAPHY PITCH CALIBRATION"
             step_title = "Single Broadcast Camera -> 105×68m Metric Pitch"
-            step_meta = "V.League < 1.0m accuracy: 87.5% (dev) / 76.2% (frozen) · Thống Nhất Stadium 1080p"
+            step_meta = "V.League < 1.0m accuracy: 87.5% (21/24 dev frames) / 76.2% (16/21 hold-out frames, one annotator)"
         elif sec < 4.3:
-            step_tag = "STAGE 02 / 03  ·  APACHE-2.0 PERCEPTION & IDENTITY"
-            step_title = "RT-DETRv2 People + Ball Detection & Team Separation"
-            step_meta = "GS-HOTA 60.49 (Apache-2.0) / 63.10 (YOLOv8x6) · Team ID 92.8% · Ball Recall 70.5%"
+            step_tag = "STAGE 02 / 03  ·  PERCEPTION & IDENTITY"
+            step_title = "People + Ball Detection & Team Separation"
+            step_meta = "Whole-trajectory team, keeper and referee resolution · detector benchmark not yet published"
         else:
             step_tag = "STAGE 03 / 03  ·  CONTINUOUS 30 HZ MATCH STATE"
             step_title = "Synchronized 2D Trajectories, Speeds & Possession"
@@ -1175,21 +1176,21 @@ def render_act4_frames(fonts: FontBank) -> list[np.ndarray]:
     columns = [
         (
             "01 · SEQUENCE PRECISION",
-            "96.3%",
-            "100.0% on decided clips (52 / 52)",
-            "55 sequences visually audited frame-by-frame across 4 V.League matches and 3 stadiums (clearing >= 80% V1 gate).",
+            "PENDING",
+            "Blind analyst validation not yet run",
+            "5 pattern detectors run on 3 full V.League matches; no precision or recall figure is published until analysts mark clips blind.",
         ),
         (
-            "02 · COMMERCIAL-CLEAN AI",
-            "60.49",
-            "Apache-2.0 GS-HOTA (63.10 YOLOv8x6)",
-            "100% Apache-2.0 RT-DETRv2 people + ball detector: 92.8% team accuracy, 99.1% keeper side, 70.5% ball recall.",
+            "02 · PITCH CALIBRATION",
+            "87.5%",
+            "Within 1 m on 21 of 24 dev frames",
+            "76.2% (16 of 21 frames) on a hold-out set from one annotator; 70.9%-82.6% calibration coverage across full matches.",
         ),
         (
             "03 · UNIT ECONOMICS",
             "$3.66",
-            "Per 90-min match (~$2.58 RT-DETRv2)",
-            "4.58 GPUh baseline (~3.2 GPUh on RT-DETRv2) · < 8h overnight delivery from broadcast MP4 to full Analyst Pack.",
+            "Per 90-min match",
+            "4.58 GPUh average compute · < 8h overnight delivery from broadcast MP4 to full Analyst Pack.",
         ),
         (
             "04 · V.LEAGUE 2025/26 PROOF",
@@ -1215,7 +1216,7 @@ def render_act4_frames(fonts: FontBank) -> list[np.ndarray]:
         )
         dr.line((88, 120 + y_off, W - 88, 120 + y_off), fill=C_RULE, width=2)
 
-        dr.text((88, 162 + y_off), "Proven on Real V.League Broadcasts.", font=fonts.display(62, weight=700), fill=C_PAPER)
+        dr.text((88, 162 + y_off), "Run on Real V.League Broadcasts.", font=fonts.display(62, weight=700), fill=C_PAPER)
         dr.text((88, 238 + y_off), "Ready for Club Analyst Pilots.", font=fonts.display(62, weight=700), fill=C_SIGNAL)
 
         # 4 Ruled Proof Columns
@@ -1316,7 +1317,7 @@ def main() -> None:
         "--out",
         type=Path,
         default=ROOT / "data" / "out" / "showcase" / "footlytics_founder_showcase.mp4",
-        help="Output 1080p MP4 path",
+        help="Output 1920x1080 MP4 path",
     )
     parser.add_argument(
         "--workspace-shot",
@@ -1339,7 +1340,7 @@ def main() -> None:
     args = parser.parse_args()
 
     fonts = FontBank()
-    print("[1/4] Rendering Act I (Hook + Live 1080p Calibration & Tracking)...")
+    print("[1/4] Rendering Act I (Hook + Live Calibration & Tracking)...")
     act1 = render_act1_frames(fonts)
     print(f"      Act I frames: {len(act1)}")
 
