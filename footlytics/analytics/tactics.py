@@ -138,6 +138,11 @@ def team_block(state: MatchState, exclude_gk: bool = True,
                sample_every: int = 25, min_outfield: int = 6) -> pd.DataFrame:
     """Per-frame shape of each team: line height, width, depth, compactness.
 
+    Every figure is over the outfielders the detector saw in that frame (`n_outfield`),
+    not the whole team: a broadcast camera follows the ball, so the deepest visible
+    player is often not the deepest player. A line read from a subset is an upper bound
+    on the real line.
+
     `sample_every` frames, because these move on the scale of seconds and a
     135-minute match is 200k frames.
     """
@@ -163,6 +168,8 @@ def team_block(state: MatchState, exclude_gk: bool = True,
             # Defensive line: the four deepest outfielders, not the single deepest,
             # which is usually one player caught upfield or dropping off.
             "def_line_x": float(xs[:4].mean()),
+            # The three deepest, the line height SkillCorner's block definitions use.
+            "def_line3_x": float(xs[:3].mean()),
             "fwd_line_x": float(xs[-2:].mean()),
             "depth_m": float(xs[-1] - xs[0]),
             "width_m": float(ys.max() - ys.min()),
@@ -178,9 +185,11 @@ def team_block(state: MatchState, exclude_gk: bool = True,
 
 # ------------------------------------------------------------------ formation
 
+#: Depth-band triples (defenders, midfielders, forwards). Three bands cannot tell a 4-2-3-1
+#: from a 4-5-1 or a 4-1-4-1, so the triple carries one name.
 FORMATION_TEMPLATES = {
-    "4-4-2": (4, 4, 2), "4-3-3": (4, 3, 3), "4-2-3-1": (4, 5, 1),
-    "3-5-2": (3, 5, 2), "5-3-2": (5, 3, 2), "4-5-1": (4, 5, 1),
+    "4-4-2": (4, 4, 2), "4-3-3": (4, 3, 3), "4-5-1": (4, 5, 1),
+    "3-5-2": (3, 5, 2), "5-3-2": (5, 3, 2),
     "3-4-3": (3, 4, 3), "5-4-1": (5, 4, 1),
 }
 
@@ -285,12 +294,12 @@ def ppda(state: MatchState, events: pd.DataFrame, player_team: dict[int, str],
 
 
 def press_distance(state: MatchState, possession: pd.DataFrame,
-                   sample_every: int = 25) -> pd.DataFrame:
+                   sample_every: int = 25, exclude_gk: bool = True) -> pd.DataFrame:
     """How close the out-of-possession team gets to the ball, over time.
 
-    A direct read on pressing that needs no event labels: when the opposition
-    has the ball, the distance from the ball to the nearest defender is what
-    "pressure" physically means.
+    A direct read on distance, not on pressure: it is undirected and ignores who is
+    closing (`press_on_ball` is the pressure test). The pressing team's goalkeeper is
+    left out; he stands near the ball whenever play is in his box without pressing it.
     """
     # A handful of matchTime values repeat, so frame_idx is not perfectly
     # unique; without deduplicating, every lookup returns a Series instead of a
@@ -300,6 +309,8 @@ def press_distance(state: MatchState, possession: pd.DataFrame,
     poss = (possession.drop_duplicates("frame_idx")
                       .set_index("frame_idx")["ballStatus"])
     p = state.players
+    if exclude_gk:
+        p = p[~p["track_id"].isin(goalkeepers(state).values())]
     p = p[p["frame_idx"] % sample_every == 0]
     rows = []
     for frame, g in p.groupby("frame_idx", observed=True):
@@ -326,18 +337,112 @@ def press_distance(state: MatchState, possession: pd.DataFrame,
     return pd.DataFrame(rows)
 
 
+# ------------------------------------------------------------ ball pressure
+
+PRESS_BACK_M = 3.0
+PRESS_FRONT_M = 9.0
+PRESS_CLOSING_MPS = 2.0
+PRESS_LOOKBACK_S = 0.5
+
+
+def press_on_ball(state: MatchState, sample_every: int = 5, exclude_gk: bool = True) -> pd.DataFrame:
+    """Per sampled frame and team: how many of its outfielders are pressing the ball.
+
+    "Pressing" is asked of the team as if the other team carried the ball. A player
+    presses when he is within `PRESS_BACK_M` of the ball, or within `PRESS_FRONT_M` of it on
+    the goal side of the ball (between the carrier and the goal he attacks) while closing on it
+    at `PRESS_CLOSING_MPS` or more, measured over the last `PRESS_LOOKBACK_S`. Standing
+    off, or arriving from behind, does not count. `n_closing` counts only the players
+    closing at `PRESS_CLOSING_MPS` or more, in the same distance bands: a player who is
+    simply standing next to the ball presses it but is not closing in on it. Columns:
+    frame_idx, team, n_pressing, n_closing, nearest_m. Frames with no ball are absent.
+    """
+    fps = state.meta.fps
+    lag = max(1, round(PRESS_LOOKBACK_S * fps))
+    ball = state.ball.drop_duplicates("frame_idx").set_index("frame_idx")[["x", "y"]]
+    p = state.players
+    p = p[p["team"].isin([Team.HOME.value, Team.AWAY.value])]
+    if exclude_gk:
+        p = p[~p["track_id"].isin(goalkeepers(state).values())]
+    before = p[["frame_idx", "track_id", "x", "y"]].assign(frame_idx=p["frame_idx"] + lag)
+    now = p[p["frame_idx"] % sample_every == 0].join(ball, on="frame_idx", rsuffix="_ball", how="inner")
+    now = now.merge(before, on=["frame_idx", "track_id"], how="left", suffixes=("", "_prev"))
+    if now.empty:
+        return pd.DataFrame(columns=["frame_idx", "team", "n_pressing", "n_closing", "nearest_m"])
+    dx, dy = now["x_ball"] - now["x"], now["y_ball"] - now["y"]
+    d = np.hypot(dx, dy)
+    closing = ((now["x"] - now["x_prev"]) * dx + (now["y"] - now["y_prev"]) * dy) / d.where(d > 0) * fps / lag
+    goal_x = (state.meta.pitch_length / 2) * now["team"].astype(str).map(_OTHER_TEAM).map(attacking_sign)
+    ux, uy = goal_x - now["x_ball"], -now["y_ball"]
+    on_goal_side = (-dx * ux - dy * uy) > 0
+    closing_in = closing >= PRESS_CLOSING_MPS
+    pressing = (d <= PRESS_BACK_M) | (on_goal_side & (d <= PRESS_FRONT_M) & closing_in)
+    now = now.assign(d=d, pressing=pressing, closing=pressing & closing_in)
+    out = now.groupby(["frame_idx", "team"], observed=True).agg(
+        n_pressing=("pressing", "sum"), n_closing=("closing", "sum"), nearest_m=("d", "min")).reset_index()
+    out["team"] = out["team"].astype(str)
+    out[["n_pressing", "n_closing"]] = out[["n_pressing", "n_closing"]].astype(int)
+    return out
+
+
+def retreat_speed(state: MatchState, team: str, f0: int, f1: int, sample_every: int = 5,
+                  min_players: int = 3, max_hole_s: float = 1.0,
+                  keepers: set[int] | None = None) -> float:
+    """How fast a team's block moved towards its own goal over frames f0..f1 (negative = back), in m/s.
+
+    The slope of the centroid of the outfielders tracked in every sampled frame of the
+    window. The centroid of whoever the camera shows moves when the camera pans, so a
+    player who enters or leaves the view is left out. NaN when fewer than `min_players`
+    stayed in view throughout, or the window has fewer than four samples or a hole longer
+    than `max_hole_s`. `keepers` are the goalkeeper track ids to leave out (found from the
+    state when not given).
+    """
+    fps = state.meta.fps
+    t = state.tracks
+    t = t[t["frame_idx"].between(f0, f1) & (t["frame_idx"] % sample_every == 0)]
+    frames = np.sort(t["frame_idx"].unique())
+    if len(frames) < 4 or np.diff(frames).max() > max_hole_s * fps:
+        return float("nan")
+    p = state.players
+    p = p[(p["team"] == team) & p["frame_idx"].isin(frames)]
+    p = p[~p["track_id"].isin(set(goalkeepers(state).values()) if keepers is None else keepers)]
+    n_seen = p.groupby("track_id", observed=True)["frame_idx"].nunique()
+    stayed = n_seen[n_seen == len(frames)].index
+    if len(stayed) < min_players:
+        return float("nan")
+    c = p[p["track_id"].isin(stayed)].groupby("frame_idx").agg(x=("x", "mean"), t=("timestamp", "first"))
+    return float(np.polyfit(c["t"], c["x"] * attacking_sign(team), 1)[0])
+
+
 # --------------------------------------------------------------- transitions
+
+def third_zone(x_own: float, third_x: float) -> str:
+    """Which third a point is in, from the attacking frame of the team asking (+x = towards its goal)."""
+    if x_own <= -third_x:
+        return "own_third"
+    return "final_third" if x_own >= third_x else "middle_third"
+
 
 def transitions(state: MatchState, possession: pd.DataFrame,
                 min_hold_s: float = 1.5, window_s: float = 5.0,
                 max_gap_s: float = 2.0) -> pd.DataFrame:
-    """Turnovers, and what each team did in the seconds afterwards.
+    """Turnovers in every third, with what the team that won the ball did with it.
 
     A turnover only counts once the new team holds the ball for `min_hold_s`;
     without that, every deflection and contested touch registers as a transition
     and the count balloons into noise. Contiguous runs are split across long
     tracking gaps (> `max_gap_s`), and a handoff across > `max_gap_s` or any
-    intervening BALLOUT dead-ball restart is not counted as a live turnover.
+    intervening BALLOUT dead-ball restart is not counted as a live turnover. A
+    contested spell shorter than `max_gap_s` between the two runs is a loose ball
+    being won, which is a turnover. When the possession table carries contact evidence the
+    winner must have it: a `gain` of "touch" or "unclaimed" on his first frame (see
+    `infer_possession`), or else a `touch` by him between the loser's last control and
+    `max_gap_s` after his own first. A ball nobody touched did not change hands.
+
+    `zone` is the third where the ball was won, from the point of view of the team
+    that lost it (`final_third` = it lost the ball attacking). `gain_5s_m` (named after
+    `window_s`) is how far the winner moved the ball towards the goal it attacks within
+    the window, the attacking-transition measure.
     """
     fps = state.meta.fps
     poss = possession.sort_values("frame_idx").reset_index(drop=True)
@@ -355,8 +460,11 @@ def transitions(state: MatchState, possession: pd.DataFrame,
     runs["len_s"] = (runs["end"] - runs["start"]) / fps
     runs = runs[runs["team"].isin(["HOME", "AWAY"]) & (runs["len_s"] >= min_hold_s)].reset_index(drop=True)
 
-    ball = (state.ball.drop_duplicates("frame_idx")
-                      .set_index("frame_idx")[["x", "y"]])
+    touches = ({team: poss.loc[poss["touch"] == team, "frame_idx"].to_numpy() for team in ("HOME", "AWAY")}
+               if "touch" in poss.columns else None)
+    gain_at = poss.set_index("frame_idx")["gain"] if "gain" in poss.columns else None
+    ball = (state.ball.drop_duplicates("frame_idx").set_index("frame_idx")[["x", "y"]].sort_index())
+    third_x = state.meta.pitch_length / 2 - state.meta.pitch_length / 3
     rows = []
     for i in range(1, len(runs)):
         prev, cur = runs.iloc[i - 1], runs.iloc[i]
@@ -367,25 +475,30 @@ def transitions(state: MatchState, possession: pd.DataFrame,
         between = poss[(poss["frame_idx"] > prev["end"]) & (poss["frame_idx"] < cur["start"])]
         if (between["ballStatus"] == "BALLOUT").any():
             continue
+        if touches is not None:
+            mine = touches[cur["team"]]
+            lo, hi = np.searchsorted(mine, [prev["end"], cur["start"] + max_gap_f + 1])
+            confirmed = gain_at is not None and gain_at.get(cur["start"], "") in ("touch", "unclaimed")
+            if hi <= lo and not confirmed:
+                continue
         f0 = int(cur["start"]); f1 = int(f0 + window_s * fps)
-        if f0 not in ball.index:
+        nearest = ball.index.searchsorted(f0)
+        at = [k for k in (nearest - 1, nearest) if 0 <= k < len(ball) and abs(ball.index[k] - f0) <= fps]
+        if not at:
             continue
-        b0 = ball.loc[f0]
+        b0 = ball.iloc[min(at, key=lambda k: abs(ball.index[k] - f0))]
         later = ball[(ball.index > f0) & (ball.index <= f1)]
-        gained = np.nan
-        if len(later):
-            b1 = later.iloc[-1]
-            # Progress towards the goal the winning team attacks.
-            sign = attacking_sign(Team.HOME.value if cur["team"] == "HOME"
-                                  else Team.AWAY.value)
-            gained = float((b1["x"] - b0["x"]) * sign)
+        winner = Team.HOME.value if cur["team"] == "HOME" else Team.AWAY.value
+        sign = attacking_sign(winner)
+        gained = float((later.iloc[-1]["x"] - b0["x"]) * sign) if len(later) else np.nan
         rows.append({
             "period": int(cur["period"]), "timestamp": float(cur["t0"]),
             "frame_idx": f0,
-            "won_by": Team.HOME.value if cur["team"] == "HOME" else Team.AWAY.value,
+            "won_by": winner,
             # In the winning team's own attacking frame: negative = own half.
-            "won_at_x": float(b0["x"] * (1 if cur["team"] == "HOME" else -1)),
+            "won_at_x": float(b0["x"] * sign),
             "won_at_y": float(b0["y"]),
+            "zone": third_zone(float(-b0["x"] * sign), third_x),
             "hold_s": float(cur["len_s"]),
             f"gain_{int(window_s)}s_m": gained,
         })
