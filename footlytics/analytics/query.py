@@ -7,7 +7,8 @@ and exposes summary aggregations and filtered searches across matches.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -86,7 +87,11 @@ def _read_match_entry(match_dir: Path) -> MatchEntry:
 
 
 def discover_matches(roots: Sequence[Path | str] | Path | str) -> list[MatchEntry]:
-    """Find match directories containing `sequences.csv` under `roots`."""
+    """Find match directories containing `sequences.csv` under `roots`.
+
+    Folders whose `meta.json` carry the same `match_id` (re-runs of one match) are all kept and
+    told apart as `<match_id>@<folder name>`, so none shadows another and each keeps its own marks.
+    """
     dirs: dict[Path, MatchEntry] = {}
     for root in _normalize_roots(roots):
         if not root.exists():
@@ -100,8 +105,19 @@ def discover_matches(roots: Sequence[Path | str] | Path | str) -> list[MatchEntr
             resolved = d.resolve()
             if resolved not in dirs:
                 dirs[resolved] = _read_match_entry(d)
-    entries = sorted(dirs.values(), key=lambda e: (e.match_id, str(e.dir)))
-    return entries
+    found = list(dirs.values())
+    counts = Counter(e.match_id for e in found)
+    entries = [
+        replace(e, match_id=f"{e.match_id}@{e.dir.name}") if counts[e.match_id] > 1 else e
+        for e in found
+    ]
+    clashes = [mid for mid, n in Counter(e.match_id for e in entries).items() if n > 1]
+    if clashes:
+        raise ValueError(
+            f"match_id(s) {', '.join(sorted(clashes))} are shared by several output folders with the "
+            "same name; pass the intended folders explicitly"
+        )
+    return sorted(entries, key=lambda e: (e.match_id, str(e.dir)))
 
 
 def _read_sequences_df(entry: MatchEntry) -> pd.DataFrame:

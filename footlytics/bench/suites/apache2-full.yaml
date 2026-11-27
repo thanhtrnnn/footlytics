@@ -1,7 +1,8 @@
-# 100% Apache-2.0 / BSD-3-Clause commercial-clean perception + broadcast calibration stack.
-# Zero ultralytics (AGPL-3.0) and zero ext/SoccerMaster (unlicensed) runtime imports.
+# Experimental RT-DETRv2 + PitchCalibNet perception and calibration suite.
+# Avoids ultralytics and ext/SoccerMaster runtime imports; PitchCalibNet requires trained weights
+# before GSR calibration scoring.
 name: apache2-full
-description: Full commercial-clean broadcast stack (Apache-2.0 RT-DETRv2 people + ball + Apache-2.0 PitchCalibNet)
+description: Experimental broadcast suite (RT-DETRv2 people + ball + PitchCalibNet)
 tasks:
   - id: gsr-valid-apache2-full
     kind: gsr

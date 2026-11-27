@@ -742,6 +742,28 @@ def test_jitter_of_a_pure_pan_is_below_five_centimetres():
     assert out["between_m"] < 0.05
 
 
+def test_jitter_reports_the_tail_next_to_the_mean():
+    Hs, grays, P, sources = pan_set()
+    Hs[3] = shift_h(0.5) @ Hs[3]
+    sources[3] = "keyframe"
+    out = vleague.jitter_m(Hs, grays, P, sources)
+    v = np.array(out["switch_values"])
+    assert len(v) == out["pairs_switch"] == 2
+    assert out["switch_m"] == pytest.approx(v.mean(), abs=1e-3)
+    assert out["switch_p90_m"] == pytest.approx(np.percentile(v, 90), abs=1e-3)
+    assert out["switch_p99_m"] == pytest.approx(np.percentile(v, 99), abs=1e-3)
+    assert out["switch_m"] <= out["switch_p90_m"] <= out["switch_p99_m"] <= v.max() + 1e-9
+    assert out["between_p99_m"] is not None and len(out["between_values"]) == 3
+
+
+def test_jitter_pools_pair_distances_across_windows_for_the_aggregate_tail():
+    per = {"a": {"jitter": {"switch_values": [0.1, 0.2]}},
+           "b": {"jitter": {"switch_values": [0.3, 5.0], "between_values": []}}}
+    assert vleague._pooled_percentile(per, "switch", 100) == 5.0
+    assert vleague._pooled_percentile(per, "switch", 50) == pytest.approx(0.25)
+    assert vleague._pooled_percentile(per, "between", 90) is None
+
+
 def test_jitter_lands_a_perturbed_h_in_the_switch_bucket_only():
     Hs, grays, P, sources = pan_set()
     Hs[3] = shift_h(0.5) @ Hs[3]                       # 0.5 m in x, in pitch metres
@@ -765,8 +787,9 @@ def test_jitter_skips_pairs_with_an_uncalibrated_frame_and_gives_none_for_empty_
     Hs, grays, P, sources = pan_set(n=3)
     Hs[1] = None
     out = vleague.jitter_m(Hs, grays, P, sources)
-    assert out == {"switch_m": None, "between_m": None, "pairs_switch": 0, "pairs_between": 0,
-                   "pairs_skipped": 2}
+    assert out == {"switch_m": None, "between_m": None, "switch_p90_m": None, "switch_p99_m": None,
+                   "between_p90_m": None, "between_p99_m": None, "pairs_switch": 0,
+                   "pairs_between": 0, "pairs_skipped": 2, "switch_values": [], "between_values": []}
 
 
 def labels_from(points, dx=0.0):
@@ -1221,6 +1244,9 @@ def test_jitter_is_measured_on_a_textured_window(vl, monkeypatch):
     assert j["pairs_switch"] == 24 and j["pairs_between"] == 0 and j["pairs_skipped"] == 0
     assert j["switch_m"] == pytest.approx(0, abs=0.05)
     assert t["aggregate"]["jitter_switch_m"] is not None
+    agg = t["aggregate"]
+    assert agg["jitter_switch_p90_m"] is not None and agg["jitter_switch_p99_m"] is not None
+    assert agg["jitter_between_p90_m"] is None
 
 
 def test_frozen_digest_ignores_int_vs_float_spelling(vl):

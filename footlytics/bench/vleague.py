@@ -444,6 +444,10 @@ def jitter_m(Hs: list, grays: list, pitch_pts: np.ndarray, sources: list[str]) -
     point falls behind the camera or on the horizon, or a value is not finite. Large distances are
     never capped: a badly solved but finite keyframe must show up as large jitter. An empty
     bucket's mean is None.
+
+    The mean hides the tail that makes a radar visibly jump, so each bucket also reports its
+    `_p90_m` and `_p99_m` and its raw pair distances (`switch_values`, `between_values`, metres,
+    for pooling across windows: a percentile of percentiles is not a percentile).
     """
     if not (len(Hs) == len(grays) == len(sources)):
         raise ValueError("Hs, grays and sources must be the same length")
@@ -475,10 +479,16 @@ def jitter_m(Hs: list, grays: list, pitch_pts: np.ndarray, sources: list[str]) -
             continue
         kind = "switch" if "keyframe" in (sources[t], sources[t + 1]) else "between"
         buckets[kind].append(d)
-    return {"switch_m": float(np.mean(buckets["switch"])) if buckets["switch"] else None,
-            "between_m": float(np.mean(buckets["between"])) if buckets["between"] else None,
-            "pairs_switch": len(buckets["switch"]), "pairs_between": len(buckets["between"]),
-            "pairs_skipped": skipped}
+    out: dict = {}
+    for kind in ("switch", "between"):
+        v = buckets[kind]
+        out[f"{kind}_m"] = float(np.mean(v)) if v else None
+        out[f"{kind}_p90_m"] = float(np.percentile(v, 90)) if v else None
+        out[f"{kind}_p99_m"] = float(np.percentile(v, 99)) if v else None
+    return {**out, "pairs_switch": len(buckets["switch"]), "pairs_between": len(buckets["between"]),
+            "pairs_skipped": skipped,
+            "switch_values": [round(d, 4) for d in buckets["switch"]],
+            "between_values": [round(d, 4) for d in buckets["between"]]}
 
 
 MIN_TRIPLE_AREA = 0.01       # smallest normalised triangle area of a 4-subset in general position
@@ -572,6 +582,12 @@ def _pair_weighted(items: list[tuple[float | None, int]]) -> float | None:
     if pairs == 0:
         return None
     return float(sum(m * n for m, n in items if m is not None) / pairs)
+
+
+def _pooled_percentile(per: dict, bucket: str, q: float) -> float | None:
+    """The q-th percentile of every pair distance of `bucket` over all windows; None when empty."""
+    v = [d for f in per.values() for d in f["jitter"].get(f"{bucket}_values", [])]
+    return float(np.percentile(v, q)) if v else None
 
 
 def _solve_kw(cfg: dict) -> dict:
@@ -685,6 +701,10 @@ def vleague_task(task: dict, ctx) -> dict:
            "jitter_between_m": _pair_weighted([(f["jitter"]["between_m"],
                                                 f["jitter"]["pairs_between"])
                                                for f in per.values()]),
+           "jitter_switch_p90_m": _pooled_percentile(per, "switch", 90),
+           "jitter_switch_p99_m": _pooled_percentile(per, "switch", 99),
+           "jitter_between_p90_m": _pooled_percentile(per, "between", 90),
+           "jitter_between_p99_m": _pooled_percentile(per, "between", 99),
            "jitter_pairs_skipped": sum(f["jitter"]["pairs_skipped"] for f in per.values()),
            "solver_errors": solver_errors}
     if rel_docs:

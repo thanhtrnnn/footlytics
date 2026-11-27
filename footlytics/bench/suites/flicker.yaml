@@ -1,0 +1,19 @@
+# Flicker metrics of saved match states: CPU only, seconds per state, nothing is re-run.
+# Reported, never gating (`footlytics.bench.flicker.THRESHOLDS` says what passes; today's outputs
+# fail most of it). `states` are directories holding tracks.parquet + meta.json, relative to the
+# repository root; one task per fps, since a task pools its states. `every` is the calibration
+# keyframe cadence the states were made with. The same numbers, one state at a time:
+# `footlytics flicker <dir>`.
+name: flicker
+tasks:
+  - id: flicker-pvf-30fps
+    kind: flicker
+    every: 10
+    states:
+      - data/out/pvf_cand_hanoi_2526
+      - data/out/pvf_cand_cahn_2526
+  - id: flicker-vleague-25fps
+    kind: flicker
+    every: 10
+    states:
+      - data/out/vleague_10min_rtdetr_vl

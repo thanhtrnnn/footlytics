@@ -36,6 +36,13 @@ import pandas as pd
 # Anything beyond these is a tracking artefact, not football.
 MAX_HUMAN_SPEED = 12.0
 MAX_HUMAN_ACCEL = 10.0
+# The ball is not a person. A hard shot leaves the boot at 30-35 m/s, so the ball gets its own
+# cap, a little above the selector's `ball_reach` gate (~37 m/s per frame at 25-30 fps). It
+# used to be clamped to MAX_HUMAN_SPEED with everything else: 13-17% of ball rows read exactly
+# 12.00 m/s. Its acceleration is a kick, an order of magnitude beyond any player's; the cap is
+# a sanity bound on the *smoothed* series (a kick to 35 m/s inside a 0.8 s window is ~45 m/s^2).
+MAX_BALL_SPEED = 40.0
+MAX_BALL_ACCEL = 100.0
 
 
 def _hampel(v: np.ndarray, window: int = 7, n_sigma: float = 3.0) -> np.ndarray:
@@ -82,7 +89,8 @@ def add_kinematics(tracks: pd.DataFrame, fps: float, smooth_s: float = 0.8,
     """Fill the `speed` and `accel` columns, in m/s and m/s^2.
 
     `smooth_s` is the smoothing window in seconds; see the module docstring for
-    how 0.8 s was chosen against real annotated football.
+    how 0.8 s was chosen against real annotated football. With `clamp`, a person's speed
+    and acceleration are limited to `MAX_HUMAN_*` and the ball's to `MAX_BALL_*`.
     """
     if tracks.empty:
         return tracks
@@ -91,6 +99,8 @@ def add_kinematics(tracks: pd.DataFrame, fps: float, smooth_s: float = 0.8,
 
     speeds = np.full(len(out), np.nan, np.float32)
     accels = np.full(len(out), np.nan, np.float32)
+    is_ball = ((out["role"].astype(str) == "ball").to_numpy() if "role" in out.columns
+               else np.zeros(len(out), bool))
 
     for _, idx in out.groupby("track_id", observed=True).indices.items():
         if len(idx) < 3:
@@ -105,11 +115,14 @@ def add_kinematics(tracks: pd.DataFrame, fps: float, smooth_s: float = 0.8,
         dt[dt <= 0] = 1.0 / fps
         vx, vy = np.gradient(x) / dt, np.gradient(y) / dt
         sp = np.hypot(vx, vy)
+        ball = bool(is_ball[idx[0]])
+        v_cap, a_cap = ((MAX_BALL_SPEED, MAX_BALL_ACCEL) if ball
+                        else (MAX_HUMAN_SPEED, MAX_HUMAN_ACCEL))
         if clamp:
-            sp = np.minimum(sp, MAX_HUMAN_SPEED)
+            sp = np.minimum(sp, v_cap)
         ac = np.gradient(_smooth(sp, win)) / dt
         if clamp:
-            ac = np.clip(ac, -MAX_HUMAN_ACCEL, MAX_HUMAN_ACCEL)
+            ac = np.clip(ac, -a_cap, a_cap)
         speeds[idx], accels[idx] = sp, ac
 
     out["speed"] = speeds

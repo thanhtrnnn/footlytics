@@ -24,7 +24,9 @@ for f in range(N_FRAMES):
     drift = 6.0 * np.sin(t * 0.6)                      # the block shuffling across
     for side, squad in (("home", home), ("away", away)):
         for i, ((bx, by), r) in enumerate(squad):
-            jitter = rng.normal(0, 0.25, 2)
+            # 3 cm: validate() reads raw frame-to-frame displacement, and a 25 cm jitter at 25 fps
+            # is 9 m/s of noise on every step, which it (rightly) reports
+            jitter = rng.normal(0, 0.03, 2)
             x = bx + drift + jitter[0]
             y = by + 2.5 * np.sin(t * 0.9 + i) + jitter[1]
             rows.append(dict(

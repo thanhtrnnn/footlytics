@@ -33,7 +33,7 @@ def replay_clip(clip: dict, cfg: PipelineConfig, ball_floor: float = 0.0) -> dic
     """frame -> (x, y, w, h, conf) of the picked ball box, as `run_frames` would write it."""
     pitch = Pitch(105.0, 68.0)
     fps = clip["fps"]
-    sel = BallSelector(fps, cfg.ball_max_speed, cfg.ball_slack_m, cfg.ball_reacquire_s,
+    sel = BallSelector(fps, cfg.ball_max_speed, cfg.ball_noise_m, cfg.ball_reacquire_s,
                        still_s=cfg.ball_still_s)
     log = []
     for i in range(clip["n_frames"]):

@@ -356,6 +356,78 @@ def test_export_pack_filters_marks_writes_xml_dossier_and_cuts_radar_clips(
     assert "<html" in html_doc and "MP4 + Radar" in html_doc
 
 
+def test_all_nan_def_line_does_not_write_nan_into_manifest(tmp_path: Path):
+    row = {
+        "label": "low_block", "team": "home", "period": 1, "start_s": 1.5, "end_s": 4.5,
+        "start_frame": 38, "end_frame": 112, "duration_s": 3.0, "def_line_x": None,
+        "compactness_m": None, "n_within_10m": 4, "flank": "", "n_attackers": 0, "n_defenders": 0,
+        "in_possession_share": 0.0, "n_pressers": 5, "response": "",
+    }
+    d = _make_match_dir(tmp_path, "m", match_id="nan_match", home="PVF", away="HAN", seq_rows=[row])
+    manifest = export_pack(d, tmp_path / "pack", export_clips=False)
+
+    def refuse_nan(token):
+        raise AssertionError(f"pack_manifest.json contains {token}")
+
+    on_disk = json.loads((tmp_path / "pack" / "pack_manifest.json").read_text(), parse_constant=refuse_nan)
+    low_block = next(p for p in on_disk["profiles"] if p["label"] == "low_block")
+    assert low_block["mean_def_line_x"] is None and low_block["mean_compactness_m"] is None
+    assert "nan" not in low_block["key_metric"].lower()
+    assert manifest["profiles"] == on_disk["profiles"]
+
+
+def test_sportscode_xml_times_are_in_video_time(tmp_path: Path):
+    from footlytics.analytics.pack import write_sportscode_xml
+
+    base = {
+        "match_id": "m", "club": "PVF", "opponent": "HAN", "side": "home", "period": 1,
+        "match_clock": "00:01-00:04", "clock": "00:01-00:04", "label": "low_block",
+        "verdict": "right", "note": "", "evidence_summary": "", "clip_start_s": 5.0, "clip_end_s": 9.0,
+    }
+    playlist = pd.DataFrame([{**base, "video_offset_s": 20.0}, {**base, "video_offset_s": None}, {**base, "video_offset_s": -30.0}])
+    xml = write_sportscode_xml(playlist, tmp_path / "out.xml")
+    inst = ET.parse(xml).getroot().findall("./ALL_INSTANCES/instance")
+    assert [(i.findtext("start"), i.findtext("end")) for i in inst] == [
+        ("25.00", "29.00"), ("5.00", "9.00"), ("0.00", "0.20"),
+    ]
+    assert write_sportscode_xml(playlist.drop(columns="video_offset_s"), tmp_path / "o2.xml")
+
+
+def test_export_pack_applies_marks_video_offset_to_sportscode_times(tmp_path: Path, two_fixture_root: Path):
+    m1 = two_fixture_root / "m1_pvf_hanoi"
+    marks = json.loads((m1 / "marks.json").read_text())
+    marks["video_offset_s"] = 12.0
+    (m1 / "marks.json").write_text(json.dumps(marks))
+
+    export_pack(m1, tmp_path / "pack", export_clips=False, pre_roll_s=1.0, post_roll_s=1.0, verified_only=True)
+
+    inst = ET.parse(tmp_path / "pack" / "sportscode.xml").getroot().findall("./ALL_INSTANCES/instance")
+    low_block = next(i for i in inst if i.findtext("code").endswith("low_block"))
+    assert low_block.findtext("start") == "12.50"  # clip_start 0.5 + offset 12
+    assert low_block.findtext("end") == "17.50"    # clip_end 5.5 + offset 12
+
+
+def test_unreviewed_sequences_are_labelled_as_such_in_dossier_and_manifest(tmp_path: Path, two_fixture_root: Path):
+    roots = [two_fixture_root / "m1_pvf_hanoi", two_fixture_root / "m2_hanoi_pvf"]
+
+    mixed = export_pack(roots, tmp_path / "mixed", club="PVFCAND", export_clips=False)
+    assert mixed["verified_only"] is False
+    assert mixed["economics"]["verified_right_sequences"] == 2
+    assert mixed["economics"]["unreviewed_sequences"] == 1
+    assert mixed["review_status"] == {"verified": 2, "unreviewed": 1}
+    md = (tmp_path / "mixed" / "dossier.md").read_text()
+    html_doc = (tmp_path / "mixed" / "dossier.html").read_text()
+    assert md.count("Chưa xác thực") >= 1 and md.count("Đã xác thực") >= 2
+    assert "class='unreviewed'" in html_doc and "Chưa xác thực" in html_doc
+    profile = {p["label"]: p for p in mixed["profiles"]}
+    assert profile["midfield_loss"]["unreviewed_count"] == 1
+    assert profile["low_block"]["unreviewed_count"] == 0
+
+    strict = export_pack(roots, tmp_path / "strict", club="PVFCAND", export_clips=False, verified_only=True)
+    assert strict["economics"]["unreviewed_sequences"] == 0
+    assert "Chưa xác thực" not in (tmp_path / "strict" / "dossier.md").read_text()
+
+
 def test_cli_pack_export_verified_only(tmp_path: Path, two_fixture_root: Path):
     runner = CliRunner()
     out_dir = tmp_path / "cli_verified_pack"

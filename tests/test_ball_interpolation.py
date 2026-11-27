@@ -103,3 +103,65 @@ def test_ball_coverage_separates_detected_from_filled():
     filled = interpolate_ball(_ball_rows([0, 1, 2, 5, 6]), FPS, max_gap=5)
     assert ball_coverage(filled, frames=7) == pytest.approx(1.0)
     assert ball_coverage(filled, frames=7, detected_only=True) == pytest.approx(5 / 7)
+
+
+# ---------------------------------------------------------------- never across a break
+
+
+def _two_sightings(f0, f1, dx, **right):
+    """Ball seen at frame f0 at x=0 and at f1 at x=dx (y=0); `right` overrides the second row."""
+    rows = _ball_rows([f0, f1])
+    rows["x"] = [0.0, dx]
+    for k, v in right.items():
+        rows.loc[1, k] = v
+    return rows
+
+
+def _filled(out):
+    return sorted(out[(out["role"] == Role.BALL.value) & out["interpolated"]]["frame_idx"])
+
+
+def test_a_new_ball_track_id_is_a_segment_break_and_is_not_bridged():
+    # ball_link gave the second sighting a new id: it declared it unreachable from the first
+    out = interpolate_ball(_two_sightings(0, 4, 2.0, track_id=100), FPS, max_gap=5)
+    assert _filled(out) == []
+
+
+def test_same_id_but_impossible_speed_is_not_bridged():
+    # 29.7 m in 4 frames (the Hanoi 17288-17292 case) = 186 m/s
+    out = interpolate_ball(_two_sightings(0, 4, 29.7), FPS, max_gap=5)
+    assert _filled(out) == []
+    # while a 31 m/s ball (inside the gate) over the same gap is filled
+    out = interpolate_ball(_two_sightings(0, 4, 5.0), FPS, max_gap=5)
+    assert _filled(out) == [1, 2, 3]
+
+
+def test_not_bridged_across_a_shot_change_or_a_non_live_frame():
+    base = _two_sightings(0, 4, 2.0)
+    base["shot"], base["live_wide"] = 3, True
+    assert _filled(interpolate_ball(base, FPS)) == [1, 2, 3]
+    cut = base.copy()
+    cut.loc[1, "shot"] = 4
+    assert _filled(interpolate_ball(cut, FPS)) == []
+    replay = base.copy()
+    replay.loc[1, "live_wide"] = False
+    assert _filled(interpolate_ball(replay, FPS)) == []
+    period = base.copy()
+    period.loc[1, "period"] = 2
+    assert _filled(interpolate_ball(period, FPS)) == []
+
+
+def test_filled_rows_carry_the_neighbours_shot_and_live_wide():
+    base = _two_sightings(10, 13, 1.0)
+    base["shot"], base["live_wide"] = 7, True
+    out = interpolate_ball(base, FPS)
+    new = out[out["interpolated"]]
+    assert new["shot"].tolist() == [7, 7] and new["live_wide"].tolist() == [True, True]
+
+
+def test_each_gap_is_judged_alone():
+    # three sightings: the first gap is plausible, the second jumps 30 m
+    rows = _ball_rows([0, 3, 6])
+    rows["x"] = [0.0, 1.0, 31.0]
+    out = interpolate_ball(rows, FPS, max_gap=5)
+    assert _filled(out) == [1, 2]

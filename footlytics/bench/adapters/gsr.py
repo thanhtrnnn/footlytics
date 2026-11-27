@@ -104,9 +104,12 @@ def state_to_predictions(state: MatchState, split: str, use_jersey: bool = False
     null throughout unless `use_jersey` (we have no shirt-number reader yet).
     """
     seq = state.meta.match_id
-    sides = team_sides(state.tracks)
+    tracks = state.tracks
+    if "coasted" in tracks.columns:
+        tracks = tracks[~tracks["coasted"].fillna(False).astype(bool)]
+    sides = team_sides(tracks)
     preds = []
-    for r in state.tracks.itertuples(index=False):
+    for r in tracks.itertuples(index=False):
         x, y = _num(r.x), _num(r.y)
         if x is None or y is None:
             continue

@@ -8,6 +8,7 @@ entire match on CPU in ~1-2 minutes.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -249,6 +250,7 @@ def assemble_match_states(
     away: str = "AWAY",
     align_teams: bool = True,
     home_defends: str | None = None,
+    provenance: dict | None = None,
 ) -> MatchState:
     """Concatenate per-chunk MatchStates into one monotonic, multi-period MatchState.
 
@@ -318,7 +320,7 @@ def assemble_match_states(
         source_type="broadcast",
         home=TeamInfo(home, home[:3].upper()),
         away=TeamInfo(away, away[:3].upper()),
-        provenance={"period_start_s": period_starts},
+        provenance={**(provenance or {}), "period_start_s": period_starts},
     )
     merged = (
         pd.concat(parts, ignore_index=True)
@@ -328,6 +330,58 @@ def assemble_match_states(
         else chunk_states[0][1].tracks.iloc[:0].copy()
     )
     return MatchState(meta, merged)
+
+
+CHUNK_FINGERPRINT_VERSION = 1
+_GEOMETRY_KEYS = ("video", "period", "start_frame", "end_frame", "stride")
+
+
+def _video_identity(video: Path) -> dict:
+    """Name, size and a head+tail content hash: cheap, and stable across copies and touches."""
+    size = video.stat().st_size
+    h = hashlib.sha256()
+    window = 1 << 20
+    with open(video, "rb") as f:
+        h.update(f.read(window))
+        if size > 2 * window:
+            f.seek(-window, 2)
+            h.update(f.read(window))
+    return {"name": video.name, "size": size, "sha256_head_tail": h.hexdigest()[:24]}
+
+
+def _chunk_fingerprint(spec: ChunkSpec, video_id: dict, stride: int, **config) -> dict:
+    """Everything that determines a chunk's `tracks.parquet`."""
+    return {
+        "version": CHUNK_FINGERPRINT_VERSION,
+        "video": video_id,
+        "period": spec.period,
+        "start_frame": spec.start_frame,
+        "end_frame": spec.end_frame,
+        "stride": stride,
+        **config,
+    }
+
+
+def _fingerprint_diff(old: dict | None, new: dict) -> list[str]:
+    if not isinstance(old, dict):
+        return ["no fingerprint"]
+    keys = sorted(set(old) | set(new))
+    return [f"{k}: {old.get(k)!r} -> {new.get(k)!r}" for k in keys if old.get(k) != new.get(k)]
+
+
+def _provenance(fingerprints: Sequence[dict | None]) -> dict:
+    """Detector and calibrator that produced the chunks, as recorded in their fingerprints."""
+    seen: list[dict] = []
+    for fp in fingerprints:
+        if not isinstance(fp, dict) or "detector" not in fp:
+            entry = {"detector": "unknown", "calibrator": "unknown"}
+        else:
+            entry = {"detector": fp["detector"], "calibrator": fp["calibrator"]}
+        if entry not in seen:
+            seen.append(entry)
+    if len(seen) == 1:
+        return seen[0]
+    return {"detector": "mixed", "calibrator": "mixed", "variants": seen}
 
 
 def run_match(
@@ -421,10 +475,25 @@ def run_match(
         det = runner._detector(bpaths, det_cfg)
         mask = static_overlay_mask(sample_window_frames(video, specs))
 
+    video_id = _video_identity(video)
+    model_config = {
+        "every": every,
+        "gate_px": gate_px,
+        "ball_link": ball_link,
+        "detector": {
+            "people": {"backend": people_detector, "weights_dir": people_weights_dir},
+            "ball": {"backend": ball_detector, "weights_dir": ball_weights_dir},
+        },
+        "calibrator": {"backend": calib_backend, "weights_dir": calib_weights_dir},
+    }
+
     chunk_states: list[tuple[ChunkSpec, MatchState]] = []
+    chunk_fingerprints: list[dict | None] = []
     all_calib_sources: list[str] = []
+    calib_unknown_chunks: list[str] = []
     total_calib_s = 0.0
     total_pipe_s = 0.0
+    replay_s = 0.0
     chunks_reused = 0
     t_match0 = time.perf_counter()
 
@@ -433,11 +502,26 @@ def run_match(
         done_path = cdir / "done.json"
         obs_path = cdir / "obs.pkl"
 
+        fingerprint = _chunk_fingerprint(spec, video_id, use_stride, **model_config)
+        info = json.loads(done_path.read_text()) if done_path.is_file() else {}
+        old_fp = info.get("fingerprint")
+        sources_path = cdir / "calib_sources.json"
+
         if replay_only:
             if not obs_path.is_file():
                 raise FileNotFoundError(
                     f"replay_only requested, missing chunk observations: {obs_path}"
                 )
+            if isinstance(old_fp, dict):
+                bad = [k for k in _GEOMETRY_KEYS if old_fp.get(k) != fingerprint[k]]
+                if bad:
+                    raise ValueError(
+                        f"replay_only: saved observations for {spec.chunk_id} do not match "
+                        f"this run's video/windows/stride ({', '.join(bad)} differ); "
+                        "re-run without --replay-only"
+                    )
+            else:
+                log(f"[match] {spec.chunk_id}: no fingerprint, cannot verify observations match this run")
             obs, ofps, has_ref = load_observations(obs_path)
             cmeta = MatchMeta(
                 match_id=f"{video.stem}_{spec.chunk_id}",
@@ -451,22 +535,37 @@ def run_match(
             pipe_s = time.perf_counter() - t0
             cdir.mkdir(parents=True, exist_ok=True)
             st.save(cdir)
-            total_pipe_s += pipe_s
+            replay_s += pipe_s
+            total_calib_s += float(info.get("calib_seconds", 0.0))
+            total_pipe_s += float(info.get("pipeline_seconds", 0.0))
+            if sources_path.is_file():
+                all_calib_sources.extend(json.loads(sources_path.read_text()))
+            else:
+                calib_unknown_chunks.append(spec.chunk_id)
             chunk_states.append((spec, st))
+            chunk_fingerprints.append(old_fp)
             log(f"[match] [{idx}/{len(specs)}] replayed {spec.chunk_id} in {pipe_s:.1f}s")
             continue
 
         if done_path.is_file() and (cdir / "tracks.parquet").is_file():
-            info = json.loads(done_path.read_text())
-            st = MatchState.load(cdir)
-            chunk_states.append((spec, st))
-            total_calib_s += float(info.get("calib_seconds", 0.0))
-            total_pipe_s += float(info.get("pipeline_seconds", 0.0))
-            if (cdir / "calib_sources.json").is_file():
-                all_calib_sources.extend(json.loads((cdir / "calib_sources.json").read_text()))
-            chunks_reused += 1
-            log(f"[match] [{idx}/{len(specs)}] reused checkpoint {spec.chunk_id}")
-            continue
+            diff = _fingerprint_diff(old_fp, fingerprint)
+            if not diff:
+                st = MatchState.load(cdir)
+                chunk_states.append((spec, st))
+                chunk_fingerprints.append(old_fp)
+                total_calib_s += float(info.get("calib_seconds", 0.0))
+                total_pipe_s += float(info.get("pipeline_seconds", 0.0))
+                if sources_path.is_file():
+                    all_calib_sources.extend(json.loads(sources_path.read_text()))
+                else:
+                    calib_unknown_chunks.append(spec.chunk_id)
+                chunks_reused += 1
+                log(f"[match] [{idx}/{len(specs)}] reused checkpoint {spec.chunk_id}")
+                continue
+            reason = "has no fingerprint (older checkpoint)" if diff == ["no fingerprint"] else "; ".join(diff)
+            log(f"[match] [{idx}/{len(specs)}] checkpoint {spec.chunk_id} is stale ({reason}); re-running")
+            done_path.unlink(missing_ok=True)
+            obs_path.unlink(missing_ok=True)
 
         ensure_models()
         cdir.mkdir(parents=True, exist_ok=True)
@@ -522,6 +621,7 @@ def run_match(
             "stride": use_stride,
             "calib_seconds": cstats["calib_seconds"],
             "pipeline_seconds": pipe_s,
+            "fingerprint": fingerprint,
         }
         tmp_done = cdir / "done.json.tmp"
         tmp_done.write_text(json.dumps(done_info, indent=2))
@@ -531,11 +631,13 @@ def run_match(
         total_pipe_s += pipe_s
         all_calib_sources.extend(sources)
         chunk_states.append((spec, st))
+        chunk_fingerprints.append(fingerprint)
         log(
             f"[match] [{idx}/{len(specs)}] finished {spec.chunk_id} "
             f"(calib {cstats['calib_seconds']:.0f}s + pipe {pipe_s:.0f}s)"
         )
 
+    provenance = _provenance(chunk_fingerprints)
     full_state = assemble_match_states(
         chunk_states,
         eff_fps=eff_fps,
@@ -543,6 +645,7 @@ def run_match(
         home=home,
         away=away,
         home_defends=home_defends,
+        provenance=provenance,
     )
     full_state.save(out)
     if all_calib_sources:
@@ -553,17 +656,29 @@ def run_match(
     frames_proc = sum(
         len(range(s.start_frame, s.end_frame, use_stride)) for s in specs
     )
-    n_uncal = sum(src == "none" for src in all_calib_sources) if all_calib_sources else 0
+    if calib_unknown_chunks or not all_calib_sources:
+        log(
+            "[match] WARNING: no calibration record for "
+            f"{', '.join(calib_unknown_chunks) or 'any chunk'}; calibration figures reported as unknown"
+        )
+        n_uncal = frames_cal = calib_rate = None
+    else:
+        n_uncal = sum(src == "none" for src in all_calib_sources)
+        frames_cal = frames_proc - n_uncal
+        calib_rate = frames_cal / max(frames_proc, 1)
     match_report = {
         "frames_processed": frames_proc,
-        "frames_calibrated": frames_proc - n_uncal,
+        "frames_calibrated": frames_cal,
         "frames_uncalibrated": n_uncal,
-        "calib_success_rate": (frames_proc - n_uncal) / max(frames_proc, 1),
+        "calib_success_rate": calib_rate,
         "source_fps": src_fps,
         "stride": use_stride,
         "effective_fps": eff_fps,
         "chunks_total": len(specs),
         "chunks_reused": chunks_reused,
+        "replayed": replay_only,
+        "replay_seconds": replay_s,
+        "provenance": provenance,
         "calib_seconds": total_calib_s,
         "pipeline_seconds": total_pipe_s,
         "compute_seconds": total_compute_s,
@@ -574,6 +689,7 @@ def run_match(
     q.update(
         chunks_total=len(specs),
         chunks_reused=chunks_reused,
+        provenance=provenance,
         compute_seconds=total_compute_s,
         wall_seconds=wall_s,
     )

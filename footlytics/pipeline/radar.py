@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from ..analytics.ball import interpolate_ball
-from ..analytics.ball_link import link_ball_candidates
+from ..analytics.ball_link import BALL_MAX_SPEED, BALL_NOISE_M, ball_reach, link_ball_candidates
 from ..analytics.kinematics import add_kinematics
 from ..geometry.homography import Calibration, apply_homography
 from ..geometry.pitch import Pitch
@@ -36,6 +36,7 @@ from ..perception.identity import (add_jersey_reads, apply_to_state, assign_team
 from ..perception.jersey import crop_sharpness, extract_jersey_crop, read_track_jerseys
 from ..perception.shots import (ShotConfig, frame_signals, live_wide_segments,
                                 stinger_and_replay)
+from ..perception.state_smooth import StateSmoothConfig, smooth_player_states
 from ..perception.track import PitchTracker, TrackerConfig
 from ..geometry.camera_motion import AnchoredCamera, MovingCalibration
 from ..state.schema import MatchMeta, MatchState, Role, Team, TeamInfo
@@ -78,10 +79,12 @@ class PipelineConfig:
     #: and they became "the ball" in most frames.
     ball_margin_m: float = 2.0
     #: Ball continuity: of several ball candidates, keep the one the ball could have
-    #: reached from where it was last seen, at up to this speed (+ `ball_slack_m`).
-    #: After `ball_reacquire_s` without a sighting, take the most confident again.
-    ball_max_speed: float = 35.0
-    ball_slack_m: float = 1.0
+    #: reached from where it was last seen, at up to this speed, with `ball_noise_m` of position
+    #: error combined in quadrature (`analytics.ball_link.ball_reach`; the former additive 1 m
+    #: made the cap 60-65 m/s). After `ball_reacquire_s` without a sighting, take the most
+    #: confident again.
+    ball_max_speed: float = BALL_MAX_SPEED
+    ball_noise_m: float = BALL_NOISE_M
     ball_reacquire_s: float = 1.0
     #: A ball candidate that sat within 0.5 m of one spot for 80% of this long is a
     #: still decoy unless nothing else moves (`BallSelector`).
@@ -139,6 +142,13 @@ class PipelineConfig:
     #: grass-share test would only add ways to be wrong. Rows are never dropped, only flagged.
     shot_filter: Optional[bool] = None
     shot: ShotConfig = field(default_factory=ShotConfig)
+    #: Write a smoothed pitch-space state for every tracked person (`perception.state_smooth`):
+    #: `x, y` become the forward-backward smoothed position, the measurement moves to `x_raw,
+    #: y_raw`, and occlusions up to `state_smooth.coast_s` are carried through as rows with
+    #: `coasted=True`. Off = the raw measurement as before. For a detection benchmark, score
+    #: `coasted == False` (or set `state_smooth.coast_s = 0`): a coasted row has no detection.
+    smooth_state: bool = True
+    state_smooth: StateSmoothConfig = field(default_factory=StateSmoothConfig)
     jersey_ocr: bool = False
     jersey_model: str = "microsoft/trocr-small-str"
     jersey_stride: int = 3
@@ -162,22 +172,24 @@ def on_pitch(xy: np.ndarray, roles: list[str], pitch: Pitch,
 
 
 def choose_ball(xy: np.ndarray, conf: np.ndarray, last_xy: Optional[np.ndarray],
-                frames_since: int, fps: float, max_speed: float = 35.0,
-                slack_m: float = 1.0, reacquire_s: float = 1.0) -> Optional[int]:
+                frames_since: int, fps: float, max_speed: float = BALL_MAX_SPEED,
+                noise_m: float = BALL_NOISE_M, reacquire_s: float = 1.0) -> Optional[int]:
     """Index of the ball candidate to keep this frame, or None.
 
     With a recent sighting, only candidates the ball could have reached are
     eligible and the nearest wins; if none is reachable the frame gets no ball
     rather than a teleport. Without one (start, or `reacquire_s` since the last
-    sighting) the most confident candidate is taken. The reach is the tracker's
-    own ball gate (`max_speed * (frames_since + 1) / fps + slack_m`), so a kept
-    candidate is never one the tracker would then refuse and re-id.
+    sighting) the most confident candidate is taken. The reach is `ball_reach` over the
+    `frames_since / fps` that elapsed (the tracker's own gate, `35 * dt + 1 m` per update, is
+    looser, so a kept candidate is never one the tracker would then refuse and re-id). It used
+    to be over `(frames_since + 1) / fps`, one frame more than had passed: twice the reach on
+    consecutive frames.
     """
     if not len(xy):
         return None
     if last_xy is None or frames_since > reacquire_s * fps:
         return int(np.argmax(conf))
-    reach = max_speed * (frames_since + 1) / fps + slack_m
+    reach = ball_reach(frames_since / fps, max_speed, noise_m)
     d = np.linalg.norm(xy - last_xy, axis=1)
     ok = np.flatnonzero(d <= reach)
     return int(ok[np.argmin(d[ok])]) if len(ok) else None
@@ -198,10 +210,10 @@ class BallSelector:
     without it every still ball is treated as a decoy.
     """
 
-    def __init__(self, fps: float, max_speed: float = 35.0, slack_m: float = 1.0,
+    def __init__(self, fps: float, max_speed: float = BALL_MAX_SPEED, noise_m: float = BALL_NOISE_M,
                  reacquire_s: float = 1.0, still_m: float = 0.5, still_s: float = 2.0,
                  still_share: float = 0.8, alone_m: float = 3.0):
-        self.fps, self.max_speed, self.slack_m = fps, max_speed, slack_m
+        self.fps, self.max_speed, self.noise_m = fps, max_speed, noise_m
         self.reacquire_s, self.still_m, self.still_share = reacquire_s, still_m, still_share
         self.alone_m = alone_m
         self.window = max(int(round(still_s * fps)), 1)
@@ -249,7 +261,7 @@ class BallSelector:
             p = int(ok[np.argmax(conf[ok])]) if len(ok) else None
         else:
             p = choose_ball(xy, conf, self.last_xy, frame - self.last_frame, self.fps,
-                            self.max_speed, self.slack_m, self.reacquire_s)
+                            self.max_speed, self.noise_m, self.reacquire_s)
             if p is None:
                 self.n_unreachable += 1
             elif still[p] and len(moving):
@@ -277,7 +289,7 @@ def link_ball_rows(log: list, fps: float, first_track_id: int,
     penalty = [np.where(e[4], 1.0, np.where(e[3], 0.5, 0.0)) for e in log]
     picks = link_ball_candidates(
         frames, xy, conf, fps, penalty=penalty, max_speed=cfg.ball_max_speed,
-        slack_m=cfg.ball_slack_m, max_gap_s=cfg.ball_reacquire_s,
+        noise_m=cfg.ball_noise_m, max_gap_s=cfg.ball_reacquire_s,
         break_cost=cfg.ball_link_break_cost)
     rows: list[dict] = []
     tid, prev = first_track_id - 1, None
@@ -285,8 +297,8 @@ def link_ball_rows(log: list, fps: float, first_track_id: int,
         if p is None:
             continue
         if (prev is None or frame - prev[0] > cfg.ball_reacquire_s * fps
-                or np.linalg.norm(pts[p] - prev[1]) > cfg.ball_max_speed * (frame - prev[0]) / fps
-                + cfg.ball_slack_m):
+                or np.linalg.norm(pts[p] - prev[1]) > ball_reach(
+                    (frame - prev[0]) / fps, cfg.ball_max_speed, cfg.ball_noise_m)):
             tid += 1
         prev = (frame, pts[p])
         d = dets[p]
@@ -450,6 +462,22 @@ def run_frames(
                             jersey_reader=jersey_reader)
 
 
+def _merge_team_scores(primary: dict[int, float], fallback: dict[int, float]) -> dict[int, float]:
+    """`primary` scores plus `fallback` scores for tracks `primary` lacks, on one sign convention.
+
+    The two come from different clusterings (outfield 4-means vs the 2-means `TeamClassifier`),
+    and which team is "negative" in each is arbitrary. Tracks scored by both decide whether the
+    fallback is flipped before it fills the gaps.
+    """
+    both = [t for t in primary if t in fallback]
+    agree = sum(primary[t] * fallback[t] for t in both)
+    sign = -1.0 if agree < 0 else 1.0
+    merged = dict(primary)
+    for tid, score in fallback.items():
+        merged.setdefault(int(tid), sign * float(score))
+    return merged
+
+
 def run_observations(
     observations: Iterable[Observation],
     fps: float,
@@ -485,11 +513,27 @@ def run_observations(
     n_det_total = 0
     n_off_pitch = 0
     n_ball_off_pitch = 0
-    ball_sel = BallSelector(eff_fps, cfg.ball_max_speed, cfg.ball_slack_m,
+    ball_sel = BallSelector(eff_fps, cfg.ball_max_speed, cfg.ball_noise_m,
                             cfg.ball_reacquire_s, still_s=cfg.ball_still_s)
     ball_cands: dict[int, tuple[np.ndarray, np.ndarray]] = {}
     link_log: list[tuple[int, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
     jersey_samples: list[tuple[int, int, np.ndarray, float]] = []
+    pending: dict[int, list] = {}
+    confirm = cfg.min_track_frames > 1        # `min_track_frames=1` keeps everything, as documented
+
+    def commit(item) -> None:
+        row, jersey, desc_item, montage = item
+        rows.append(row)
+        if jersey is not None:
+            jersey_samples.append(jersey)
+        if desc_item is not None:
+            desc_rows.append(desc_item[0])
+            desc_track.append(desc_item[1])
+            desc_role.append(desc_item[2])
+            if montage is not None and len(montage_frames) < 600:
+                montage_frames.append(montage[0])
+                montage_boxes.append(montage[1])
+
     t0 = time.time()
 
     for ob in observations:
@@ -551,27 +595,40 @@ def run_observations(
                     xy, roles, bboxes=dets[:, :4], confs=dets[:, 4],
                     embeddings=embeddings,
                 )
+                live_tracks = {t.id: t for t in tracker.tracks}
                 for di, tid in matches:
-                    rows.append(dict(
-                        frame_idx=out_idx, period=1, timestamp=out_idx / eff_fps,
-                        track_id=tid, role=roles[di], team=Team.UNKNOWN.value,
-                        jersey=np.nan,
-                        bbox_x=dets[di, 0], bbox_y=dets[di, 1],
-                        bbox_w=dets[di, 2], bbox_h=dets[di, 3],
-                        det_conf=dets[di, 4],
-                        x=xy[di, 0], y=xy[di, 1],
-                        z=0.0 if roles[di] == Role.BALL.value else np.nan,
-                    ))
-                    if (cfg.jersey_ocr and jcrops is not None and jcrops[di] is not None
-                            and roles[di] == Role.PLAYER.value):
-                        jersey_samples.append((int(tid), out_idx, jcrops[di][0], jcrops[di][1]))
-                    if embeddings is not None and roles[di] != Role.BALL.value:
-                        desc_rows.append(embeddings[di])
-                        desc_track.append(tid)
-                        desc_role.append(roles[di])
-                        if cfg.montage and ob.frame is not None and len(montage_frames) < 600:
-                            montage_frames.append(ob.frame)
-                            montage_boxes.append(dets[di, :4])
+                    item = (
+                        dict(
+                            frame_idx=out_idx, period=1, timestamp=out_idx / eff_fps,
+                            track_id=tid, role=roles[di], team=Team.UNKNOWN.value,
+                            jersey=np.nan,
+                            bbox_x=dets[di, 0], bbox_y=dets[di, 1],
+                            bbox_w=dets[di, 2], bbox_h=dets[di, 3],
+                            det_conf=dets[di, 4],
+                            x=xy[di, 0], y=xy[di, 1],
+                            z=0.0 if roles[di] == Role.BALL.value else np.nan,
+                        ),
+                        (int(tid), out_idx, jcrops[di][0], jcrops[di][1])
+                        if (cfg.jersey_ocr and jcrops is not None and jcrops[di] is not None
+                            and roles[di] == Role.PLAYER.value) else None,
+                        (embeddings[di], tid, roles[di])
+                        if embeddings is not None and roles[di] != Role.BALL.value else None,
+                        (ob.frame, dets[di, :4])
+                        if cfg.montage and ob.frame is not None else None,
+                    )
+                    # A person is shown only once the tracker has seen them `min_hits` times
+                    # (causal: no look-ahead). The first detections are kept and written when
+                    # the track is confirmed, so a real person loses nothing and a one-frame
+                    # false alarm is never shown. The ball is not held back.
+                    if (confirm and roles[di] != Role.BALL.value
+                            and not live_tracks[tid].confirmed):
+                        pending.setdefault(tid, []).append(item)
+                        continue
+                    for held in pending.pop(tid, ()):
+                        commit(held)
+                    commit(item)
+                for tid in [k for k in pending if k not in live_tracks]:
+                    del pending[tid]                         # retired without ever being confirmed
 
         if cfg.verbose and out_idx % 50 == 0:
             el = time.time() - t0
@@ -669,9 +726,7 @@ def run_observations(
             # Fit 2-team centroids on outfield players only so keeper/referee/other kits cannot skew k-means,
             # then project non-outfield tracks onto the same signed team axis if needed.
             scores = team_scores_by_track(T[outfield_mask], D[outfield_mask])
-            raw_scores = clf.track_scores(T, D)
-            for tid_k, sc_v in raw_scores.items():
-                scores.setdefault(int(tid_k), float(sc_v))
+            scores = _merge_team_scores(scores, clf.track_scores(T, D))
         else:
             scores = team_scores_by_track(T, D)
         report["team_diagnosis"] = diag
@@ -791,10 +846,19 @@ def run_observations(
     report["tracklets_after_stitch"] = len(tracklets)
     _log(cfg.verbose, f"[pipeline] tracklets: {n_before} -> {len(tracklets)} after stitching")
 
+    if cfg.smooth_state:
+        # After identity, so one smoother run covers a stitched person end to end; before the
+        # kinematics, so speed and acceleration are derived from the state and not from jitter.
+        tracks, report["state_smoothing"] = smooth_player_states(
+            state.tracks, eff_fps, cfg.state_smooth)
+        state = MatchState(meta, tracks)
+        _log(cfg.verbose, f"[pipeline] state smoothed: {report['state_smoothing']}")
+
     if cfg.ball_max_gap:
         before = int((state.tracks["role"].astype(str) == Role.BALL.value).sum())
         state.tracks = interpolate_ball(state.tracks, eff_fps, max_gap=cfg.ball_max_gap,
-                                        last_frame=out_idx - 1)
+                                        last_frame=out_idx - 1, max_speed=cfg.ball_max_speed,
+                                        noise_m=cfg.ball_noise_m)
         after = int((state.tracks["role"].astype(str) == Role.BALL.value).sum())
         report["ball_frames_detected"] = before
         report["ball_frames_interpolated"] = after - before

@@ -247,10 +247,15 @@ def test_build_static_pack_site_end_to_end(tmp_path: Path) -> None:
     assert info["sequences_count"] >= 1
     assert info["clips_count"] == 1
     assert info["radar_files_count"] == info["sequences_count"]
-    assert info["passcode_protected"] is True
+    assert info["passcode_gate"] == "client-side, not access control"
+    assert "passcode_protected" not in info
+    manifest = json.loads((out_site / "site_manifest.json").read_text())
+    assert manifest["passcode_gate"] == "client-side, not access control"
+    assert manifest["access_control"].startswith("none")
 
     index_html = (out_site / "index.html").read_text(encoding="utf-8")
     assert '"static_mode":true' in index_html
+    assert "không phải kiểm soát truy cập" in index_html
     assert "PVF-CAND Pilot Pack" in index_html
     assert '"dossier_url":"dossier.html"' in index_html
     assert (out_site / "dossier.html").is_file()
@@ -261,3 +266,13 @@ def test_build_static_pack_site_end_to_end(tmp_path: Path) -> None:
     rad = json.loads((out_site / "radar" / "seq_0001.json").read_text())
     assert rad["match_id"] == "club_a_vs_b"
     assert len(rad["frames"]) > 0
+
+
+def test_passcode_help_says_it_is_not_access_control():
+    from typer.testing import CliRunner
+
+    from footlytics.cli import app
+
+    for cmd in (["pack", "build-site"], ["pack", "export"]):
+        out = " ".join(CliRunner().invoke(app, [*cmd, "--help"]).output.replace("│", " ").split())
+        assert "NOT access control" in out, cmd

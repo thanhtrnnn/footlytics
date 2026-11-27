@@ -24,6 +24,8 @@ import cv2
 import numpy as np
 import yaml
 
+import pandas as pd
+
 from . import datasets
 from ..geometry.calib_nn import DEFAULT_KP_THRESHOLD, DEFAULT_LINE_THRESHOLD, solve_many
 from ..geometry.camera_motion import AnchoredCamera
@@ -720,6 +722,7 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
     per, failed = {}, {}
     scored, ran = [], []            # `scored` goes to the evaluator; `ran` produced predictions
     total_s, total_frames = 0.0, 0
+    states = []                     # each scored clip's observations, for the flicker metrics
     # every clip's raw values: a pooled metric's aggregate comes from these, not clip numbers
     pool = {"_dists": [], "_gt_frames": 0, "_pos_dists": [], "_gt_people": 0,
             "_roles": Counter(), "_keeper_ok": 0, "_keeper_n": 0,
@@ -792,6 +795,7 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
                 continue
             scored.append(seq)
             ran.append(seq)
+            states.append(state.tracks)
             try:
                 gt = gt_to_state(labels)      # only our extra metrics need it: the clip is scored
                 sides = team_sides(state.tracks)
@@ -840,7 +844,58 @@ def gsr_pipeline(task: dict, ctx: TaskContext) -> dict:
            **role_summary(pool["_roles"]),
            "keeper_side_accuracy": share(pool["_keeper_ok"], pool["_keeper_n"]),
            "seconds_per_match_minute": seconds_per_match_minute(total_s, total_frames)}
+    try:        # reported, never scored: it must not cost a clip's result
+        agg.update(flicker_aggregate(states, 25.0, every))
+    except Exception as e:  # noqa: BLE001
+        ctx.log(f"flicker metrics skipped: {type(e).__name__}: {e}")
     return {"clips": per, "aggregate": agg, "failed": failed,
             "leakage": {"status": "unverified"}}
+
+
+def flicker_aggregate(tables: list, fps: float, every: int) -> dict:
+    """`bench.flicker` over several clips as one: every clip's frames, ids and shots are moved
+    apart (by multiples of `every`, so keyframe phases are kept) and the metrics are computed once,
+    so shares are pooled over steps rather than averaged over clips. Numeric keys under `flicker_`,
+    plus how many of the pass thresholds hold (`flicker_passed` / `flicker_total`)."""
+    from . import flicker
+
+    if not tables:
+        return {}
+    parts = [t.assign(frame_idx=t["frame_idx"].astype("int64") + k * 1_000_000 * every,
+                      track_id=t["track_id"].astype("int64") + k * 1_000_000,
+                      shot=(t["shot"].astype("int64") if "shot" in t.columns else 0) + k * 10_000)
+             for k, t in enumerate(tables)]
+    m = flicker.compute(pd.concat(parts, ignore_index=True), fps, every)
+    scored = [c["passed"] for c in flicker.evaluate(m).values() if c["passed"] is not None]
+    return {**flicker.flat(m), "flicker_passed": int(sum(scored)), "flicker_total": len(scored)}
+
+
+@kind("flicker")
+def flicker_task(task: dict, ctx: TaskContext) -> dict:
+    """Flicker metrics of saved match states, pooled: `states` lists directories holding a
+    `tracks.parquet` (+ `meta.json` for the fps). Reported, nothing gates: the aggregate carries
+    `flicker_*` numbers and `flicker_passed` of `flicker_total` thresholds; `clips` holds each
+    state's own check table. A state that cannot be read fails alone."""
+    from . import flicker
+
+    every = int(task.get("every", 10))
+    per, failed, tables, fps = {}, {}, [], None
+    for d in task["states"]:
+        d = Path(d).expanduser()
+        d = d if d.is_absolute() else Path(__file__).resolve().parents[2] / d
+        try:
+            res = flicker.run_dir(d, every=every, write=False)
+            per[d.name] = {"passed": res["passed"], "total": res["total"],
+                           **{k: c["value"] for k, c in res["checks"].items()}}
+            t = pd.read_parquet(d / "tracks.parquet")
+            if fps is not None and fps != res["metrics"]["fps"]:
+                raise ValueError(f"fps {res['metrics']['fps']} differs from {fps}: run them as separate tasks")
+            fps = res["metrics"]["fps"]
+            tables.append(t)
+        except Exception as e:  # noqa: BLE001
+            failed[d.name] = f"{type(e).__name__}: {e}"
+    if not tables:
+        raise RuntimeError(f"no state could be read: {failed}")
+    return {"clips": per, "aggregate": flicker_aggregate(tables, fps, every), "failed": failed}
 
 from . import vleague  # noqa: E402,F401 - registers the "vleague" task kind

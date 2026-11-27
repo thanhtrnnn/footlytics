@@ -50,3 +50,41 @@ def test_too_few_tracks_for_four_groups_still_splits_two_kits():
     D = np.concatenate([kit(10, 20, rng), kit(10, 20, rng), kit(30, 20, rng)])
     s = team_scores_by_track(T, D)
     assert np.sign(s[0]) == np.sign(s[1]) != np.sign(s[2])
+
+
+def _scored_clip(seed):
+    """Outfield tracks 0-19 plus six off-role tracks (100-105) wearing the same two kits,
+    scored the way `run_observations` does: 4-means over outfield, 2-means over everything."""
+    from footlytics.perception.teams import TeamClassifier
+
+    rng = np.random.default_rng(seed)
+    T, D = clip(rng)
+    extra_T, extra_D = [], []
+    for tid, b in ((100, 10), (101, 10), (102, 10), (103, 30), (104, 30), (105, 30)):
+        extra_T += [tid] * 30
+        extra_D.append(kit(b, 30, rng))
+    T = np.concatenate([T, extra_T])
+    D = np.concatenate([D] + extra_D)
+    outfield = np.isin(T, np.arange(20))
+    primary = team_scores_by_track(T[outfield], D[outfield])
+    fallback = TeamClassifier().fit(D[outfield]).track_scores(T, D)
+    return primary, fallback
+
+
+def test_fallback_scores_follow_the_outfield_sign_convention():
+    from footlytics.pipeline.radar import _merge_team_scores
+
+    flipped_naively = 0
+    for seed in range(40):
+        primary, fallback = _scored_clip(seed)
+        home_sign = np.sign(np.mean([primary[t] for t in range(10)]))
+        naive = {**{t: v for t, v in fallback.items() if t not in primary}}
+        flipped_naively += any(np.sign(naive[t]) != home_sign for t in (100, 101, 102))
+
+        merged = _merge_team_scores(primary, fallback)
+
+        assert all(np.sign(merged[t]) == home_sign for t in (100, 101, 102)), seed
+        assert all(np.sign(merged[t]) == -home_sign for t in (103, 104, 105)), seed
+        assert all(merged[t] == primary[t] for t in primary)
+        assert set(merged) == set(primary) | set(fallback)
+    assert flipped_naively > 0, "synthetic data no longer exercises the sign disagreement"

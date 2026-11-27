@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Train the 100% Apache-2.0 broadcast pitch keypoint + line calibrator (`PitchCalibNet`).
+"""Train the ResNet-FPN broadcast pitch keypoint + line calibrator (`PitchCalibNet`).
 
 Supports:
 1. SoccerNet-Calibration JSON + JPEG archives (`--sncal-dir`)
 2. Footlytics V.League annotated homography folders (`--vleague-dir`, e.g. `data/vleague`)
 3. Synthetic projected-pitch smoke mode (`--synthetic-smoke`) for fast local verification
 
-Outputs a commercial-clean `safetensors` + `config.json` checkpoint directory loadable by
+Outputs a `safetensors` + `config.json` checkpoint directory loadable by
 `Apache2PitchCalibrator` (`footlytics match-run --calib-backend apache2 --calib-weights-dir ...`).
+Note: model weight licence depends on the training dataset's licence terms.
 """
 from __future__ import annotations
 
@@ -164,7 +165,7 @@ def main() -> None:
 
     save_pitch_calibrator(model, cfg, args.out)
     (args.out / "train-log.json").write_text(json.dumps(history, indent=2) + "\n", encoding="utf-8")
-    print(f"Saved Apache-2.0 pitch calibrator checkpoint -> {args.out}")
+    print(f"Saved PitchCalibNet checkpoint -> {args.out}")
 
 
 if __name__ == "__main__":

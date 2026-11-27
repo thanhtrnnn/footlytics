@@ -240,6 +240,25 @@ def calibrate(
     typer.echo(f"[calibration] {cal.verdict(lm)[1]} -> {out}")
 
 
+@app.command()
+def flicker(
+    out_dirs: list[Path] = typer.Argument(..., exists=True, file_okay=False,
+                                          help="match output directories holding tracks.parquet"),
+    every: int = typer.Option(10, help="calibration keyframe cadence of the run (frame_idx % every == 0)"),
+    fps: Optional[float] = typer.Option(None, help="override meta.json's fps"),
+) -> None:
+    """Flicker metrics of saved match states: write <out_dir>/flicker.json, print the pass/fail table.
+
+    Reported only: the exit code is 0 whatever fails (`footlytics.bench.flicker.THRESHOLDS`).
+    """
+    from .bench import flicker as fl
+
+    results = [fl.run_dir(d, every=every, fps=fps) for d in out_dirs]
+    typer.echo(fl.render(results))
+    for d in out_dirs:
+        typer.echo(f"wrote {d / 'flicker.json'}")
+
+
 @app.command("drift-check")
 def drift_check(
     video: Path = typer.Argument(..., exists=True),
@@ -460,7 +479,7 @@ def pack_export_cmd(
     gpu_hourly_usd: float = typer.Option(0.80, help="Cloud GPU hourly USD rate for unit-economics reporting."),
     operator_minutes: Optional[float] = typer.Option(None, help="Logged internal operator QA minutes."),
     static_site: bool = typer.Option(False, "--static-site", help="Also build a zero-backend shareable index.html + radar JSON bundle in --out."),
-    passcode: Optional[str] = typer.Option(None, help="Optional client-side passcode for --static-site."),
+    passcode: Optional[str] = typer.Option(None, help="Optional passcode curtain for --static-site. Checked in the browser only: it is NOT access control, every file stays publicly fetchable."),
 ) -> None:
     """Export playlist.csv, sportscode.xml, dossier.md/html, and optional radar-PiP MP4 clips."""
     from .analytics.pack import export_pack
@@ -507,7 +526,7 @@ def pack_build_site_cmd(
     pack: Optional[Path] = typer.Option(None, exists=True, file_okay=False, help="Existing exported pack directory containing clips/ and dossier.html."),
     club: Optional[str] = typer.Option(None, help="Optional club filter (e.g. PVFCAND)."),
     title: Optional[str] = typer.Option(None, help="Custom pack title shown in workspace header."),
-    passcode: Optional[str] = typer.Option(None, help="Optional client-side passcode curtain for private link sharing."),
+    passcode: Optional[str] = typer.Option(None, help="Optional passcode curtain. Checked in the browser only: it is NOT access control, every file stays publicly fetchable, so host the folder behind real auth for private packs."),
     radar_hz: float = typer.Option(12.0, help="Pre-baked 2D radar JSON sample rate (Hz)."),
     only_with_clips: bool = typer.Option(False, "--only-with-clips", help="Include only sequences with exported MP4 clips."),
 ) -> None:
@@ -593,7 +612,7 @@ def workspace_serve_cmd(
     video_dir: Optional[Path] = typer.Option(None, exists=True, file_okay=False, help="Optional folder of <match_id>.mp4 videos."),
     reviewer: str = typer.Option("analyst", help="Reviewer name recorded when saving verdicts to marks.json."),
     profile: Optional[str] = typer.Option(None, help="Initial club tactical profile preset or YAML file."),
-    host: str = typer.Option("127.0.0.1", help="Bind address (use 0.0.0.0 with --token for LAN/club access)."),
+    host: str = typer.Option("127.0.0.1", help="Bind address. Anything other than loopback (e.g. 0.0.0.0 for LAN/club access) requires --token."),
     port: int = typer.Option(8765, help="Port to listen on (0 picks a free port)."),
     token: Optional[str] = typer.Option(None, envvar="FOOTLYTICS_WORKSPACE_TOKEN", help="Access token required to view/edit."),
 ) -> None:

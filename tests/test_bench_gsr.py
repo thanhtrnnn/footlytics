@@ -66,3 +66,15 @@ def test_roundtrip_predictions_match_ground_truth():
 def test_jersey_off_writes_null_jerseys():
     pred = state_to_predictions(gt_to_state(make_labels()), "valid")["predictions"]
     assert all(p["attributes"]["jersey"] is None for p in pred)
+
+
+def test_state_to_predictions_drops_coasted_rows():
+    state = gt_to_state(make_labels(n_frames=2))
+    # Set column directly so the test exercises the filter both before and after PR #28 adds
+    # `coasted` to TRACK_SCHEMA.
+    state.tracks["coasted"] = state.tracks["frame_idx"] == 1
+
+    pred = state_to_predictions(state, "valid")["predictions"]
+    expected_rows = state.tracks[~state.tracks["coasted"]]
+    assert len(pred) == len(expected_rows)
+    assert all(p["image_id"] == image_id("valid", state.meta.match_id, 0) for p in pred)

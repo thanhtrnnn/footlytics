@@ -21,6 +21,24 @@ from typing import Optional, Sequence
 
 import numpy as np
 
+#: Fastest ball a broadcast clip can carry (a hard shot is ~35 m/s) and the position error of
+#: one ball sighting, in metres, used by every reach test below.
+BALL_MAX_SPEED = 35.0
+BALL_NOISE_M = 0.5
+
+
+def ball_reach(dt_s, max_speed: float = BALL_MAX_SPEED, noise_m: float = BALL_NOISE_M):
+    """Farthest the ball can be from where it was last seen `dt_s` seconds later, in metres.
+
+    `max_speed * dt` is the physical reach; `noise_m` is the position error of a sighting. They
+    are independent errors, so they add in quadrature. The old `max_speed * dt + 1 m` added the
+    noise linearly, which as a speed cap is `max_speed + 1 / dt`: 60 m/s at 25 fps, 65 at 30,
+    for a "35 m/s" gate, and ever looser the higher the frame rate. Here the cap is
+    `hypot(max_speed, noise_m / dt)`: 37 m/s at 25 fps, 38 at 30, and `max_speed` over a longer
+    gap, where the noise no longer matters. Works on scalars and arrays.
+    """
+    return np.hypot(max_speed * np.asarray(dt_s, float), noise_m)
+
 
 def link_ball_candidates(
     frames: Sequence[int],
@@ -29,8 +47,8 @@ def link_ball_candidates(
     fps: float,
     *,
     penalty: Optional[Sequence[np.ndarray]] = None,
-    max_speed: float = 35.0,
-    slack_m: float = 1.0,
+    max_speed: float = BALL_MAX_SPEED,
+    noise_m: float = BALL_NOISE_M,
     max_gap_s: float = 1.0,
     break_cost: float = 0.25,
     gap_cost: float = 0.005,
@@ -45,7 +63,7 @@ def link_ball_candidates(
 
     Score of a path: the sum of its candidates' `conf * (1 - penalty)`, minus for each step to
     the next picked candidate `gap_cost` per skipped frame plus `speed_cost * (speed/max_speed)**2`
-    when the ball could have got there (`max_speed * dt + slack_m`, within `max_gap_s`), else
+    when the ball could have got there (`ball_reach`, within `max_gap_s`), else
     `break_cost`. So `break_cost` is what a lone detection must beat to be taken; a candidate
     that continues the track is taken at any confidence.
     """
@@ -85,7 +103,7 @@ def link_ball_candidates(
             if len(best[j]):
                 dt = frames[k] - frames[j]
                 d = np.linalg.norm(pts[:, None] - np.asarray(xy[j], float).reshape(-1, 2)[None], axis=-1)
-                ok = d <= max_speed * dt / fps + slack_m
+                ok = d <= ball_reach(dt / fps, max_speed, noise_m)
                 step = gap_cost * (dt - 1) + speed_cost * ((d * fps / dt) / max_speed) ** 2
                 cand = np.where(ok, best[j][None, :] - step, -np.inf)
                 a = cand.argmax(axis=1)
